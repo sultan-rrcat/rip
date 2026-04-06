@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Intellectual Architect | Research Assistant</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap"
+        rel="stylesheet" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+        rel="stylesheet" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+        rel="stylesheet" />
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "secondary-dim": "#545256",
+                        "tertiary": "#565f78",
+                        "tertiary-fixed": "#ced6f5",
+                        "on-secondary-container": "#525155",
+                        "on-secondary-fixed": "#403f43",
+                        "on-secondary": "#fbf8fc",
+                        "on-tertiary-container": "#424a63",
+                        "surface-tint": "#494bd6",
+                        "primary": "#494bd6",
+                        "on-tertiary-fixed": "#2f384f",
+                        "on-background": "#113069",
+                        "on-surface-variant": "#445d99",
+                        "on-surface": "#113069",
+                        "inverse-surface": "#060e20",
+                        "on-primary-fixed-variant": "#4647d3",
+                        "on-error": "#fff7f7",
+                        "surface-container-highest": "#d9e2ff",
+                        "secondary": "#605e62",
+                        "on-tertiary": "#f9f8ff",
+                        "tertiary-container": "#ced6f5",
+                        "tertiary-dim": "#4a536b",
+                        "error-container": "#ff8b9a",
+                        "on-primary-fixed": "#2622b7",
+                        "surface-dim": "#cdd9ff",
+                        "on-error-container": "#782232",
+                        "primary-container": "#e1e0ff",
+                        "on-tertiary-fixed-variant": "#4b546d",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-low": "#f2f3ff",
+                        "surface-container-high": "#e2e7ff",
+                        "surface-bright": "#faf8ff",
+                        "on-primary": "#faf6ff",
+                        "surface-variant": "#d9e2ff",
+                        "outline": "#6079b7",
+                        "inverse-on-surface": "#959cb5",
+                        "error-dim": "#4f0116",
+                        "surface": "#faf8ff",
+                        "surface-container": "#eaedff",
+                        "secondary-fixed": "#e5e1e6",
+                        "error": "#9e3f4e",
+                        "primary-dim": "#3c3dca",
+                        "inverse-primary": "#8083ff",
+                        "on-secondary-fixed-variant": "#5c5b5f",
+                        "primary-fixed-dim": "#d1d0ff",
+                        "primary-fixed": "#e1e0ff",
+                        "background": "#faf8ff",
+                        "secondary-container": "#e5e1e6",
+                        "tertiary-fixed-dim": "#c0c9e6",
+                        "secondary-fixed-dim": "#d6d3d8",
+                        "outline-variant": "#98b1f2",
+                        "on-primary-container": "#3b3cc9"
+                    },
+                    fontFamily: {
+                        "headline": ["Inter"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    },
+                    borderRadius: { "DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem" },
+                },
+            },
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #d9e2ff;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #98b1f2;
+        }
+
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(16px);
+        }
+    </style>
+</head>
+
+<body class="bg-surface text-on-surface flex h-screen overflow-hidden antialiased">
+    <!-- Sidebar: Knowledge Base -->
+    <aside
+        class="flex flex-col h-screen sticky top-0 overflow-y-auto bg-surface-container-low text-on-surface-variant font-inter text-sm antialiased h-full w-80 border-r-0">
+        <!-- Brand Header -->
+        <div class="px-8 py-6 flex items-center justify-between">
+            <div>
+                <h1 class="text-lg font-bold text-slate-900 dark:text-slate-50">Knowledge Base</h1>
+                <p class="text-xs text-on-surface-variant opacity-70">3 Active Sources</p>
+            </div>
+            <div class="w-8 h-8 rounded-full bg-primary-container flex items-center justify-center">
+                <span class="material-symbols-outlined text-primary text-sm" data-icon="school">school</span>
+            </div>
+        </div>
+        <!-- Action: Upload -->
+        <div class="px-6 py-4">
+            <button
+                class="w-full bg-primary text-on-primary py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-all duration-300 hover:opacity-90 active:scale-95 shadow-lg shadow-primary/10">
+                <span class="material-symbols-outlined text-lg" data-icon="upload">upload</span>
+                Upload Document
+            </button>
+        </div>
+        <!-- File List -->
+        <nav class="flex-1 px-4 mt-4 space-y-1">
+            <div class="px-4 mb-2 text-[10px] uppercase tracking-widest font-bold text-on-surface-variant/50">Recent
+                Files</div>
+            <!-- File Item 1: Active State -->
+            <div
+                class="group flex items-center justify-between p-3 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-lg hover:transition-colors duration-200 cursor-pointer">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined" data-icon="description">description</span>
+                    <span class="truncate max-w-[160px]">shift_log_nov.pdf</span>
+                </div>
+                <button
+                    class="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 hover:text-red-600 rounded">
+                    <span class="material-symbols-outlined text-sm" data-icon="delete">delete</span>
+                </button>
+            </div>
+            <!-- File Item 2 -->
+            <div
+                class="group flex items-center justify-between p-3 text-slate-600 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 rounded-lg hover:transition-colors duration-200 cursor-pointer">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined" data-icon="grid_on">grid_on</span>
+                    <span class="truncate max-w-[160px]">accelerator_parameters.csv</span>
+                </div>
+                <button
+                    class="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 hover:text-red-600 rounded">
+                    <span class="material-symbols-outlined text-sm" data-icon="delete">delete</span>
+                </button>
+            </div>
+            <!-- File Item 3 -->
+            <div
+                class="group flex items-center justify-between p-3 text-slate-600 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/50 rounded-lg hover:transition-colors duration-200 cursor-pointer">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined" data-icon="auto_stories">auto_stories</span>
+                    <span class="truncate max-w-[160px]">control_system_manual.docx</span>
+                </div>
+                <button
+                    class="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 hover:text-red-600 rounded">
+                    <span class="material-symbols-outlined text-sm" data-icon="delete">delete</span>
+                </button>
+            </div>
+        </nav>
+        <!-- Bottom Footer -->
+        <div class="p-6 mt-auto">
+            <div class="flex items-center gap-3 p-3 rounded-xl bg-surface-container">
+                <div class="w-8 h-8 rounded-lg overflow-hidden">
+                    <img class="w-full h-full object-cover"
+                        data-alt="high-end editorial portrait of a professional researcher in a clean studio setting with soft side lighting and professional attire"
+                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuAqK4WV5uMRilmmui-vMxdyR3lVPHNz0WOI6G1gOTMTdj_ahR9f7Q9KKD0Fwr7Gd4HJaJNknPO3cgmpH1_x5BxxJtyH65QxzkafyZJyBYw7ASX4gtAQzz7X13R2g4__cDtPe-wUgYrwdaytcy47wJ-2ATN-Og_Py1IDZFzK9jwSXLmGX7_qfXMAFwfwW-P-rzIo0lpGZw1H-GSuLSep092_Rx4v7iF6SPxA4VUOJgoTGKkleNegWwvOOPr5QiCg1EWPtOEu1_1wHpA7" />
+                </div>
+                <div class="overflow-hidden">
+                    <p class="text-xs font-semibold text-on-surface truncate">Dr. Aris Thorne</p>
+                    <p class="text-[10px] text-on-surface-variant truncate">Lead Investigator</p>
+                </div>
+            </div>
+        </div>
+    </aside>
+    <!-- Main Content Area -->
+    <main class="flex-1 flex flex-col relative bg-surface">
+        <!-- Top Nav -->
+        <header class="flex justify-between items-center px-8 h-16 w-full bg-white dark:bg-slate-950 sticky top-0 z-20">
+            <div class="flex items-center gap-4">
+                <span
+                    class="text-xl font-semibold text-slate-900 dark:text-slate-100 font-inter tracking-tight">Intellectual
+                    Architect</span>
+                <span class="h-4 w-[1.5px] bg-outline-variant/30"></span>
+                <span class="text-xs font-medium text-tertiary">Operational Analytics</span>
+            </div>
+            <div class="flex items-center gap-6">
+                <div
+                    class="hidden md:flex items-center gap-2 px-4 py-1.5 bg-surface-container rounded-full group transition-all duration-300">
+                    <span class="material-symbols-outlined text-sm text-on-surface-variant"
+                        data-icon="search">search</span>
+                    <input class="bg-transparent border-none focus:ring-0 text-xs text-on-surface w-48"
+                        placeholder="Search insights..." type="text" />
+                </div>
+                <div class="flex items-center gap-4 text-slate-500">
+                    <button class="hover:text-indigo-500 transition-colors"><span class="material-symbols-outlined"
+                            data-icon="history">history</span></button>
+                    <button class="hover:text-indigo-500 transition-colors"><span class="material-symbols-outlined"
+                            data-icon="account_circle">account_circle</span></button>
+                </div>
+            </div>
+        </header>
+        <!-- Chat Canvas -->
+        <div class="flex-1 overflow-y-auto px-8 py-10 scroll-smooth">
+            <div class="max-w-4xl mx-auto space-y-10">
+                <!-- Date Separator -->
+                <div class="flex justify-center">
+                    <span
+                        class="px-4 py-1 rounded-full bg-surface-container text-[10px] font-bold tracking-widest uppercase text-on-surface-variant/60">Today
+                        • 14 Nov</span>
+                </div>
+                <!-- Assistant Message -->
+                <div class="flex gap-6 items-start">
+                    <div class="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-primary text-sm"
+                            data-icon="smart_toy">smart_toy</span>
+                    </div>
+                    <div class="flex-1 space-y-4">
+                        <div class="text-sm font-medium text-on-surface-variant opacity-60">System Intelligence</div>
+                        <div class="text-on-surface leading-relaxed text-sm font-body max-w-2xl">
+                            Welcome back. I have analyzed the <span class="font-bold text-primary">3 documents</span> in
+                            your knowledge base. How can I assist your research today?
+                        </div>
+                    </div>
+                </div>
+                <!-- User Message -->
+                <div class="flex gap-6 items-start justify-end">
+                    <div class="flex-1 space-y-4 text-right">
+                        <div class="text-sm font-medium text-on-surface-variant opacity-60">You</div>
+                        <div
+                            class="inline-block text-on-primary bg-primary px-5 py-3 rounded-2xl rounded-tr-none text-sm font-body shadow-md max-w-2xl">
+                            What were the peak pressure readings recorded during the November 12th accelerator run?
+                        </div>
+                    </div>
+                    <div
+                        class="w-8 h-8 rounded-lg bg-surface-container-highest flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-on-surface text-sm" data-icon="person">person</span>
+                    </div>
+                </div>
+                <!-- Assistant Detailed Response with Citation -->
+                <div class="flex gap-6 items-start group">
+                    <div class="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-primary text-sm"
+                            data-icon="smart_toy">smart_toy</span>
+                    </div>
+                    <div class="flex-1 space-y-4">
+                        <div class="text-sm font-medium text-on-surface-variant opacity-60">System Intelligence</div>
+                        <div class="space-y-4 text-on-surface leading-relaxed text-sm font-body max-w-2xl">
+                            <p>According to the recorded parameters, the peak pressure during the session on November
+                                12th reached <span class="font-bold">4.2 GPa</span> at approximately 14:45 UTC.</p>
+                            <p>This spike was noted as a deliberate threshold test for the superconducting magnets
+                                <button
+                                    class="inline-flex items-center gap-1 px-2 py-0.5 bg-secondary-container text-on-secondary-container rounded text-[10px] font-bold hover:bg-surface-container-highest transition-colors">
+                                    <span class="material-symbols-outlined text-[12px]"
+                                        data-icon="article">article</span> [Log_42]
+                                </button>
+                                and was within the safety margins defined in the technical manual.
+                            </p>
+                            <div class="p-5 bg-surface-container-low rounded-xl border-l-4 border-primary/20 space-y-2">
+                                <div
+                                    class="flex items-center gap-2 text-xs font-bold text-primary uppercase tracking-tighter">
+                                    <span class="material-symbols-outlined text-sm" data-icon="insights">insights</span>
+                                    Related Data Point
+                                </div>
+                                <p class="text-xs text-on-surface-variant leading-relaxed">
+                                    Temperature readings concurrent with this pressure peak remained stable at 1.8K,
+                                    indicating the helium cooling circuit functioned optimally during the stress phase.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Placeholder for typing -->
+                <div class="flex gap-6 items-center opacity-40">
+                    <div class="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-sm" data-icon="more_horiz">more_horiz</span>
+                    </div>
+                    <div class="text-xs italic">Architect is synthesizing sources...</div>
+                </div>
+            </div>
+        </div>
+        <!-- Command Bar (Fixed Bottom) -->
+        <footer class="p-8 bg-gradient-to-t from-surface via-surface/90 to-transparent">
+            <div class="max-w-4xl mx-auto relative group">
+                <div
+                    class="absolute -inset-1 bg-gradient-to-r from-primary/10 to-indigo-500/10 rounded-2xl blur opacity-0 group-focus-within:opacity-100 transition duration-500">
+                </div>
+                <div
+                    class="relative flex items-center bg-surface-container-high rounded-2xl p-2 pr-4 shadow-sm border border-transparent group-focus-within:border-primary/20 transition-all duration-300">
+                    <button class="p-3 text-on-surface-variant hover:text-primary transition-colors">
+                        <span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+                    </button>
+                    <input
+                        class="flex-1 bg-transparent border-none focus:ring-0 text-sm py-4 px-2 placeholder:text-on-surface-variant/50 text-on-surface"
+                        placeholder="Ask about the internal documents..." type="text" />
+                    <div class="flex items-center gap-2">
+                        <kbd
+                            class="hidden md:inline-flex items-center gap-1 px-2 py-1 text-[10px] font-bold text-on-surface-variant/40 bg-surface-container rounded-md">
+                            <span>⌘</span><span>K</span>
+                        </kbd>
+                        <button
+                            class="w-10 h-10 bg-primary text-on-primary rounded-xl flex items-center justify-center shadow-md hover:scale-105 active:scale-95 transition-all duration-200">
+                            <span class="material-symbols-outlined" data-icon="send">send</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="mt-3 flex justify-center gap-6">
+                    <div class="flex items-center gap-1.5 text-[10px] font-medium text-on-surface-variant/50">
+                        <span class="w-1 h-1 rounded-full bg-green-400"></span>
+                        Neural Engine Active
+                    </div>
+                    <div class="flex items-center gap-1.5 text-[10px] font-medium text-on-surface-variant/50">
+                        <span class="material-symbols-outlined text-[12px]" data-icon="history">history</span>
+                        History synced
+                    </div>
+                </div>
+            </div>
+        </footer>
+        <!-- Source Weaver (Floating Context Layer - Hidden by default) -->
+        <div class="absolute top-0 right-0 h-full w-px bg-outline-variant/10 pointer-events-none"></div>
+    </main>
+    <!-- Source Popover (Conceptual Tooltip for [Log_42]) -->
+    <div
+        class="hidden fixed bottom-40 left-1/2 transform -translate-x-1/2 p-4 w-72 glass-effect rounded-2xl shadow-2xl border border-white/20 z-50">
+        <div class="flex items-center justify-between mb-2">
+            <span class="text-[10px] font-bold text-primary uppercase tracking-widest">Citation Detail</span>
+            <span class="material-symbols-outlined text-xs text-on-surface-variant" data-icon="close">close</span>
+        </div>
+        <p class="text-xs font-semibold text-on-surface mb-1">shift_log_nov.pdf</p>
+        <p class="text-[10px] text-on-surface-variant italic">"Pressure threshold at sector 7G exceeded nominal levels
+            (3.8 GPa) as part of scheduled stress-test Alpha..."</p>
+        <div class="mt-3 flex justify-end">
+            <button class="text-[10px] font-bold text-primary hover:underline">View Source Page</button>
+        </div>
+    </div>
+</body>
+
+</html>
