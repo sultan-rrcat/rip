@@ -10,7 +10,7 @@ export default function App() {
   const [files, setFiles] = useState([])
   const [activeFileIds, setActiveFileIds] = useState([])
   const [messages, setMessages] = useState([{
-    id: crypto.randomUUID(),
+    id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
     role: "assistant",
     text: "How can I help you?"
   }])
@@ -45,7 +45,7 @@ export default function App() {
       }
 
       const newFile = {
-        id: crypto.randomUUID(),
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
         name: file.name,
         size: formatSize(file.size),
         file: file,
@@ -155,13 +155,13 @@ export default function App() {
 
   async function handleSendMessage(text) {
     const userMessage = {
-      id: crypto.randomUUID(),
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
       role: "user",
       text: text
     }
 
     const loadingMessage = {
-      id: crypto.randomUUID(),
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
       role: "loading",
       text: "..."
     }
@@ -172,7 +172,7 @@ export default function App() {
       const replyText = await sendMessage(text)
 
       const realReply = {
-        id: crypto.randomUUID(),
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
         role: "assistant",
         text: replyText
       }
@@ -182,7 +182,7 @@ export default function App() {
       ))
     } catch (err) {
       const errorReply = {
-        id: crypto.randomUUID(),
+        id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
         role: "error",
         text: `Something went wrong. Please try again. Error: ${err}`
       }
