@@ -4,10 +4,17 @@ import Footer from "./components/Footer"
 import Sidebar from "./components/Sidebar"
 import { useState } from "react"
 import { useEffect } from "react"
+import { sendMessage } from "./services/llm"
 
 export default function App() {
   const [files, setFiles] = useState([])
   const [activeFileIds, setActiveFileIds] = useState([])
+  const [messages, setMessages] = useState([{
+    id: crypto.randomUUID(),
+    role: "assistant",
+    text: "How can I help you?"
+  }])
+  const isLoading = messages.some(m=>m.role==="loading")
 
   function handleUpload(event) {
     const picked = event.target.files
@@ -102,8 +109,8 @@ export default function App() {
     if (activeFileIds.length === files.length) {
       setActiveFileIds([])
     } else { //Otherwise select all
-      const allIds = files.map(f=>f.id)
-      allIds.forEach(id=>{
+      const allIds = files.map(f => f.id)
+      allIds.forEach(id => {
         triggerProcessingIfNeeded(id)
       })
       setActiveFileIds(allIds) //loops through the files array and builds a new array containing only the file id and finally pass it to setActiveFileIds
@@ -146,6 +153,46 @@ export default function App() {
     }, 5000)
   }
 
+  async function handleSendMessage(text) {
+    const userMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      text: text
+    }
+
+    const loadingMessage = {
+      id: crypto.randomUUID(),
+      role: "loading",
+      text: "..."
+    }
+
+    setMessages(prev => [...prev, userMessage, loadingMessage])
+
+    try {
+      const replyText = await sendMessage(text)
+
+      const realReply = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        text: replyText
+      }
+
+      setMessages(prev => prev.map(m =>
+        m.id === loadingMessage.id ? { ...realReply } : m
+      ))
+    } catch (err) {
+      const errorReply = {
+        id: crypto.randomUUID(),
+        role: "error",
+        text: `Something went wrong. Please try again. Error: ${err}`
+      }
+
+      setMessages(prev => prev.map(m =>
+        m.id === loadingMessage.id ? { ...errorReply } : m
+      ))
+    }
+  }
+
   useEffect(() => {
     setActiveFileIds(prevActiveIds => {
       return prevActiveIds.filter(id => {
@@ -167,8 +214,11 @@ export default function App() {
       />
       <main className="flex-1 flex flex-col overflow-hidden">
         <Header />
-        <ChatArea activeFile={files.find(f => activeFileIds.includes(f.id))} />
-        <Footer />
+        <ChatArea
+          activeFile={files.find(f => activeFileIds.includes(f.id))}
+          messages={messages}
+        />
+        <Footer onSendMessage={handleSendMessage} isLoading={isLoading}/>
       </main>
     </div>
   )
