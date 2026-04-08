@@ -1,20 +1,19 @@
 import Header from "./components/Header"
 import ChatArea from "./components/ChatArea"
 import Footer from "./components/Footer"
-import Sidebar from "./components/Sidebar"
+import LeftSidebar from "./components/LeftSidebar"
+import RightSidebar from "./components/RightSidebar"
 import { useState } from "react"
-import { useEffect } from "react"
 import { sendMessage } from "./services/llm"
 
 export default function App() {
   const [files, setFiles] = useState([])
-  const [activeFileIds, setActiveFileIds] = useState([])
   const [messages, setMessages] = useState([{
     id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
     role: "assistant",
     text: "How can I help you?"
   }])
-  const isLoading = messages.some(m=>m.role==="loading")
+  const isLoading = messages.some(m => m.role === "loading")
 
   function handleUpload(event) {
     const picked = event.target.files
@@ -51,14 +50,12 @@ export default function App() {
         file: file,
         status: ''
       }
-
       newFiles.push(newFile)
     }
 
     if (newFiles.length > 0) {
       setFiles(prev => [...prev, ...newFiles])
-      // setActiveFileIds(prev => [...prev, ...newFiles.map(f => f.id)])
-
+      newFiles.forEach(f => processFile(f.id))
     }
     event.target.value = ''
   }
@@ -76,60 +73,14 @@ export default function App() {
           updatedFiles.push(file);
         }
       }
-
-      // Step 2: Update activeFileIds state to remove the deleted file’s id
-      setActiveFileIds((prevActiveFileIds) => {
-        const newActiveFileIds = [];
-        for (let j = 0; j < prevActiveFileIds.length; j++) {
-          const fileId = prevActiveFileIds[j];
-          if (fileId !== id) {
-            newActiveFileIds.push(fileId)
-          }
-        }
-        return newActiveFileIds;
-      })
       return updatedFiles;
     });
-  }
-
-  function handleFileSelect(fileId) {
-    setActiveFileIds(prev => {
-      // If already selected, remove it
-      if (prev.includes(fileId)) {
-        return prev.filter(id => id !== fileId)
-      } else { //If not add them
-        triggerProcessingIfNeeded(fileId)
-        return [...prev, fileId]
-      }
-    })
-  }
-
-  function handleSelectAll() {
-    // Step1: check if all files are already selected deselect all
-    if (activeFileIds.length === files.length) {
-      setActiveFileIds([])
-    } else { //Otherwise select all
-      const allIds = files.map(f => f.id)
-      allIds.forEach(id => {
-        triggerProcessingIfNeeded(id)
-      })
-      setActiveFileIds(allIds) //loops through the files array and builds a new array containing only the file id and finally pass it to setActiveFileIds
-    }
   }
 
   function formatSize(bytes) {
     if (bytes < 1024) return bytes + ' B'
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-  }
-
-  function triggerProcessingIfNeeded(fileId) {
-    const file = files.find(f => f.id === fileId)
-    console.log(`file stauts: ${file.status}`)
-    if (!file || file.status === "ready" || file.status === "processing") {
-      return
-    }
-    processFile(fileId)
   }
 
   function processFile(fileId) {
@@ -193,33 +144,24 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    setActiveFileIds(prevActiveIds => {
-      return prevActiveIds.filter(id => {
-        const file = files.find(f => f.id === id)
-        return file && file.status === 'ready'
-      })
-    })
-  }, [files])
-
   return (
     <div className="flex h-screen bg-gray-200 overflow-hidden">
-      <Sidebar
+      <LeftSidebar
         files={files}
         onUpload={handleUpload}
         onDelete={handleDelete}
-        activeFileIds={activeFileIds}
-        onFileSelect={handleFileSelect}
-        onSelectAll={handleSelectAll}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
-        <Header />
+        {/* <Header /> */}
         <ChatArea
-          activeFile={files.find(f => activeFileIds.includes(f.id))}
           messages={messages}
         />
-        <Footer onSendMessage={handleSendMessage} isLoading={isLoading}/>
+        <Footer onSendMessage={handleSendMessage} isLoading={isLoading} />
       </main>
+
+      <RightSidebar
+        files={files}
+      />
     </div>
   )
 }

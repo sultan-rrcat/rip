@@ -3,7 +3,7 @@ import SearchIcon from '@mui/icons-material/Search';
 export default function Header() {
     return (
         <div className="m-1">
-            <header className="h-11 px-8 font-inter shrink-0 bg-white border-gray-200 flex items-center justify-between shadow-sm rounded-xl">
+            <header className="h-11 px-8 font-inter shrink-0 bg-white border border-gray-400 flex items-center justify-between shadow-sm rounded-xl">
                 <span className="text-md font-semibold text-gray-900 tracking-tight">
                     Deep Research Assistant
                 </span>

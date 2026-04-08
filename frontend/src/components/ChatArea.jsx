@@ -1,7 +1,12 @@
 import SmartToyIcon from '@mui/icons-material/SmartToy';
-import { useRef, useEffect } from "react"
+import { useRef, useEffect } from "react";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import {oneLight} from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 
-export default function ChatArea({ activeFile, messages }) {
+
+export default function ChatArea({messages }) {
     const bottomRef = useRef(null)
 
     useEffect(() => {
@@ -9,7 +14,7 @@ export default function ChatArea({ activeFile, messages }) {
     }, [messages])
 
     return (
-        <div className="m-1 space-y-6 flex-1 overflow-y-auto px-8 py-10 bg-white rounded-xl shadow-sm">
+        <div className="m-1 space-y-6 flex-1 overflow-y-auto px-8 py-10 bg-white border border-gray-400 rounded-xl shadow-sm">
             {messages.map((message) => {
                 if (message.role === "assistant") {
                     return (
@@ -50,8 +55,42 @@ function AssistantMessage({ text, children }) {
             {/* content */}
             <div className="flex-1 space-y-1">
                 <p className="text-xs font-medium text-gray-300">Assistant</p>
-                <div className="text-xs text-gray-600 leading-relaxed max-w-2xl border border-gray-200 p-4 rounded-xl rounded-tl-none bg-gray-100">
-                    {text || children}
+                <div className="text-sm text-gray-600 leading-relaxed max-w-2xl border border-gray-200 p-4 rounded-xl rounded-tl-none bg-gray-100">
+                    {children ? children : (
+                        <ReactMarkdown 
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                                // Custom renderer for code blocks
+                                code({node, inline, className, children, ...props}) {
+                                    const match = /language-(\w+)/.exec(className || '')
+                                    return !inline && match ? (
+                                        <SyntaxHighlighter
+                                            style={oneLight}
+                                            language={match}
+                                            PreTag="div"
+                                            {...props}
+                                        >
+                                            {String(children).replace(/\n$/, '')}
+                                        </SyntaxHighlighter>
+                                    ) : (
+                                        <code className={className} {...props}>
+                                            {children}
+                                        </code>
+                                    )
+                                },
+                                // Ensure tables look good with Tailwind
+                                table: ({node, ...props}) => (
+                                    <div className="overflow-x-auto my-2">
+                                        <table className="border-collapse border border-gray-300 min-w-full" {...props} />
+                                    </div>
+                                ),
+                                th: ({node, ...props}) => <th className="border border-gray-300 px-4 py-2 bg-gray-200" {...props} />,
+                                td: ({node, ...props}) => <td className="border border-gray-300 px-4 py-2" {...props} />,
+                            }}
+                        >
+                            {text}
+                        </ReactMarkdown>
+                    )}
                 </div>
             </div>
         </div>
