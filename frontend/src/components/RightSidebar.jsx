@@ -8,12 +8,6 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
 export default function RightSidebar() {
 
     const tools = [
-        // {
-        //     title: "Generate Photo",
-        //     desc: "Create visual content from notes",
-        //     icon: <ImageIcon />,
-        //     color: "bg-purple-100 text-purple-600"
-        // },
         {
             title: "Generate Quiz",
             desc: "Test your understanding instantly",
