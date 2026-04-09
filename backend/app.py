@@ -4,9 +4,11 @@ import requests as req
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 import logging
 import config
 from dotenv import load_dotenv
+from uuid import uuid4
 
 load_dotenv()
 
@@ -32,6 +34,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class NotebookCreate(BaseModel):
+    notebook_id: Optional[str] = None
+    notebook_name: str
 
 
 # Request body schema
@@ -61,11 +68,8 @@ def ask_qwen(prompt: str) -> str:
 
 def save_messages(user_prompt, response_text):
     with get_db() as conn:
-        with conn as cur:
-            cur.execute(
-                "INSERT INTO prompts (prompt, response) VALUES (%s, %s)",
-                (user_prompt, response_text),
-            )
+        with conn.cursor() as cur:
+            cur.execute()
 
 
 @app.get("/api/health")
@@ -79,6 +83,45 @@ def prompt(request: PromptRequest):
     response_text = ask_qwen(user_prompt)
     save_messages(user_prompt, response_text)
     return {"response": response_text}
+
+
+@app.post("/api/notebooks")
+def create_notebooks(data: NotebookCreate):
+    notebook_id = data.notebook_id or str(uuid4())
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO notebooks (notebook_id, notebook_name)
+                VALUES (%s, %s)
+                RETURNING notebook_id, notebook_name, created_at
+                """,
+                (notebook_id, data.notebook_name),
+            )
+            result = cur.fetchone()
+    return {
+        "notebook_id": result[0],
+        "notebook_name": result[1],
+        "created_at": result[2],
+    }
+
+
+@app.get("/api/notebooks")
+def get_notebooks():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT notebook_id, notebook_name, created_at
+                FROM notebooks 
+                ORDER BY created_at DESC
+                """
+            )
+            rows = cur.fetchall()
+
+    return [
+        {"notebook_id": result[0], "notebook_name": result[1], "created_at": result[2]} for result in rows
+    ]
 
 
 # Run with: uvicorn main:app --host 0.0.0.0 --port 5000
