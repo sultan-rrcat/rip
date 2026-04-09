@@ -1,0 +1,9 @@
+2026-04-09 11:56:18,327 - root - INFO - Logging has been successfully set up.
+2026-04-09 11:56:27,250 - root - INFO - Prompt send to LLM: hii
+2026-04-09 11:59:52,163 - root - INFO - Logging has been successfully set up.
+2026-04-09 11:59:59,102 - root - INFO - Prompt send to LLM: hiii
+2026-04-09 12:00:00,537 - root - INFO - host: 10.10.30.65
+2026-04-09 12:00:23,483 - root - INFO - Prompt send to LLM: Hii there
+2026-04-09 12:00:25,051 - root - INFO - host: 10.10.30.65
+2026-04-09 12:22:45,250 - root - INFO - Prompt send to LLM: hii
+2026-04-09 12:22:46,579 - root - INFO - host: 10.10.30.65
