@@ -44,7 +44,7 @@ export default function Footer({ onSendMessage, isLoading }) {
     }
 
     return (
-        <footer className="m-1 py-4 shrink-0 bg-white border border-gray-400 rounded-xl shadow-sm">
+        <footer className="m-1 mt-0 py-4 shrink-0 bg-white border border-gray-400 rounded-xl shadow-sm">
             <div className="w-full max-w-3xl mx-auto px-4">
                 <div className='border border-gray-400 rounded-xl'>
                     <div className="relative px-3 py-2.5 ">
