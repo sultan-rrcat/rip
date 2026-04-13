@@ -14,7 +14,9 @@ import Button from '@mui/material/Button'
 
 import Note from '@mui/icons-material/Note'
 import { useNavigate } from 'react-router-dom'
-import { v4 as uuidv4 } from 'uuid'
+
+import { createNotebookAPI, renameNotebookAPI, deleteNotebookAPI } from "../../services/notebooks";
+
 
 import { useState, useEffect } from 'react'
 
@@ -27,24 +29,9 @@ export default function Card({ isNew, title, id, setNotebooks }) {
 
     const navigate = useNavigate();
 
-    function createNotebook() {
-        const newNotebook = {
-            id: uuidv4(),
-            name: "Untitled",
-            files: [],
-            messages: [
-                {
-                    id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Date.now().toString(36),
-                    role: "assistant",
-                    text: "How can I help you?"
-                }
-            ]
-        }
-
-        const existing = JSON.parse(localStorage.getItem("notebooks")) || []
-        const updated = [...existing, newNotebook]
-        localStorage.setItem("notebooks", JSON.stringify(updated))
-        navigate(`/notebook/${newNotebook.id}`)
+    async function createNotebook() {
+        const data = await createNotebookAPI("Untitled")
+        navigate(`/notebook/${data.notebook_id}`)
     }
 
     function handleMenuOpen(event) {
@@ -65,24 +52,24 @@ export default function Card({ isNew, title, id, setNotebooks }) {
         setOpenDelete(false)
     }
 
-    function handleEditSave() {
-        const notebooks = JSON.parse(localStorage.getItem("notebooks")) || []
-        const updated = notebooks.map(n => n.id === id ? { ...n, name: newTitle } : n)
-        localStorage.setItem("notebooks", JSON.stringify(updated))
-        setNotebooks(updated)
+    async function handleEditSave() {
+        await renameNotebookAPI(id, newTitle)
+        setNotebooks(prev =>
+            prev.map(n => n.notebook_id === id ? { ...n, notebook_name: newTitle } : n)
+        )
         setOpenEdit(false)
     }
-    function handleDeleteConfirm() {
-        const notebooks = JSON.parse(localStorage.getItem("notebooks")) || []
-        const updated = notebooks.filter(n => n.id !== id)
-        console.log(`Notebook to be deleted: ${updated}`)
-        localStorage.setItem("notebooks", JSON.stringify(updated))
-        setNotebooks(updated)
+
+    async function handleDeleteConfirm() {
+        await deleteNotebookAPI(id)
+        setNotebooks(prev =>
+            prev.filter(n => n.notebook_id !== id)
+        )
         setOpenDelete(false)
     }
 
-    function handleSaveKeyDown(e){
-        if(e.key === "Enter"){
+    function handleSaveKeyDown(e) {
+        if (e.key === "Enter") {
             e.preventDefault()
             handleEditSave()
         }

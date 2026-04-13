@@ -1,25 +1,13 @@
 import Card from '../components/home/Card'
-import { useState, useEffect, useDebugValue } from 'react'
-
+import { useState, useEffect } from 'react'
 
 export default function Home() {
     const [notebooks, setNotebooks] = useState([])
 
-    function getNotebooks() {
-        return JSON.parse(localStorage.getItem("notebooks")) || []
-    }
-
-    function saveNotebooks(updated) {
-        localStorage.setItem("notebooks", JSON.stringify(updated))
-    }
-
-    function handleRename(id) {
-        const newName = prompt
-    }
-
     useEffect(() => {
-        const stored = JSON.parse(localStorage.getItem("notebooks")) || []
-        setNotebooks(stored)
+        fetch("http://localhost:5000/api/notebooks")
+            .then(res => res.json())
+            .then(data => setNotebooks(data))
     }, [])
 
     return (
@@ -29,10 +17,10 @@ export default function Home() {
                     <Card isNew={true} title={"Create New"} />
                     {notebooks.map((n => (
                         <Card
-                            key={n.id}
+                            key={n.notebook_id}
                             isNew={false}
-                            title={n.name}
-                            id={n.id}
+                            title={n.notebook_name}
+                            id={n.notebook_id}
                             setNotebooks={setNotebooks}
                         />
                     )))}

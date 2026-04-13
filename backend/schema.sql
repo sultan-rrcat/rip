@@ -24,11 +24,28 @@ CREATE TABLE files (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE embeddings (
+    embedding_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    file_id UUID REFERENCES files(file_id) ON DELETE CASCADE,
+    chunk_text TEXT,
+    embedding VECTOR(384),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE embeddings_test (
+    embedding_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    file_id UUID,
+    chunk_text TEXT,
+    embedding VECTOR(384),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+
 
 -- Drop dependent tables first
 -- DROP TABLE IF EXISTS files CASCADE;
 -- DROP TABLE IF EXISTS messages CASCADE;
 -- DROP TABLE IF EXISTS notebooks CASCADE;
+-- DROP TABLE IF EXISTS embeddings CASCADE;
 
 -- -- Optionally drop the extension if you no longer need UUID generation
 -- DROP EXTENSION IF EXISTS "pgcrypto";

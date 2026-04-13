@@ -17,3 +17,57 @@
 2026-04-09 14:53:35,035 - root - INFO - Logging has been successfully set up.
 2026-04-09 15:01:17,189 - root - INFO - Logging has been successfully set up.
 2026-04-09 15:02:53,361 - root - INFO - Logging has been successfully set up.
+2026-04-09 15:39:27,568 - root - INFO - Logging has been successfully set up.
+2026-04-09 16:54:02,970 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:00:13,586 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:01:38,153 - root - INFO - Prompt send to LLM: hii there
+2026-04-09 17:02:56,131 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:03:09,514 - root - INFO - Prompt send to LLM: Hii there
+2026-04-09 17:04:05,926 - root - INFO - Prompt send to LLM: hii
+2026-04-09 17:04:22,835 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:04:32,892 - root - INFO - Prompt send to LLM: hii
+2026-04-09 17:05:46,874 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:06:01,163 - root - INFO - Prompt send to LLM: Hii tehre
+2026-04-09 17:10:52,513 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:13:02,590 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:13:09,403 - root - INFO - Prompt send to LLM: hi
+2026-04-09 17:13:54,857 - root - INFO - Prompt send to LLM: Hii there
+2026-04-09 17:14:21,397 - root - INFO - Prompt send to LLM: hi
+2026-04-09 17:18:24,685 - root - INFO - Prompt send to LLM: whatsup
+2026-04-09 17:21:03,009 - root - INFO - Prompt send to LLM: Hii there
+2026-04-09 17:22:48,232 - root - INFO - Prompt send to LLM: hiii 
+2026-04-09 17:28:21,572 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:34:48,848 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:36:20,016 - root - INFO - Logging has been successfully set up.
+2026-04-09 17:37:23,306 - root - INFO - Prompt send to LLM: hii
+2026-04-09 17:37:37,880 - root - INFO - Prompt send to LLM: whats up
+2026-04-09 17:38:19,670 - root - INFO - Prompt send to LLM: whats up
+2026-04-09 17:41:06,224 - root - INFO - Prompt send to LLM: Hii there
+2026-04-10 09:33:06,661 - root - INFO - Prompt send to LLM: Hii there
+2026-04-10 09:34:20,748 - root - INFO - Logging has been successfully set up.
+2026-04-10 09:37:47,281 - root - INFO - Prompt send to LLM: hii
+2026-04-10 09:37:53,743 - root - INFO - Prompt send to LLM: whats going on
+2026-04-10 14:51:53,652 - root - INFO - Logging has been successfully set up.
+2026-04-10 14:52:17,519 - root - INFO - Logging has been successfully set up.
+2026-04-10 14:52:55,398 - root - INFO - Logging has been successfully set up.
+2026-04-10 14:53:58,324 - root - INFO - Logging has been successfully set up.
+2026-04-10 14:55:14,602 - root - INFO - Logging has been successfully set up.
+2026-04-10 14:56:08,370 - root - INFO - Logging has been successfully set up.
+2026-04-10 14:57:41,243 - root - INFO - Logging has been successfully set up.
+2026-04-10 16:46:56,388 - root - INFO - Logging has been successfully set up.
+2026-04-10 16:47:25,614 - root - INFO - Logging has been successfully set up.
+2026-04-10 16:48:28,398 - root - INFO - Prompt send to LLM: hi
+2026-04-10 16:58:18,142 - root - INFO - Logging has been successfully set up.
+2026-04-10 17:09:02,191 - root - INFO - Logging has been successfully set up.
+2026-04-10 17:17:23,131 - root - INFO - Logging has been successfully set up.
+2026-04-10 17:21:01,795 - root - INFO - Logging has been successfully set up.
+2026-04-10 17:25:48,269 - root - INFO - Logging has been successfully set up.
+2026-04-10 17:29:26,802 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2026-04-10 17:29:26,802 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: D:\models\all-MiniLM-L6-v2
+2026-04-10 17:30:37,963 - root - INFO - Prompt send to LLM: Hii thre
+2026-04-10 17:30:43,336 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2026-04-10 17:30:43,336 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: D:\models\all-MiniLM-L6-v2
+2026-04-10 17:30:43,387 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2026-04-10 17:30:43,387 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: D:\models\all-MiniLM-L6-v2
+2026-04-10 17:30:43,396 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2026-04-10 17:30:43,396 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: D:\models\all-MiniLM-L6-v2
