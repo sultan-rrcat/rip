@@ -126,7 +126,13 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
 
 def run_rag_pipeline(file_id):
     try:
-        rag = RagPipeline()
+        try:
+            rag = RagPipeline()
+            logger.info(f"RAG pipeline initialized.")
+        except Exception as e:
+            logger.info(f"Error initiating rag pipeline. {e}")
+            return 
+
         with config.pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(

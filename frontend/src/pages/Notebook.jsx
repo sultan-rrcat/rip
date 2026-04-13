@@ -6,7 +6,7 @@ import { useEffect, useState } from "react"
 import { sendMessage } from "../services/llm"
 import { useParams } from "react-router-dom"
 import { getMessagesAPI, createMessageAPI } from "../services/messages"
-import { getFilesAPI, createFileAPI, updateFileStatusAPI, deleteFileAPI } from "../services/files"
+import { getFilesAPI, deleteFileAPI, uploadFileAPI } from "../services/files"
 import { getNotebooksAPI, renameNotebookAPI } from "../services/notebooks"
 import { v4 as uuidv4 } from 'uuid';
 
@@ -23,42 +23,8 @@ export default function Notebook() {
   const isLoading = messages.some(m => m.role === "loading")
 
   async function uploadFile(file) {
-    // 1. Register file in DB, it starts as 'processing'
-    // const newFile = await createFileAPI(id, file.name, file.size)
-
-    // 2. Add to UI immediately so user sees it with a spinner
-    // setFiles(prev => [...prev, newFile])
-
-    // // 3. Simulate processing (replace with real logic later)
-    // setTimeout(async () => {
-    //   const status = Math.random() < 0.3 ? "error" : "ready"
-
-    //   // 4. Update status in DB
-    //   await updateFileStatusAPI(newFile.id, status)
-
-    //   // 5. Update status in UI
-    //   setFiles(prev =>
-    //     prev.map(f => f.id === newFile.id ? { ...f, status } : f)
-    //   )
-    // }, 5000)
-
-    const formData = new FormData()
-    formData.append("file", file)
-    formData.append("notebook_id", id)
-
-    const res = await fetch("http://localhost:5000/api/files/upload", {
-      method: "POST",
-      body: formData
-    })
-
-    if (!res.ok) {
-      console.error("Upload failed")
-      const newFile = { id: uuidv4(), name: file.name, status: "error" }
-      setFiles(prev => [...prev, newFile])
-      return
-    }
-
-    const newFile = await res.json()
+    const newFile = await uploadFileAPI(id, file)
+    console.log(`newFile: ${newFile}`)
     setFiles(prev => [...prev, newFile])
 
     try {
@@ -152,7 +118,6 @@ export default function Notebook() {
     return () => { cancelled = true }
   }, [id])
 
-
   useEffect(() => {
     let interval
     const hasProcessing = files.some(f => f.status === "processing")
@@ -184,9 +149,9 @@ export default function Notebook() {
         <Footer onSendMessage={handleSendMessage} isLoading={isLoading} />
       </main>
 
-      <RightSidebar
+      {/* <RightSidebar
         files={files}
-      />
+      /> */}
     </div>
   )
 }

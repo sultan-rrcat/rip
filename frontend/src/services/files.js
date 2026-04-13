@@ -40,3 +40,28 @@ export async function deleteFileAPI(fileId) {
   console.log(`[files] DELETE /api/files/${fileId} →`, data)
   return data
 }
+
+export async function uploadFileAPI(notebookId, file) {
+  console.log(`[files] POST/UPLOAD /api/files/upload`)
+
+  const formData = new FormData()
+  formData.append("file", file)
+  formData.append("notebook_id", notebookId)
+
+  console.log(formData)
+
+  const res = await fetch(`${API}/api/files/upload`, {
+    method: "POST",
+    body: formData
+  })
+
+  if (!res.ok) {
+    console.error("Upload failed")
+    const newFile = { id: uuidv4(), name: file.name, status: "error" }
+    setFiles(prev => [...prev, newFile])
+    return
+  }
+
+  const data = await res.json()
+  return data
+}
