@@ -3,6 +3,7 @@ __pycache__/
 
 # Ignore all .pyc files
 *.pyc
+*.log
 
 # logs
 
