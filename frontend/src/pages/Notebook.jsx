@@ -4,6 +4,7 @@ import LeftSidebar from "../components/notebook/LeftSidebar"
 import RightSidebar from "../components/notebook/RightSidebar"
 import { useEffect, useState } from "react"
 import { sendMessage } from "../services/llm"
+import { sendMessageStream } from "../services/llm"
 import { useParams } from "react-router-dom"
 import { getMessagesAPI, createMessageAPI } from "../services/messages"
 import { getFilesAPI, deleteFileAPI, uploadFileAPI } from "../services/files"
@@ -21,7 +22,7 @@ export default function Notebook() {
     text: "How can I help you?",
     sources: []
   }])
-  const isLoading = messages.some(m => m.role === "loading")
+  // const isLoading = messages.some(m => m.role === "loading")
 
   async function uploadFile(file) {
     const newFile = await uploadFileAPI(id, file)
@@ -56,37 +57,105 @@ export default function Notebook() {
     setFiles(prev => prev.filter(f => f.id !== fileId))
   }
 
+  // async function handleSendMessage(text) {
+  //   // 1. Save user message to DB, get back the real message with its DB id
+  //   const userMessage = await createMessageAPI(id, "user", text)
+
+  //   // 2. Add user message + a temporary loading indicator to UI
+  //   const loadingMessage = { id: uuidv4(), role: "loading", text: "..." }
+  //   setMessages(prev => [...prev, userMessage, loadingMessage])
+
+  //   try {
+  //     // 3. Call the LLM
+  //     const res = await sendMessage(text, id)
+
+  //     // 4. Save assistant reply to DB
+  //     const assistantMessage = await createMessageAPI(id, "assistant", res.chatbot_response, res.sources)
+
+  //     // 5. Swap out the loading indicator with the real reply
+  //     setMessages(prev =>
+  //       prev.map(m =>
+  //         m.id === loadingMessage.id
+  //           ? assistantMessage
+  //           : m
+  //       )
+  //     )
+  //   } catch (err) {
+  //     // 6. Save error to DB, swap out loading indicator
+  //     const errorMessage = await createMessageAPI(id, "error", `Something went wrong. Error: ${err}`)
+  //     setMessages(prev =>
+  //       prev.map(m => m.id === loadingMessage.id ? errorMessage : m)
+  //     )
+  //   }
+  // }
   async function handleSendMessage(text) {
-    // 1. Save user message to DB, get back the real message with its DB id
     const userMessage = await createMessageAPI(id, "user", text)
 
-    // 2. Add user message + a temporary loading indicator to UI
-    const loadingMessage = { id: uuidv4(), role: "loading", text: "..." }
-    setMessages(prev => [...prev, userMessage, loadingMessage])
+    const assistantTempId = uuidv4()
+
+    // Add user + empty assistant message (instead of loading)
+    setMessages(prev => [
+      ...prev,
+      userMessage,
+      {
+        id: assistantTempId,
+        role: "assistant",
+        text: "thinking...",
+        status: "thinking...",
+        sources: []
+      }
+    ])
+
+    let fullText = ""
 
     try {
-      // 3. Call the LLM
-      const res = await sendMessage(text, id)
+      let hasStartedStreaming = false
+      await sendMessageStream(text, id, (token) => {
+        if (!hasStartedStreaming) {
+          hasStartedStreaming = true
+        }
+        fullText += token
 
-      // 4. Save assistant reply to DB
-      const assistantMessage = await createMessageAPI(id, "assistant", res.chatbot_response, res.sources)
+        // Update assistant message live
+        setMessages(prev =>
+          prev.map(m =>
+            m.id === assistantTempId
+              ? { ...m, text: fullText, status: "streaming" }
+              : m
+          )
+        )
+      })
 
-      // 5. Swap out the loading indicator with the real reply
+      // Save final response to DB
+      const savedMessage = await createMessageAPI(
+        id,
+        "assistant",
+        fullText,
+        []
+      )
+
+      // Replace temp message with DB message (real ID)
       setMessages(prev =>
         prev.map(m =>
-          m.id === loadingMessage.id
-            ? assistantMessage
-            : m
+          m.id === assistantTempId ? savedMessage : m
         )
       )
+
     } catch (err) {
-      // 6. Save error to DB, swap out loading indicator
-      const errorMessage = await createMessageAPI(id, "error", `Something went wrong. Error: ${err}`)
+      const errorMessage = await createMessageAPI(
+        id,
+        "error",
+        `Something went wrong. Error: ${err}`
+      )
+
       setMessages(prev =>
-        prev.map(m => m.id === loadingMessage.id ? errorMessage : m)
+        prev.map(m =>
+          m.id === assistantTempId ? errorMessage : m
+        )
       )
     }
   }
+
 
   async function renameNotebook(newName) {
     if (!newName.trim()) return
@@ -109,7 +178,7 @@ export default function Notebook() {
       const msgs = await getMessagesAPI(id)
       if (cancelled) return
       if (msgs.length === 0) {
-        setMessages([{ id: uuidv4(), role: "assistant", text: "How can I help you?", sources:[]}])
+        setMessages([{ id: uuidv4(), role: "assistant", text: "How can I help you?", sources: [] }])
       } else {
         setMessages(msgs)
       }
@@ -151,7 +220,7 @@ export default function Notebook() {
         <ChatArea
           messages={messages}
         />
-        <Footer onSendMessage={handleSendMessage} isLoading={isLoading} />
+        <Footer onSendMessage={handleSendMessage} />
       </main>
 
       {/* <RightSidebar

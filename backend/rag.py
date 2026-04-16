@@ -16,7 +16,7 @@ logger = config.setup_logging()
 class RagPipeline:
     def __init__(self):
         self.embedding_model = HuggingFaceEmbeddings(
-            model_name=config.ALL_MINILM_L6_V2_MODEL_PATH
+            model_name=config.BGE_M3_MODEL_PATH
         )
 
         self.reranker_model = CrossEncoder(config.BGE_RERANKER_V2_M3)
@@ -314,8 +314,9 @@ class RagPipeline:
                 c for c in final_list if c.get("rerank_score", 0) > rerank_threshold
             ]
 
-            # if not filtered:
-            #     filtered = final_list[:1]
+            if not filtered:
+                logger.warning("⚠️ No reranked results passed threshold — using fallback")
+                filtered = final_list[:3]
 
             top_results = filtered
 
