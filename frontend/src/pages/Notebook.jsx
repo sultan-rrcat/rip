@@ -18,7 +18,8 @@ export default function Notebook() {
   const [messages, setMessages] = useState([{
     id: uuidv4(),
     role: "assistant",
-    text: "How can I help you?"
+    text: "How can I help you?",
+    sources: []
   }])
   const isLoading = messages.some(m => m.role === "loading")
 
@@ -65,14 +66,18 @@ export default function Notebook() {
 
     try {
       // 3. Call the LLM
-      const replyText = await sendMessage(text, id)
+      const res = await sendMessage(text, id)
 
       // 4. Save assistant reply to DB
-      const assistantMessage = await createMessageAPI(id, "assistant", replyText)
+      const assistantMessage = await createMessageAPI(id, "assistant", res.chatbot_response, res.sources)
 
       // 5. Swap out the loading indicator with the real reply
       setMessages(prev =>
-        prev.map(m => m.id === loadingMessage.id ? assistantMessage : m)
+        prev.map(m =>
+          m.id === loadingMessage.id
+            ? assistantMessage
+            : m
+        )
       )
     } catch (err) {
       // 6. Save error to DB, swap out loading indicator
@@ -104,7 +109,7 @@ export default function Notebook() {
       const msgs = await getMessagesAPI(id)
       if (cancelled) return
       if (msgs.length === 0) {
-        setMessages([{ id: uuidv4(), role: "assistant", text: "How can I help you?" }])
+        setMessages([{ id: uuidv4(), role: "assistant", text: "How can I help you?", sources:[]}])
       } else {
         setMessages(msgs)
       }

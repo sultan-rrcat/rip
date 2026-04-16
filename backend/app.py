@@ -41,6 +41,7 @@ app.add_middleware(
 
 class PromptRequest(BaseModel):
     prompt: str
+    notebook_id: str
 
 
 def ask_qwen(prompt: str) -> str:
@@ -50,7 +51,7 @@ def ask_qwen(prompt: str) -> str:
         json={
             "model": "qwen2.5-coder-14b",
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 512,
+            "max_tokens": 1024,
         },
         proxies={"http": None, "https": None},
     )
@@ -84,12 +85,139 @@ def health():
     return {"status": "ok"}
 
 
+def format_context_for_llm(context_json):
+    chunks = []
+    for i, item in enumerate(context_json.get("results", []), 1):
+        chunks.append(
+            f"[{i} ({item['source']})]\n" f"{item['section']}\n" f"{item['content']}"
+        )
+    return "\n\n".join(chunks)
+
+
+def extract_sources(context_json):
+    sources = []
+    for item in context_json.get("results", []):
+        sources.append(
+            {
+                "source": item.get("source"),
+                "section": item.get("section"),
+            }
+        )
+    unique_sources = [dict(t) for t in {tuple(d.items()) for d in sources}]
+
+    return unique_sources
+
+
+def get_last_messages(notebook_id: str, limit: int = 6):
+    with config.pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT role, text
+                FROM messages
+                WHERE notebook_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (notebook_id, limit),
+            )
+            rows = cur.fetchall()
+    return list(reversed(rows))
+
+
+def format_chat_history(messages):
+    history = []
+    for role, text in messages:
+        if role == "user":
+            history.append(f"User: {text}")
+        else:
+            history.append(f"Assistant: {text}")
+
+    return "\n".join(history)
+
+
+def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
+    messages = get_last_messages(notebook_id)
+
+    # If no history → return original prompt
+    if not messages:
+        return user_prompt
+
+    history_text = format_chat_history(messages)
+
+    # Prompt engineering for rewriting
+    rewrite_instruction = f"""
+You are a query rewriter.
+
+Your task is to rewrite the user's query ONLY.
+
+Rules:
+- Do NOT answer
+- Do NOT greet
+- Do NOT add explanations
+- Output MUST be a single rewritten query
+- If the query is already clear, return it unchanged
+
+Conversation History:
+{history_text}
+
+Latest User Query:
+{user_prompt}
+
+Rewritten Query:
+"""
+
+    try:
+        rewritten_prompt = ask_qwen(rewrite_instruction)
+        logger.info(f"Rewrittend User Query: {rewritten_prompt}")
+        return rewritten_prompt.strip()
+    except Exception as e:
+        logger.error(f"Error rewriting prompt: {e}")
+        return user_prompt  # fallback
+
+
 @app.post("/api/prompt")
 def prompt(request: PromptRequest):
     user_prompt = request.prompt
-    response_text = ask_qwen(user_prompt)
-    # save_messages(request.notebook_id, user_prompt, response_text)
-    return {"response": response_text}
+    try:
+        rag = RagPipeline()
+        logger.info("RAG pipeline initialized - For Prompt")
+
+        try:
+            context_json = rag.retrieve_context(user_prompt)
+            logger.info(f"context_json: {context_json}")
+
+            formatted_context = format_context_for_llm(context_json)
+            sources = extract_sources(context_json)
+            logger.info(f"Context retrieved successfully for prompt: {user_prompt}")
+        except Exception as e:
+            logger.error(
+                f"Error retrieving context for prompt: {user_prompt}. Exception: {e}"
+            )
+            formatted_context = ""  # fallback to empty context
+            sources = []
+
+    except Exception as e:
+        logger.error(f"Error initiating RAG pipeline. Exception: {e}")
+        return {"response": "Pipeline initialization failed."}
+
+    rewritten_user_prompt = rewrite_prompt(request.notebook_id, user_prompt)
+
+    # --- Prompt engineering: combine context with user prompt ---
+    enriched_prompt = f"""
+    You are a helpful assistant.
+    Use the following context to answer the user query:"
+
+    Context:
+    {formatted_context}
+
+    User Query:
+    {rewritten_user_prompt}
+    """
+
+    response_text = ask_qwen(enriched_prompt)
+
+    return {"chatbot_response": response_text, "sources": sources}
 
 
 @app.post("/api/files/upload")
@@ -128,46 +256,73 @@ def run_rag_pipeline(file_id):
     try:
         try:
             rag = RagPipeline()
-            logger.info(f"RAG pipeline initialized.")
+            logger.info(f"RAG pipeline initialized - For File Ingestion")
         except Exception as e:
             logger.info(f"Error initiating rag pipeline. {e}")
-            return 
+            return
 
         with config.pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT notebook_id FROM files WHERE file_id=%s",
-                    (file_id,)
+                    "SELECT notebook_id, file_name FROM files WHERE file_id=%s",
+                    (file_id,),
                 )
                 result = cur.fetchone()
                 notebook_id = result[0]
-
+                file_name = result[1]
 
         if not result:
             raise Exception("File not found")
         file_path = os.path.join(config.UPLOAD_DIR, notebook_id, f"{file_id}.pdf")
 
-        documents = rag.document_loader(file_path)
-        if not documents:
-            raise Exception("Document loading failed")
-        chunks = rag.chunk_documents(documents)
-        embeddings = rag.generate_embeddings(chunks)
-        rag.store_chunks_and_embeddings(file_id, chunks, embeddings)
+        logger.info(f"Starting Processing file: {file_name}")
+
+        try:
+            documents = rag.document_loader(file_path)
+            logger.info(f"Document loader processed.")
+        except Exception as e:
+            logger.exception(f"Error loading document: {e}")
+            raise
+        try:
+            chunks = rag.chunk_documents(documents, file_name)
+            logger.info(f"Chunks created.")
+        except Exception as e:
+            logger.exception(f"Error chunking document. {e}")
+            raise
+        try:
+            embeddings = rag.generate_embeddings(chunks)
+            logger.info(f"embeddings generated.")
+        except Exception as e:
+            logger.exception(f"Eror generating embeddings. {e}")
+            raise
+        try:
+            rag.store_chunks_and_embeddings(file_id, chunks, embeddings)
+            logger.info(f"embeddings stored.")
+        except Exception as e:
+            logger.exception(f"Error storing embeddings. {e}")
+            raise
+
+        # try:
+        #     context = rag.retrieve_context(user_prompt)
+        # except Exception as e:
+        #     logger.exception(f"Error retrieving context. {e}")
+        #     raise
+
         # update file status
         with config.pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE files SET file_status = 'ready' WHERE file_id = %s",
                     (file_id,),
-                    )
+                )
     except Exception as e:
-        print(f"Error: {e}")
+        logger.exception(f"Error: {e}")
 
         with config.pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE files SET file_status = 'error' WHERE file_id = %s",
-                    (file_id,)
+                    (file_id,),
                 )
 
 
