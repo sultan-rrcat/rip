@@ -13,6 +13,7 @@ from routes import _notebooks_routes, _files_routes, _messages_routes
 from dotenv import load_dotenv
 from uuid import uuid4
 from rag import RagPipeline
+import json
 
 from contextlib import asynccontextmanager
 from fastapi import Request, Depends
@@ -101,7 +102,6 @@ def stream_qwen(prompt: str):
                     break
 
                 try:
-                    import json
                     chunk = json.loads(payload)
                     token = chunk["choices"][0]["delta"].get("content", "")
                     if token:
@@ -271,6 +271,7 @@ def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
             try:
                 context_json = rag.retrieve_context(user_prompt)
                 formatted_context = format_context_for_llm(context_json)
+                sources = extract_sources(context_json)
             except Exception:
                 formatted_context = ""
 
@@ -288,11 +289,12 @@ def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
 
             full_response = []
 
+            yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
             for token in stream_qwen(enriched_prompt):
                 full_response.append(token)
 
                 # SSE format
-                import json
+                
                 yield f"data: {json.dumps({'response': token})}\n\n"
 
             yield "data: [DONE]\n\n"
@@ -306,7 +308,8 @@ def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
-            yield "data: [ERROR]\n\n"
+            sources = []
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Streaming failed'})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

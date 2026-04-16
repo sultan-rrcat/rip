@@ -34,6 +34,6 @@ def create_message(id: str, data: MessageCreate):
                 INSERT INTO messages (notebook_id, role, text, sources)
                 VALUES (%s, %s, %s, %s)
                 RETURNING message_id, role, text, sources, created_at
-            """, (id, data.role, data.text, json.dumps(data.sources)))
+            """, (id, data.role, data.text, json.dumps(data.sources or [])))
             r = cur.fetchone()
     return {"id": r[0], "role": r[1], "text": r[2], "sources":r[3], "created_at": r[4]}

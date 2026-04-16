@@ -107,31 +107,43 @@ export default function Notebook() {
     ])
 
     let fullText = ""
+    let finalSources = []
 
     try {
       let hasStartedStreaming = false
-      await sendMessageStream(text, id, (token) => {
-        if (!hasStartedStreaming) {
-          hasStartedStreaming = true
-        }
-        fullText += token
+      await sendMessageStream(text, id, (chunk) => {
+        if (chunk.type === "token") {
+          fullText += chunk.token
 
-        // Update assistant message live
-        setMessages(prev =>
-          prev.map(m =>
-            m.id === assistantTempId
-              ? { ...m, text: fullText, status: "streaming" }
-              : m
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantTempId
+                ? { ...m, text: fullText, status: "streaming" }
+                : m
+            )
           )
-        )
+        }
+
+        if (chunk.type === "sources") {
+          finalSources = chunk.sources
+          setMessages(prev =>
+            prev.map(m =>
+              m.id === assistantTempId
+                ? { ...m, sources: chunk.sources }
+                : m
+            )
+          )
+        }
       })
+
+      const current = messages.find(m => m.id === assistantTempId)
 
       // Save final response to DB
       const savedMessage = await createMessageAPI(
         id,
         "assistant",
         fullText,
-        []
+        finalSources
       )
 
       // Replace temp message with DB message (real ID)

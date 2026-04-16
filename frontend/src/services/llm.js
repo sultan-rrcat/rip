@@ -19,7 +19,7 @@ export async function sendMessage(text, notebook_id){
 }
 
 
-export async function sendMessageStream(text, notebook_id, onToken) {
+export async function sendMessageStream(text, notebook_id, onChunk) {
     const response = await fetch(`${LLM_URL}/api/prompt/stream`, {
         method: 'POST',
         headers: {
@@ -46,24 +46,40 @@ export async function sendMessageStream(text, notebook_id, onToken) {
 
         buffer += decoder.decode(value, { stream: true })
 
-        // Split SSE messages
         const lines = buffer.split("\n\n")
         buffer = lines.pop()
 
         for (const line of lines) {
-            if (line.startsWith("data:")) {
-                const data = line.replace("data:", "").trim()
+            if (!line.startsWith("data:")) continue
 
-                if (data === "[DONE]") {
-                    return
+            const data = line.replace("data:", "").trim()
+
+            if (data === "[DONE]") {
+                onChunk({ type: "done" })
+                return
+            }
+
+            try {
+                const parsed = JSON.parse(data)
+
+                // 🔥 Handle token
+                if (parsed.response) {
+                    onChunk({
+                        type: "token",
+                        token: parsed.response
+                    })
                 }
 
-                try {
-                    const parsed = JSON.parse(data)
-                    onToken(parsed.response)   // 👈 stream token here
-                } catch (err) {
-                    console.error("Parse error:", err)
+                // 🔥 Handle sources
+                if (parsed.type === "sources") {
+                    onChunk({
+                        type: "sources",
+                        sources: parsed.sources || []
+                    })
                 }
+
+            } catch (err) {
+                console.error("Parse error:", err)
             }
         }
     }
