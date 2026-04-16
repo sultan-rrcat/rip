@@ -49,7 +49,7 @@ def setup_logging():
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
-    file_handler = logging.FileHandler(os.path.join(LOG_DIR, "app.log"))
+    file_handler = logging.FileHandler(os.path.join(LOG_DIR, "app.log"), encoding="utf-8")
     file_handler.setFormatter(log_format)
 
     console_handler = logging.StreamHandler()
