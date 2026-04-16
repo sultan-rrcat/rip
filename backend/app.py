@@ -110,27 +110,6 @@ async def stream_qwen(prompt: str):
                             except Exception as e:
                                 logger.error(f"Stream parsing error: {e}")
 
-def save_messages(notebook_id, user_prompt, response_text):
-    with config.pg_connection() as conn:
-        with conn.cursor() as cur:
-            # Insert user message
-            cur.execute(
-                """
-                INSERT INTO messages (notebook_id, role, text)
-                VALUES (%s, %s, %s)
-            """,
-                (notebook_id, "user", user_prompt),
-            )
-
-            # Insert assistant response
-            cur.execute(
-                """
-                INSERT INTO messages (notebook_id, role, text)
-                VALUES (%s, %s, %s)
-            """,
-                (notebook_id, "assistant", response_text),
-            )
-
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
@@ -299,13 +278,6 @@ async def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_r
                 yield f"data: {json.dumps({'response': token})}\n\n"
 
             yield "data: [DONE]\n\n"
-
-            # Save after stream completes
-            save_messages(
-                request.notebook_id,
-                user_prompt,
-                "".join(full_response)
-            )
 
         except Exception as e:
             logger.error(f"Streaming error: {e}")
