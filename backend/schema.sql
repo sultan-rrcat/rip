@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS public.embeddings_test
     embedding_id uuid NOT NULL DEFAULT gen_random_uuid(),
     file_id uuid,
     chunk_text text COLLATE pg_catalog."default",
-    embedding vector(384),
+    embedding vector(1024),
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     metadata jsonb,
     CONSTRAINT embeddings_test_pkey PRIMARY KEY (embedding_id),

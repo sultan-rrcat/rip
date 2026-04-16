@@ -4,6 +4,7 @@ import requests as req
 from fastapi import FastAPI, BackgroundTasks
 from fastapi import UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 import logging
@@ -13,13 +14,28 @@ from dotenv import load_dotenv
 from uuid import uuid4
 from rag import RagPipeline
 
+from contextlib import asynccontextmanager
+from fastapi import Request, Depends
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"Initiating ML models...")
+    app.state.rag = RagPipeline()
+    logger.info("ML models loaded successfully.")
+
+    yield #transfering control back to fastapi
+
+    logger.info(f"Shutting down and clearing models...")
+    app.state.rag = None
+
+
 load_dotenv()
 LLM_URL = os.getenv("LLM_API_URL", "http://10.10.30.65:8000")
 
 logger = config.setup_logging()
 logger.info("Logging has been successfully set up.")
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.include_router(_notebooks_routes.router)
 app.include_router(_files_routes.router)
 app.include_router(_messages_routes.router)
@@ -38,11 +54,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def get_rag(request: Request) -> RagPipeline:
+    return request.app.state.rag
+
+
 
 class PromptRequest(BaseModel):
     prompt: str
     notebook_id: str
-
 
 def ask_qwen(prompt: str) -> str:
     logger.info(f"Prompt send to LLM: {prompt}")
@@ -111,11 +130,9 @@ def save_messages(notebook_id, user_prompt, response_text):
                 (notebook_id, "assistant", response_text),
             )
 
-
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
-
 
 def format_context_for_llm(context_json):
     chunks = []
@@ -124,7 +141,6 @@ def format_context_for_llm(context_json):
             f"[{i} ({item['source']})]\n" f"{item['section']}\n" f"{item['content']}"
         )
     return "\n\n".join(chunks)
-
 
 def extract_sources(context_json):
     sources = []
@@ -138,7 +154,6 @@ def extract_sources(context_json):
     unique_sources = [dict(t) for t in {tuple(d.items()) for d in sources}]
 
     return unique_sources
-
 
 def get_last_messages(notebook_id: str, limit: int = 6):
     with config.pg_connection() as conn:
@@ -156,7 +171,6 @@ def get_last_messages(notebook_id: str, limit: int = 6):
             rows = cur.fetchall()
     return list(reversed(rows))
 
-
 def format_chat_history(messages):
     history = []
     for role, text in messages:
@@ -166,7 +180,6 @@ def format_chat_history(messages):
             history.append(f"Assistant: {text}")
 
     return "\n".join(history)
-
 
 def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
     messages = get_last_messages(notebook_id)
@@ -208,12 +221,11 @@ def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
         return user_prompt  # fallback
 
 @app.post("/api/prompt")
-def prompt(request: PromptRequest):
+def prompt(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
     user_prompt = request.prompt
     try:
-        rag = RagPipeline()
+        # rag = RagPipeline()
         logger.info("RAG pipeline initialized - For Prompt")
-
         try:
             context_json = rag.retrieve_context(user_prompt)
             logger.info(f"context_json: {context_json}")
@@ -250,17 +262,12 @@ def prompt(request: PromptRequest):
 
     return {"chatbot_response": response_text, "sources": sources}
 
-from fastapi.responses import StreamingResponse
-
 @app.post("/api/prompt/stream")
-def prompt_stream(request: PromptRequest):
+def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
     user_prompt = request.prompt
 
     def generate():
         try:
-            rag = RagPipeline()
-
-            # --- Context ---
             try:
                 context_json = rag.retrieve_context(user_prompt)
                 formatted_context = format_context_for_llm(context_json)
@@ -334,16 +341,8 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
             result = cur.fetchone()
     return {"id": result[0], "name": result[1], "size": result[2], "status": result[3]}
 
-
-def run_rag_pipeline(file_id):
+def run_rag_pipeline(file_id: str, rag: RagPipeline = Depends(get_rag)):
     try:
-        try:
-            rag = RagPipeline()
-            logger.info(f"RAG pipeline initialized - For File Ingestion")
-        except Exception as e:
-            logger.info(f"Error initiating rag pipeline. {e}")
-            return
-
         with config.pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -408,14 +407,13 @@ def run_rag_pipeline(file_id):
                     (file_id,),
                 )
 
-
 @app.post("/api/files/{file_id}/process")
-def process_file(file_id: str, background_tasks: BackgroundTasks):
+def process_file(file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag)):
     with config.pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM files WHERE file_id=%s", (file_id,))
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="File not found")
 
-    background_tasks.add_task(run_rag_pipeline, file_id)
+    background_tasks.add_task(run_rag_pipeline, file_id, rag)
     return {"message": "processing started"}
