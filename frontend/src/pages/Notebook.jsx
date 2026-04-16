@@ -126,17 +126,8 @@ export default function Notebook() {
 
         if (chunk.type === "sources") {
           finalSources = chunk.sources
-          setMessages(prev =>
-            prev.map(m =>
-              m.id === assistantTempId
-                ? { ...m, sources: chunk.sources }
-                : m
-            )
-          )
         }
       })
-
-      const current = messages.find(m => m.id === assistantTempId)
 
       // Save final response to DB
       const savedMessage = await createMessageAPI(
@@ -149,10 +140,11 @@ export default function Notebook() {
       // Replace temp message with DB message (real ID)
       setMessages(prev =>
         prev.map(m =>
-          m.id === assistantTempId ? savedMessage : m
+          m.id === assistantTempId
+            ? { ...savedMessage, status: "done" }
+            : m
         )
       )
-
     } catch (err) {
       const errorMessage = await createMessageAPI(
         id,
