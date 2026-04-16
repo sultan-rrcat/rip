@@ -1,7 +1,7 @@
 import os
 import psycopg2
 import requests as req
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi import UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -17,6 +17,8 @@ import json
 
 from contextlib import asynccontextmanager
 from fastapi import Request, Depends
+
+import httpx
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -64,50 +66,49 @@ class PromptRequest(BaseModel):
     prompt: str
     notebook_id: str
 
-def ask_qwen(prompt: str) -> str:
+async def ask_qwen(prompt: str) -> str:
     logger.info(f"Prompt send to LLM: {prompt}")
-    response = req.post(
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
         f"{LLM_URL}/v1/chat/completions",
         json={
             "model": "qwen2.5-coder-14b",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 1024,
         },
-        proxies={"http": None, "https": None},
     )
+    response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
-def stream_qwen(prompt: str):
+async def stream_qwen(prompt: str):
     logger.info(f"Prompt send to LLM: {prompt}")
 
-    response = req.post(
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async with client.stream(
+            "POST",
         f"{LLM_URL}/v1/chat/completions",
         json={
             "model": "qwen2.5-coder-14b",
             "messages": [{"role": "user", "content": prompt}],
             "stream": True
         },
-        stream=True,
-        proxies={"http": None, "https": None},
-    )
+    ) as response:  
+            async for line in response.aiter_lines():
+                    if line:
+                        if line.startswith("data:"):
+                            payload = line[5:].strip()
 
-    for line in response.iter_lines():
-        if line:
-            decoded = line.decode("utf-8")
+                            if payload == "[DONE]":
+                                break
 
-            if decoded.startswith("data:"):
-                payload = decoded[5:].strip()
-
-                if payload == "[DONE]":
-                    break
-
-                try:
-                    chunk = json.loads(payload)
-                    token = chunk["choices"][0]["delta"].get("content", "")
-                    if token:
-                        yield token
-                except Exception as e:
-                    logger.error(f"Stream parsing error: {e}")
+                            try:
+                                chunk = json.loads(payload)
+                                token = chunk["choices"][0]["delta"].get("content", "")
+                                if token:
+                                    yield token
+                            except Exception as e:
+                                logger.error(f"Stream parsing error: {e}")
 
 def save_messages(notebook_id, user_prompt, response_text):
     with config.pg_connection() as conn:
@@ -181,7 +182,7 @@ def format_chat_history(messages):
 
     return "\n".join(history)
 
-def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
+async def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
     messages = get_last_messages(notebook_id)
 
     # If no history → return original prompt
@@ -213,7 +214,7 @@ def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
     """
 
     try:
-        rewritten_prompt = ask_qwen(rewrite_instruction)
+        rewritten_prompt = await ask_qwen(rewrite_instruction)
         logger.info(f"Rewrittend User Query: {rewritten_prompt}")
         return rewritten_prompt.strip()
     except Exception as e:
@@ -221,7 +222,7 @@ def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
         return user_prompt  # fallback
 
 @app.post("/api/prompt")
-def prompt(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
+async def prompt(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
     user_prompt = request.prompt
     try:
         # rag = RagPipeline()
@@ -244,7 +245,7 @@ def prompt(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
         logger.error(f"Error initiating RAG pipeline. Exception: {e}")
         return {"response": "Pipeline initialization failed."}
 
-    rewritten_user_prompt = rewrite_prompt(request.notebook_id, user_prompt)
+    rewritten_user_prompt = await rewrite_prompt(request.notebook_id, user_prompt)
 
     # --- Prompt engineering: combine context with user prompt ---
     enriched_prompt = f"""
@@ -258,15 +259,15 @@ def prompt(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
     {rewritten_user_prompt}
     """
 
-    response_text = ask_qwen(enriched_prompt)
+    response_text = await ask_qwen(enriched_prompt)
 
     return {"chatbot_response": response_text, "sources": sources}
 
 @app.post("/api/prompt/stream")
-def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
+async def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
     user_prompt = request.prompt
 
-    def generate():
+    async def generate():
         try:
             try:
                 context_json = rag.retrieve_context(user_prompt)
@@ -275,7 +276,7 @@ def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
             except Exception:
                 formatted_context = ""
 
-            rewritten_prompt = rewrite_prompt(request.notebook_id, user_prompt)
+            rewritten_prompt = await rewrite_prompt(request.notebook_id, user_prompt)
 
             enriched_prompt = f"""
     You are a helpful assistant.
@@ -290,7 +291,7 @@ def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
             full_response = []
 
             yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
-            for token in stream_qwen(enriched_prompt):
+            async for token in stream_qwen(enriched_prompt):
                 full_response.append(token)
 
                 # SSE format
@@ -344,7 +345,7 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
             result = cur.fetchone()
     return {"id": result[0], "name": result[1], "size": result[2], "status": result[3]}
 
-def run_rag_pipeline(file_id: str, rag: RagPipeline = Depends(get_rag)):
+def run_rag_pipeline(file_id: str, rag: RagPipeline):
     try:
         with config.pg_connection() as conn:
             with conn.cursor() as cur:
@@ -379,7 +380,7 @@ def run_rag_pipeline(file_id: str, rag: RagPipeline = Depends(get_rag)):
             logger.info(f"embeddings generated.")
         except Exception as e:
             logger.exception(f"Eror generating embeddings. {e}")
-            raisea
+            raise
         try:
             rag.store_chunks_and_embeddings(file_id, chunks, embeddings)
             logger.info(f"embeddings stored.")
