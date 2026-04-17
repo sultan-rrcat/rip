@@ -57,6 +57,38 @@ def ask_qwen(prompt: str) -> str:
     )
     return response.json()["choices"][0]["message"]["content"]
 
+def stream_qwen(prompt: str):
+    logger.info(f"Prompt send to LLM: {prompt}")
+
+    response = req.post(
+        f"{LLM_URL}/v1/chat/completions",
+        json={
+            "model": "qwen2.5-coder-14b",
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True
+        },
+        stream=True,
+        proxies={"http": None, "https": None},
+    )
+
+    for line in response.iter_lines():
+        if line:
+            decoded = line.decode("utf-8")
+
+            if decoded.startswith("data:"):
+                payload = decoded[5:].strip()
+
+                if payload == "[DONE]":
+                    break
+
+                try:
+                    import json
+                    chunk = json.loads(payload)
+                    token = chunk["choices"][0]["delta"].get("content", "")
+                    if token:
+                        yield token
+                except Exception as e:
+                    logger.error(f"Stream parsing error: {e}")
 
 def save_messages(notebook_id, user_prompt, response_text):
     with config.pg_connection() as conn:
@@ -147,25 +179,25 @@ def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
 
     # Prompt engineering for rewriting
     rewrite_instruction = f"""
-You are a query rewriter.
+    You are a query rewriter.
 
-Your task is to rewrite the user's query ONLY.
+    Your task is to rewrite the user's query ONLY.
 
-Rules:
-- Do NOT answer
-- Do NOT greet
-- Do NOT add explanations
-- Output MUST be a single rewritten query
-- If the query is already clear, return it unchanged
+    Rules:
+    - Do NOT answer
+    - Do NOT greet
+    - Do NOT add explanations
+    - Output MUST be a single rewritten query
+    - If the query is already clear, return it unchanged
 
-Conversation History:
-{history_text}
+    Conversation History:
+    {history_text}
 
-Latest User Query:
-{user_prompt}
+    Latest User Query:
+    {user_prompt}
 
-Rewritten Query:
-"""
+    Rewritten Query:
+    """
 
     try:
         rewritten_prompt = ask_qwen(rewrite_instruction)
@@ -174,7 +206,6 @@ Rewritten Query:
     except Exception as e:
         logger.error(f"Error rewriting prompt: {e}")
         return user_prompt  # fallback
-
 
 @app.post("/api/prompt")
 def prompt(request: PromptRequest):
@@ -219,6 +250,58 @@ def prompt(request: PromptRequest):
 
     return {"chatbot_response": response_text, "sources": sources}
 
+from fastapi.responses import StreamingResponse
+
+@app.post("/api/prompt/stream")
+def prompt_stream(request: PromptRequest):
+    user_prompt = request.prompt
+
+    def generate():
+        try:
+            rag = RagPipeline()
+
+            # --- Context ---
+            try:
+                context_json = rag.retrieve_context(user_prompt)
+                formatted_context = format_context_for_llm(context_json)
+            except Exception:
+                formatted_context = ""
+
+            rewritten_prompt = rewrite_prompt(request.notebook_id, user_prompt)
+
+            enriched_prompt = f"""
+    You are a helpful assistant.
+
+    Context:
+    {formatted_context}
+
+    User Query:
+    {rewritten_prompt}
+    """
+
+            full_response = []
+
+            for token in stream_qwen(enriched_prompt):
+                full_response.append(token)
+
+                # SSE format
+                import json
+                yield f"data: {json.dumps({'response': token})}\n\n"
+
+            yield "data: [DONE]\n\n"
+
+            # Save after stream completes
+            save_messages(
+                request.notebook_id,
+                user_prompt,
+                "".join(full_response)
+            )
+
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield "data: [ERROR]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.post("/api/files/upload")
 async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
@@ -294,7 +377,7 @@ def run_rag_pipeline(file_id):
             logger.info(f"embeddings generated.")
         except Exception as e:
             logger.exception(f"Eror generating embeddings. {e}")
-            raise
+            raisea
         try:
             rag.store_chunks_and_embeddings(file_id, chunks, embeddings)
             logger.info(f"embeddings stored.")
