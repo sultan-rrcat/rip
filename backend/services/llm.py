@@ -1,3 +1,31 @@
+import json
+import httpx
+from core.logging import setup_logging
+import config
+import os
+
+from dotenv import load_dotenv
+
+
+LLM_URL = os.getenv("LLM_URL")
+
+logger = setup_logging()
+
+async def ask_qwen(prompt: str) -> str:
+    logger.info(f"Prompt send to LLM: {prompt}")
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(
+        f"{LLM_URL}/v1/chat/completions",
+        json={
+            "model": "qwen2.5-coder-14b",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1024,
+        },
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
 async def stream_qwen(prompt: str):
     logger.info(f"Prompt send to LLM: {prompt}")
 
@@ -26,4 +54,3 @@ async def stream_qwen(prompt: str):
                                     yield token
                             except Exception as e:
                                 logger.error(f"Stream parsing error: {e}")
-

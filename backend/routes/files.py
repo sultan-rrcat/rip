@@ -1,8 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form, Request, Depends
 from pydantic import BaseModel
 from typing import Optional
 from core.logging import setup_logging
 from core.db import pg_connection
+from core.dependencies import get_rag
+from services.file_processor import run_rag_pipeline
+from rag.pipeline import RagPipeline
 
 router = APIRouter()
 logger = setup_logging()
@@ -110,3 +113,47 @@ def delete_file(file_id: str):
     except Exception:
         logger.exception(f"Error deleting file: {file_id}")
         raise HTTPException(status_code=500, detail="Failed to delete file")
+
+
+@router.post("/api/files/upload")
+async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
+    file_id = str(uuid4())
+
+    # Create dedicated notebook folder
+    notebook_path = os.path.join(config.UPLOAD_DIR, notebook_id)
+    os.makedirs(notebook_path, exist_ok=True)
+
+    # Save file with file id
+    file_path = os.path.join(notebook_path, f"{file_id}.pdf")
+
+    content = await file.read()
+    file_size = len(content)
+
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    # Save metadata in DB
+    with pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO files (file_id, notebook_id, file_name, file_size, file_status)
+                VALUES (%s, %s, %s, %s, 'processing')
+                RETURNING file_id, file_name, file_size, file_status
+                """,
+                (file_id, notebook_id, file.filename, file_size),
+            )
+            result = cur.fetchone()
+    return {"id": result[0], "name": result[1], "size": result[2], "status": result[3]}
+
+
+@router.post("/api/files/{file_id}/process")
+def process_file(file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag)):
+    with pg_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM files WHERE file_id=%s", (file_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="File not found")
+
+    background_tasks.add_task(run_rag_pipeline, file_id, rag)
+    return {"message": "processing started"}
