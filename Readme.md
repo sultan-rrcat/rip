@@ -19,7 +19,7 @@ git checkout -b feature/new-branch
 - start working on the branch
 git add .
 git commit -m "messages"
-git push origin feature/new-branch
+git push --set-upstream origin feature/graph
 git rebase main -doing this will rewrite git history - so the new feature branch commits appear as if they were made directly on top of the latest main.
 git checkout main
 git merge feature/new-branch
