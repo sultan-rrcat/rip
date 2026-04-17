@@ -11,7 +11,10 @@ from psycopg2.extras import execute_values, Json
 import json
 import os
 
-logger = config.setup_logging()
+from core.logging import setup_logging
+from core.db import pg_connection
+
+logger = setup_logging()
 
 class RagPipeline:
     def __init__(self):
@@ -172,7 +175,7 @@ class RagPipeline:
                 for doc, embedding in zip(chunks, embeddings)
             ]
 
-            with config.pg_connection() as conn:
+            with pg_connection() as conn:
                 with conn.cursor() as cur:
                     query = """
                         INSERT INTO embeddings_test (file_id, chunk_text, embedding, metadata)
@@ -198,7 +201,7 @@ class RagPipeline:
             prompt_embeddings = self.embedding_model.embed_query(user_prompt)
 
             # Vector and Keyword Search
-            with config.pg_connection() as conn:
+            with pg_connection() as conn:
                 with conn.cursor() as cur:
                     # 1. Vector Search
                     cur.execute(

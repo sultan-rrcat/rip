@@ -9,11 +9,13 @@ from pydantic import BaseModel
 from typing import Optional
 import logging
 import config
-from routes import _notebooks_routes, _files_routes, _messages_routes
+from routes import notebooks, files, messages, llm
 from dotenv import load_dotenv
 from uuid import uuid4
 from rag import RagPipeline
 import json
+from core.logging import setup_logging
+from core.db import pg_connection
 
 from contextlib import asynccontextmanager
 from fastapi import Request, Depends
@@ -35,23 +37,21 @@ async def lifespan(app: FastAPI):
 load_dotenv()
 LLM_URL = os.getenv("LLM_API_URL", "http://10.10.30.65:8000")
 
-logger = config.setup_logging()
+logger = setup_logging()
 logger.info("Logging has been successfully set up.")
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(_notebooks_routes.router)
-app.include_router(_files_routes.router)
-app.include_router(_messages_routes.router)
+app.include_router(notebooks.router)
+app.include_router(files.router)
+app.include_router(messages.router)
+app.include_router(llm.router)
 
 # Enable CORS
 # middleware - code that runs before and after every request
 # CORS - Cross Origin Resource Sharing - Is a mechanism that allows to specify which other origins(domains, ports, protocols) are permitted to access their resources.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://10.31.2.94:5173",
-    ],  # meaning only http://localhost:5173", "http://10.31.2.94:5173 can make request here.
+    allow_origins=["*"],  # meaning only http://localhost:5173", "http://10.31.2.94:5173 can make request here.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,54 +65,6 @@ def get_rag(request: Request) -> RagPipeline:
 class PromptRequest(BaseModel):
     prompt: str
     notebook_id: str
-
-async def ask_qwen(prompt: str) -> str:
-    logger.info(f"Prompt send to LLM: {prompt}")
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-        f"{LLM_URL}/v1/chat/completions",
-        json={
-            "model": "qwen2.5-coder-14b",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 1024,
-        },
-    )
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
-
-async def stream_qwen(prompt: str):
-    logger.info(f"Prompt send to LLM: {prompt}")
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream(
-            "POST",
-        f"{LLM_URL}/v1/chat/completions",
-        json={
-            "model": "qwen2.5-coder-14b",
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": True
-        },
-    ) as response:  
-            async for line in response.aiter_lines():
-                    if line:
-                        if line.startswith("data:"):
-                            payload = line[5:].strip()
-
-                            if payload == "[DONE]":
-                                break
-
-                            try:
-                                chunk = json.loads(payload)
-                                token = chunk["choices"][0]["delta"].get("content", "")
-                                if token:
-                                    yield token
-                            except Exception as e:
-                                logger.error(f"Stream parsing error: {e}")
-
-@app.get("/api/health")
-def health():
-    return {"status": "ok"}
 
 def format_context_for_llm(context_json):
     chunks = []
@@ -136,7 +88,7 @@ def extract_sources(context_json):
     return unique_sources
 
 def get_last_messages(notebook_id: str, limit: int = 6):
-    with config.pg_connection() as conn:
+    with pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -200,91 +152,6 @@ async def rewrite_prompt(notebook_id: str, user_prompt: str) -> str:
         logger.error(f"Error rewriting prompt: {e}")
         return user_prompt  # fallback
 
-@app.post("/api/prompt")
-async def prompt(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
-    user_prompt = request.prompt
-    try:
-        # rag = RagPipeline()
-        logger.info("RAG pipeline initialized - For Prompt")
-        try:
-            context_json = rag.retrieve_context(user_prompt)
-            logger.info(f"context_json: {context_json}")
-
-            formatted_context = format_context_for_llm(context_json)
-            sources = extract_sources(context_json)
-            logger.info(f"Context retrieved successfully for prompt: {user_prompt}")
-        except Exception as e:
-            logger.error(
-                f"Error retrieving context for prompt: {user_prompt}. Exception: {e}"
-            )
-            formatted_context = ""  # fallback to empty context
-            sources = []
-
-    except Exception as e:
-        logger.error(f"Error initiating RAG pipeline. Exception: {e}")
-        return {"response": "Pipeline initialization failed."}
-
-    rewritten_user_prompt = await rewrite_prompt(request.notebook_id, user_prompt)
-
-    # --- Prompt engineering: combine context with user prompt ---
-    enriched_prompt = f"""
-    You are a helpful assistant.
-    Use the following context to answer the user query:"
-
-    Context:
-    {formatted_context}
-
-    User Query:
-    {rewritten_user_prompt}
-    """
-
-    response_text = await ask_qwen(enriched_prompt)
-
-    return {"chatbot_response": response_text, "sources": sources}
-
-@app.post("/api/prompt/stream")
-async def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
-    user_prompt = request.prompt
-
-    async def generate():
-        try:
-            try:
-                context_json = rag.retrieve_context(user_prompt)
-                formatted_context = format_context_for_llm(context_json)
-                sources = extract_sources(context_json)
-            except Exception:
-                formatted_context = ""
-
-            rewritten_prompt = await rewrite_prompt(request.notebook_id, user_prompt)
-
-            enriched_prompt = f"""
-    You are a helpful assistant.
-
-    Context:
-    {formatted_context}
-
-    User Query:
-    {rewritten_prompt}
-    """
-
-            full_response = []
-
-            yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
-            async for token in stream_qwen(enriched_prompt):
-                full_response.append(token)
-
-                # SSE format
-                
-                yield f"data: {json.dumps({'response': token})}\n\n"
-
-            yield "data: [DONE]\n\n"
-
-        except Exception as e:
-            logger.error(f"Streaming error: {e}")
-            sources = []
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Streaming failed'})}\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.post("/api/files/upload")
 async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
@@ -304,7 +171,7 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
         f.write(content)
 
     # Save metadata in DB
-    with config.pg_connection() as conn:
+    with pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -319,7 +186,7 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
 
 def run_rag_pipeline(file_id: str, rag: RagPipeline):
     try:
-        with config.pg_connection() as conn:
+        with pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT notebook_id, file_name FROM files WHERE file_id=%s",
@@ -367,7 +234,7 @@ def run_rag_pipeline(file_id: str, rag: RagPipeline):
         #     raise
 
         # update file status
-        with config.pg_connection() as conn:
+        with pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE files SET file_status = 'ready' WHERE file_id = %s",
@@ -376,7 +243,7 @@ def run_rag_pipeline(file_id: str, rag: RagPipeline):
     except Exception as e:
         logger.exception(f"Error: {e}")
 
-        with config.pg_connection() as conn:
+        with pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE files SET file_status = 'error' WHERE file_id = %s",
@@ -385,7 +252,7 @@ def run_rag_pipeline(file_id: str, rag: RagPipeline):
 
 @app.post("/api/files/{file_id}/process")
 def process_file(file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag)):
-    with config.pg_connection() as conn:
+    with pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM files WHERE file_id=%s", (file_id,))
             if not cur.fetchone():
@@ -393,3 +260,83 @@ def process_file(file_id: str, background_tasks: BackgroundTasks, rag: RagPipeli
 
     background_tasks.add_task(run_rag_pipeline, file_id, rag)
     return {"message": "processing started"}
+
+
+async def stream_qwen(prompt: str):
+    logger.info(f"Prompt send to LLM: {prompt}")
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async with client.stream(
+            "POST",
+        f"{LLM_URL}/v1/chat/completions",
+        json={
+            "model": "qwen2.5-coder-14b",
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True
+        },
+    ) as response:  
+            async for line in response.aiter_lines():
+                    if line:
+                        if line.startswith("data:"):
+                            payload = line[5:].strip()
+
+                            if payload == "[DONE]":
+                                break
+
+                            try:
+                                chunk = json.loads(payload)
+                                token = chunk["choices"][0]["delta"].get("content", "")
+                                if token:
+                                    yield token
+                            except Exception as e:
+                                logger.error(f"Stream parsing error: {e}")
+
+
+@app.post("/api/prompt/stream")
+async def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
+    user_prompt = request.prompt
+
+    async def generate():
+        try:
+            try:
+                context_json = rag.retrieve_context(user_prompt)
+                formatted_context = format_context_for_llm(context_json)
+                sources = extract_sources(context_json)
+            except Exception:
+                formatted_context = ""
+
+            rewritten_prompt = await rewrite_prompt(request.notebook_id, user_prompt)
+
+            enriched_prompt = f"""
+    You are a helpful assistant.
+
+    Context:
+    {formatted_context}
+
+    User Query:
+    {rewritten_prompt}
+    """
+
+            full_response = []
+
+            yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+            async for token in stream_qwen(enriched_prompt):
+                full_response.append(token)
+
+                # SSE format
+                
+                yield f"data: {json.dumps({'response': token})}\n\n"
+
+            yield "data: [DONE]\n\n"
+
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            sources = []
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Streaming failed'})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
