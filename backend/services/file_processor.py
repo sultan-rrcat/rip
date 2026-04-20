@@ -3,11 +3,12 @@ import os
 from core.logging import setup_logging
 from core.dependencies import get_rag
 from core.db import pg_connection
-from rag.pipeline import RagPipeline
+from rag.vector_rag import VectorRAG
+import config
 
 logger = setup_logging()
 
-def run_rag_pipeline(file_id: str, rag: RagPipeline):
+def run_rag_pipeline(file_id: str, rag: VectorRAG):
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:

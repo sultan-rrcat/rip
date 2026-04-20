@@ -8,7 +8,7 @@ from services.chat import extract_sources
 from services.rewritter import rewrite_prompt
 import json
 from pydantic import BaseModel
-from rag.pipeline import RagPipeline
+from rag.vector_rag import VectorRAG
 
 logger = setup_logging()
 router = APIRouter()
@@ -18,19 +18,21 @@ class PromptRequest(BaseModel):
     notebook_id: str
 
 @router.post("/api/prompt/stream")
-async def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
+async def prompt_stream(request: PromptRequest, rag: VectorRAG = Depends(get_rag)):
     user_prompt = request.prompt
+    notebook_id = request.notebook_id
 
     async def generate():
         try:
             try:
-                context_json = rag.retrieve_context(user_prompt)
+                context_json = rag.retrieve_context(notebook_id, user_prompt)
+                logger.info(f"ContextJSON: {context_json}")
                 formatted_context = format_context_for_llm(context_json)
                 sources = extract_sources(context_json)
             except Exception:
                 formatted_context = ""
 
-            rewritten_prompt = await rewrite_prompt(request.notebook_id, user_prompt)
+            rewritten_prompt = await rewrite_prompt(notebook_id, user_prompt)
 
             enriched_prompt = f"""
     You are a helpful assistant.
@@ -62,7 +64,7 @@ async def prompt_stream(request: PromptRequest, rag: RagPipeline = Depends(get_r
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 @router.post("/api/prompt")
-async def prompt(request: PromptRequest, rag: RagPipeline = Depends(get_rag)):
+async def prompt(request: PromptRequest, rag: VectorRAG = Depends(get_rag)):
     user_prompt = request.prompt
     try:
         # rag = RagPipeline()

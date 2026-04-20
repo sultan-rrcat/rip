@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from routes import notebooks, files, messages, llm
 from dotenv import load_dotenv
-from rag.pipeline import RagPipeline
+from rag.vector_rag import VectorRAG
 from core.logging import setup_logging
 from contextlib import asynccontextmanager
 import httpx
@@ -12,7 +12,7 @@ import httpx
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Initiating ML models...")
-    app.state.rag = RagPipeline()
+    app.state.rag = VectorRAG()
     logger.info("ML models loaded successfully.")
 
     yield #transfering control back to fastapi

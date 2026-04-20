@@ -6,6 +6,9 @@ from core.db import pg_connection
 from core.dependencies import get_rag
 from services.file_processor import run_rag_pipeline
 from rag.pipeline import RagPipeline
+from uuid import uuid4
+import os
+import config
 
 router = APIRouter()
 logger = setup_logging()
