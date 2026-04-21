@@ -17,6 +17,7 @@ from textwrap import dedent
 
 from backend.core.logging import setup_logging
 from backend.core.db import pg_connection
+from backend.core.db import neo4j_driver
 from backend.core.prompts import DETECTION_PROMPT
 from backend.core.prompts import EXTRACTION_PROMPTS
 
@@ -296,14 +297,11 @@ class RagPipeline:
             logger.warning(f"Entity extraction failed. {e}")
             return {"entities": [], "relationships": []}
 
-    def store_graph(self, file_id: str, chunks: list, neo4j_driver) -> None:
-        """
-        Build Neo4j graph for a file:
-        - Detect document type (1 LLM call)
-        - Extract entities per chunk concurrently (N async LLM calls)
-        - Store nodes and edges in Neo4j
-        """
-        pass
+    def store_graph(self, entities: list, relationships: list, neo4j_driver) -> None:
+        with neo4j_driver.session() as session:
+            result = session.run("RETURN 'Connection successful' AS message")
+            print(result.single()["message"])
+            pass
 
 
 # =========================
@@ -330,11 +328,15 @@ if __name__ == "__main__":
         # context = obj.retrieve_context(prompt)
         # logger.info(f"Prompt: {prompt}\n Context: {context}")
         # logger.info("🎉 Pipeline completed")
-        doc_type = obj.detect_document_type(chunk)
-        print(doc_type)
 
-        ent_rel = obj.extract_entities(chunk, f"{doc_type}")
-        print(ent_rel)
+        # doc_type = obj.detect_document_type(chunk)
+        # print(doc_type)
+
+        # ent_rel = obj.extract_entities(chunk, f"{doc_type}")
+        # print(ent_rel)
+
+        conn_result = obj.store_graph([], [], neo4j_driver())
+        print(conn_result)
 
     except Exception as e:
         logger.info(f"❌ Pipeline failed: {e}")
