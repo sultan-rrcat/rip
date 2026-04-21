@@ -52,7 +52,7 @@ class RagPipeline:
             ]
 
         except Exception as e:
-            logger.warn(f"⚠️ Docling failed, fallback to OpenDataLoader: {e}")
+            logger.warning(f"⚠️ Docling failed, fallback to OpenDataLoader: {e}")
 
             try:
                 loader = OpenDataLoaderPDFLoader(file, format="markdown")
@@ -257,7 +257,9 @@ class RagPipeline:
             return "general"
 
     def extract_entities(self, chunk_text: str, doc_type: str) -> dict:
-        prompt_template = EXTRACTION_PROMPTS.get(doc_type, EXTRACTION_PROMPTS["general"])
+        prompt_template = EXTRACTION_PROMPTS.get(
+            doc_type, EXTRACTION_PROMPTS["general"]
+        )
         prompt = prompt_template.format(text=chunk_text)
         try:
             with httpx.Client(timeout=300.0) as client:
@@ -297,11 +299,134 @@ class RagPipeline:
             logger.warning(f"Entity extraction failed. {e}")
             return {"entities": [], "relationships": []}
 
-    def store_graph(self, entities: list, relationships: list, neo4j_driver) -> None:
-        with neo4j_driver.session() as session:
-            result = session.run("RETURN 'Connection successful' AS message")
-            print(result.single()["message"])
-            pass
+    def store_graph(
+        self,
+        notebook_id: str,
+        file_id: str,
+        file_name: str,
+        chunks: str,
+        doc_type: str,
+        entities: list,
+        driver,
+    ) -> None:
+
+        with driver.session() as session:
+            session.run(
+                """
+                MERGE (n:Notebook {notebook_id: $notebook_id})
+                """,
+                notebook_id=str(notebook_id),
+            )
+
+            session.run(
+                """
+                MERGE (d:Document {file_id: $file_id})
+                SET d.notebook_id = $notebook_id,
+                    d.file_name = $file_name,
+                    d.doc_type = $doc_type
+                WITH d
+                MATCH (n:Notebook {notebook_id : $notebook_id})
+                MERGE (n)-[:HAS_FILE]->(d)
+                """,
+                file_id=str(file_id),
+                notebook_id=str(notebook_id),
+                file_name=str(file_name),
+                doc_type=doc_type,
+            )
+
+            prev_chunk_id = None
+            for i, (chunk, extraction) in enumerate(zip(chunks, entities)):
+                chunk_id = f"{file_id}_chunk_{i}"
+                section = " > ".join(
+                    filter(
+                        None,
+                        [
+                            chunk.metadata.get("H1"),
+                            chunk.metadata.get("H2"),
+                            chunk.metadata.get("H3"),
+                        ],
+                    )
+                )
+
+                session.run(
+                    """
+                MERGE (c:Chunk {chunk_id: $chunk_id})
+                SET c.text = $text,
+                    c.file = $file_id,
+                    c.notebook_id = $notebook_id,
+                    c.section = $section,
+                    c.index = $index
+                WITH c
+                MATCH (d:Document {file_id: $file_id})
+                MERGE (d)-[:HAS_CHUNK]->(c)
+                """,
+                    chunk_id=chunk_id,
+                    text=chunk.page_content,
+                    file_id=str(file_id),
+                    notebook_id=str(notebook_id),
+                    section=section,
+                    index=i,
+                )
+
+                if prev_chunk_id:
+                    session.run(
+                        """
+                        MATCH (prev:Chunk {chunk_id: $prev_id})
+                        MATCH (curr:Chunk {chunk_id: $curr_id})
+                        MERGE (prev)-[:NEXT]->(curr)
+                        """,
+                        prev_id=prev_chunk_id,
+                        curr_id=chunk_id,
+                    )
+
+                entity_map = {}
+
+                for entity in extraction.get("entities", []):
+                    name = entity.get("name", "").strip()
+                    etype = entity.get("type", "Entity").strip()
+                    eid = entity.get("id")
+
+                    if not name:
+                        continue
+
+                    entity_map[eid] = name
+
+                    session.run(
+                        """
+                        MERGE (e:Entity {name: $name})
+                        SET e.type = $type
+
+                        WITH e
+                        MATCH (c:Chunk {chunk_id: $chunk_id})
+                        MERGE (c)-[:MENTIONS]->(e)
+                        """,
+                        name=name,
+                        type=etype,
+                        chunk_id=chunk_id,
+                    )
+
+                for rel in extraction.get("relationships", []):
+                    source_name = entity_map.get(rel.get("source"))
+                    target_name = entity_map.get(rel.get("target"))
+                    rel_type = rel.get("type", "RELATED_TO").strip().upper()
+
+                    if not source_name or not target_name:
+                        continue
+
+                    session.run(
+                        f"""
+                        MATCH (a:Entity {{name: $source_name}})
+                        MATCH (b:Entity {{name: $target_name}})
+                        MERGE (a)-[:{rel_type}]->(b)
+                        """,
+                        source_name=source_name,
+                        target_name=target_name,
+                    )
+                prev_chunk_id = chunk_id
+
+            logger.info(
+                f"Graph stored for file_id: {file_id}, notebook_id: {notebook_id}"
+            )
 
 
 # =========================
@@ -310,15 +435,25 @@ class RagPipeline:
 if __name__ == "__main__":
     obj = RagPipeline()
 
-    file_path = r"C:\Users\trainee\Desktop\Projects\CD_lab_report.pdf"
+    # file_path = r"C:\Users\trainee\Desktop\Projects\CD_lab_report.pdf"
     file_id = str(uuid4())
+    notebook_id = str(uuid4())
 
-    chunk = dedent("""
+    text = dedent(
+        """
     SLURM is an open-source job scheduler used for managing and allocating resources in highperformance computing (HPC) environments. It is responsible for:  
 - [ ] Scheduling and dispatching compute jobs to nodes.  
 - [ ] Managing queues of submitted jobs and prioritizing their execution.  
 - [ ] Monitoring resource usage and ensuring efficient utilization.
-    """)
+    """
+    )
+
+    chunks = [
+        Document(
+            page_content=text,
+            metadata={"source": "test.pdf", "H1": "SLURM"},
+        )
+    ]
 
     try:
         # documents = obj.document_loader(file_path)
@@ -329,13 +464,20 @@ if __name__ == "__main__":
         # logger.info(f"Prompt: {prompt}\n Context: {context}")
         # logger.info("🎉 Pipeline completed")
 
-        # doc_type = obj.detect_document_type(chunk)
+        doc_type = obj.detect_document_type(chunks[0].page_content)
         # print(doc_type)
-
-        # ent_rel = obj.extract_entities(chunk, f"{doc_type}")
+        entities = [obj.extract_entities(chunk.page_content, doc_type) for chunk in chunks]
         # print(ent_rel)
 
-        conn_result = obj.store_graph([], [], neo4j_driver())
+        conn_result = obj.store_graph(
+            notebook_id=notebook_id,
+            file_id=file_id,
+            file_name="test.pdf",
+            chunks=chunks,
+            doc_type="general",
+            entities=entities,
+            driver=neo4j_driver(),
+        )
         print(conn_result)
 
     except Exception as e:
