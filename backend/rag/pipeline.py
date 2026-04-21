@@ -1,5 +1,6 @@
 from sentence_transformers import SentenceTransformer, CrossEncoder
-import config
+
+# import config
 from langchain_opendataloader_pdf import OpenDataLoaderPDFLoader
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 from langchain_experimental.text_splitter import SemanticChunker
@@ -10,19 +11,24 @@ from uuid import uuid4
 from psycopg2.extras import execute_values, Json
 import json
 import os
+import asyncio
+import httpx
 
-from core.logging import setup_logging
-from core.db import pg_connection
+from backend.core.logging import setup_logging
+from backend.core.db import pg_connection
+from backend.core.prompts import DETECTION_PROMPT
+from backend.core.prompts import EXTRACTION_PROMPTS
+
+from backend import config
 
 logger = setup_logging()
 
+
 class RagPipeline:
     def __init__(self):
-        self.embedding_model = HuggingFaceEmbeddings(
-            model_name=config.BGE_M3_MODEL_PATH
-        )
-
-        self.reranker_model = CrossEncoder(config.BGE_RERANKER_V2_M3)
+        # self.embedding_model = HuggingFaceEmbeddings(model_name=config.BGE_M3_MODEL_PATH)
+        # self.reranker_model = CrossEncoder(config.BGE_RERANKER_V2_M3)
+        pass
 
     # =========================
     # 📄 DOCUMENT LOADER
@@ -109,7 +115,9 @@ class RagPipeline:
                         )
                     )
 
-            logger.info(f"[Step 1] Final chunks (Markdown Splitter): {len(final_chunks)}")
+            logger.info(
+                f"[Step 1] Final chunks (Markdown Splitter): {len(final_chunks)}"
+            )
             return final_chunks
 
             # STEP 2: Semantic chunking
@@ -192,6 +200,73 @@ class RagPipeline:
             logger.exception(f"Error while storing embeddings: {e}")
             raise
 
+    # =========================
+    # 🔍 DOCUMENT TYPE DETECTION
+    # =========================
+    def detect_document_type(self, sample_text: str) -> str:
+        prompt = DETECTION_PROMPT.format(text=sample_text[:1500])
+        try:
+            # with httpx.Client(timeout=300.0) as client:
+            #     response = client.post(
+            #         f"{config.OLLAMA_URL}/api/generate",
+            #         json={
+            #             "model": config.OLLAMA_EXTRACTION_MODEL,
+            #             "prompt": prompt,
+            #             "stream": False,
+            #             "think": False 
+            #         },
+            #     )
+            #     response.raise_for_status()
+                
+            #     data = response.json()
+            #     raw_text = data.get("response", "").strip()
+                
+            #     print(f"DEBUG: Classified as: {raw_text}")
+            #     return raw_text
+
+            with httpx.Client(timeout=120.0) as client:
+                response = client.post(
+                    f"{config.LLM_URL}/v1/chat/completions",
+                    json={
+                        "model": "qwen2.5-coder-14b",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 256,
+                    },
+                )
+
+                response.raise_for_status()
+                data = response.json()["choices"][0]["message"]["content"]
+                raw = data.strip()
+
+                # strip markdown fences if model wraps in ```json
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+
+                parsed = json.loads(raw)
+                doc_type = parsed.get("doc_type", "general")
+
+                print(f"DEBUG: Classified as: {raw} - doc type: {doc_type}")
+                return doc_type
+
+        except Exception as e:
+            logger.error(f"Document type detection failed: {e}")
+            return "general"
+
+    def extract_entities(self, chunk_text: str, prompt_template: str) -> dict:
+        prompt = prompt_template.format(text=chunk_text)
+        pass
+
+    def store_graph(self, file_id: str, chunks: list, neo4j_driver) -> None:
+        """
+        Build Neo4j graph for a file:
+        - Detect document type (1 LLM call)
+        - Extract entities per chunk concurrently (N async LLM calls)
+        - Store nodes and edges in Neo4j
+        """
+        pass
+
 
 # =========================
 # 🚀 RUN PIPELINE
@@ -202,16 +277,21 @@ if __name__ == "__main__":
     file_path = r"C:\Users\trainee\Desktop\Projects\CD_lab_report.pdf"
     file_id = str(uuid4())
 
-    prompt = "what are the lease lines in RRCAT?"
+    prompt = "What are the lease lines in RRCAT?"
 
     try:
         # documents = obj.document_loader(file_path)
         # chunks = obj.chunk_documents(documents)
         # embeddings = obj.generate_embeddings(chunks)
         # obj.store_chunks_and_embeddings(file_id, chunks, embeddings)
-        context = obj.retrieve_context(prompt)
-        logger.info(f"Prompt: {prompt}\n Context: {context}")
-        logger.info("🎉 Pipeline completed")
+        # context = obj.retrieve_context(prompt)
+        # logger.info(f"Prompt: {prompt}\n Context: {context}")
+        # logger.info("🎉 Pipeline completed")
+        doc_type = obj.detect_document_type("""Name: Sultan Mamud  
+            Designation: CAT-1 Trainee  
+            CC No: 5945  
+            Date of submission: 09/12/2024""")
+        print(doc_type)
 
     except Exception as e:
         logger.info(f"❌ Pipeline failed: {e}")

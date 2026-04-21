@@ -5,6 +5,6 @@ from core.logging import setup_logging
 logger = setup_logging()
 
 class GraphRAG(RagPipeline):
-    def retrieve_context(self, user_prompt):
-        #vector search + keyword search + rrf + reranking 
+    def retrieve_context(self, notebook_id, user_prompt):
+        
         pass
