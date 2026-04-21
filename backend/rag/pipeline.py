@@ -13,6 +13,7 @@ import json
 import os
 import asyncio
 import httpx
+from textwrap import dedent
 
 from backend.core.logging import setup_logging
 from backend.core.db import pg_connection
@@ -213,14 +214,14 @@ class RagPipeline:
             #             "model": config.OLLAMA_EXTRACTION_MODEL,
             #             "prompt": prompt,
             #             "stream": False,
-            #             "think": False 
+            #             "think": False
             #         },
             #     )
             #     response.raise_for_status()
-                
+
             #     data = response.json()
             #     raw_text = data.get("response", "").strip()
-                
+
             #     print(f"DEBUG: Classified as: {raw_text}")
             #     return raw_text
 
@@ -247,16 +248,53 @@ class RagPipeline:
                 parsed = json.loads(raw)
                 doc_type = parsed.get("doc_type", "general")
 
-                print(f"DEBUG: Classified as: {raw} - doc type: {doc_type}")
+                # print(f"DEBUG: Classified as: {raw} - doc type: {doc_type}")
                 return doc_type
 
         except Exception as e:
             logger.error(f"Document type detection failed: {e}")
             return "general"
 
-    def extract_entities(self, chunk_text: str, prompt_template: str) -> dict:
+    def extract_entities(self, chunk_text: str, doc_type: str) -> dict:
+        prompt_template = EXTRACTION_PROMPTS.get(doc_type, EXTRACTION_PROMPTS["general"])
         prompt = prompt_template.format(text=chunk_text)
-        pass
+        try:
+            with httpx.Client(timeout=300.0) as client:
+                response = client.post(
+                    f"{config.LLM_URL}/v1/chat/completions",
+                    json={
+                        "model": "qwen2.5-coder-14b",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 1024,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()["choices"][0]["message"]["content"]
+                raw = data.strip()
+
+                logger.info(raw)
+
+                # strip markdown fences if model wraps in ```json
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+
+                parsed = json.loads(raw)
+                entities = parsed.get("entities", [])
+                relationships = parsed.get("relationships", [])
+
+                logger.info(
+                    f"Extracted {len(entities)} entities & {len(relationships)} relationships."
+                )
+                return {"entities": entities, "relationships": relationships}
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parsed failed for chunk extraction: {e}")
+            return {"entities": [], "relationships": []}
+
+        except Exception as e:
+            logger.warning(f"Entity extraction failed. {e}")
+            return {"entities": [], "relationships": []}
 
     def store_graph(self, file_id: str, chunks: list, neo4j_driver) -> None:
         """
@@ -277,7 +315,12 @@ if __name__ == "__main__":
     file_path = r"C:\Users\trainee\Desktop\Projects\CD_lab_report.pdf"
     file_id = str(uuid4())
 
-    prompt = "What are the lease lines in RRCAT?"
+    chunk = dedent("""
+    SLURM is an open-source job scheduler used for managing and allocating resources in highperformance computing (HPC) environments. It is responsible for:  
+- [ ] Scheduling and dispatching compute jobs to nodes.  
+- [ ] Managing queues of submitted jobs and prioritizing their execution.  
+- [ ] Monitoring resource usage and ensuring efficient utilization.
+    """)
 
     try:
         # documents = obj.document_loader(file_path)
@@ -287,11 +330,11 @@ if __name__ == "__main__":
         # context = obj.retrieve_context(prompt)
         # logger.info(f"Prompt: {prompt}\n Context: {context}")
         # logger.info("🎉 Pipeline completed")
-        doc_type = obj.detect_document_type("""Name: Sultan Mamud  
-            Designation: CAT-1 Trainee  
-            CC No: 5945  
-            Date of submission: 09/12/2024""")
+        doc_type = obj.detect_document_type(chunk)
         print(doc_type)
+
+        ent_rel = obj.extract_entities(chunk, f"{doc_type}")
+        print(ent_rel)
 
     except Exception as e:
         logger.info(f"❌ Pipeline failed: {e}")
