@@ -1,17 +1,28 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Form, Request, Depends
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    BackgroundTasks,
+    UploadFile,
+    File,
+    Form,
+    Request,
+    Depends,
+)
 from pydantic import BaseModel
 from typing import Optional
 from core.logging import setup_logging
 from core.db import pg_connection
-from core.dependencies import get_rag
+from core.dependencies import get_rag, get_neo4j
 from services.file_processor import run_rag_pipeline
 from rag.pipeline import RagPipeline
 from uuid import uuid4
 import os
 import config
+from neo4j import Driver
 
 router = APIRouter()
 logger = setup_logging()
+
 
 class FileCreate(BaseModel):
     file_name: str
@@ -25,20 +36,20 @@ def get_files(id: str):
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT file_id, file_name, file_size, file_status, created_at
                     FROM files
                     WHERE notebook_id = %s
                     ORDER BY created_at ASC
-                """, (id,))
+                """,
+                    (id,),
+                )
                 rows = cur.fetchall()
 
         logger.info(f"Fetched {len(rows)} files for notebook: {id}")
 
-        return [
-            {"id": r[0], "name": r[1], "size": r[2], "status": r[3]}
-            for r in rows
-        ]
+        return [{"id": r[0], "name": r[1], "size": r[2], "status": r[3]} for r in rows]
 
     except Exception:
         logger.exception(f"Error fetching files for notebook: {id}")
@@ -52,11 +63,14 @@ def create_file(id: str, data: FileCreate):
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO files (notebook_id, file_name, file_size, file_status)
                     VALUES (%s, %s, %s, 'processing')
                     RETURNING file_id, file_name, file_size, file_status
-                """, (id, data.file_name, data.file_size))
+                """,
+                    (id, data.file_name, data.file_size),
+                )
                 r = cur.fetchone()
 
         logger.info(f"File created: {r[0]} for notebook: {id}")
@@ -82,9 +96,12 @@ def update_file_status(file_id: str, data: dict):
 
         with pg_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE files SET file_status = %s WHERE file_id = %s
-                """, (status, file_id))
+                """,
+                    (status, file_id),
+                )
 
         logger.info(f"File status updated: {file_id} → {status}")
         return {"message": "updated"}
@@ -99,19 +116,48 @@ def update_file_status(file_id: str, data: dict):
 
 
 @router.delete("/api/files/{file_id}")
-def delete_file(file_id: str):
+def delete_file(file_id: str, driver: Driver = Depends(get_neo4j)):
     logger.info(f"Deleting file: {file_id}")
 
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM files WHERE file_id = %s",
-                    (file_id,)
-                )
+                cur.execute("DELETE FROM files WHERE file_id = %s", (file_id,))
+
+        with driver.session() as session:
+            # Delete chunks belonging to this file
+            session.run(
+                """
+                MATCH (c:Chunk {file_id: $file_id})
+                DETACH DELETE c
+                """,
+                file_id=file_id,
+            )
+
+            # Delete the Document node
+            session.run(
+                """
+                MATCH (d:Document {file_id: $file_id})
+                DETACH DELETE d
+                """,
+                file_id=file_id,
+            )
+
+            # Delete orphaned entities (no chunk mentions them anymore)
+            session.run(
+                """
+                MATCH (e:Entity)
+                WHERE NOT EXISTS { MATCH ()-[:MENTIONS]->(e) }
+                DETACH DELETE e
+                """,
+            )
 
         logger.info(f"File deleted: {file_id}")
         return {"message": "deleted"}
+
+    except Exception:
+        logger.exception(f"Error deleting file: {file_id}")
+        raise HTTPException(status_code=500, detail="Failed to delete file")
 
     except Exception:
         logger.exception(f"Error deleting file: {file_id}")
@@ -151,12 +197,14 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
 
 
 @router.post("/api/files/{file_id}/process")
-def process_file(file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag)):
+def process_file(
+    file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag), driver: Driver = Depends(get_neo4j)
+):
     with pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM files WHERE file_id=%s", (file_id,))
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="File not found")
 
-    background_tasks.add_task(run_rag_pipeline, file_id, rag)
+    background_tasks.add_task(run_rag_pipeline, file_id, rag, driver)
     return {"message": "processing started"}

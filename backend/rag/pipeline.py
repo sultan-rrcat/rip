@@ -15,22 +15,23 @@ import asyncio
 import httpx
 from textwrap import dedent
 
-from backend.core.logging import setup_logging
-from backend.core.db import pg_connection
-from backend.core.db import neo4j_driver
-from backend.core.prompts import DETECTION_PROMPT
-from backend.core.prompts import EXTRACTION_PROMPTS
+from core.logging import setup_logging
+from core.db import pg_connection
+from core.db import neo4j_driver
+from core.prompts import DETECTION_PROMPT
+from core.prompts import EXTRACTION_PROMPTS
 
-from backend import config
+import config
 
 logger = setup_logging()
 
 
 class RagPipeline:
     def __init__(self):
-        # self.embedding_model = HuggingFaceEmbeddings(model_name=config.BGE_M3_MODEL_PATH)
-        # self.reranker_model = CrossEncoder(config.BGE_RERANKER_V2_M3)
-        pass
+        self.embedding_model = HuggingFaceEmbeddings(
+            model_name=config.BGE_M3_MODEL_PATH
+        )
+        self.reranker_model = CrossEncoder(config.BGE_RERANKER_V2_M3)
 
     # =========================
     # 📄 DOCUMENT LOADER
@@ -163,7 +164,7 @@ class RagPipeline:
     # 💾 STORE
     # =========================
 
-    def store_chunks_and_embeddings(self, file_id, chunks, embeddings):
+    def store_chunks_and_embeddings(self, file_id, chunks, embeddings) -> list[str]:
 
         def parse_metadata(metadata):
             if isinstance(metadata, str):
@@ -173,33 +174,37 @@ class RagPipeline:
                     return {"raw": metadata}
             return metadata
 
-        try:
-            # Prepare data tuple for bulk insertion
-            data = [
-                (
-                    file_id,
-                    doc.page_content,
-                    embedding,
-                    Json(parse_metadata(doc.metadata)),
-                )
-                for doc, embedding in zip(chunks, embeddings)
-            ]
+        embedding_ids = []
 
+        try:
             with pg_connection() as conn:
                 with conn.cursor() as cur:
-                    query = """
-                        INSERT INTO embeddings_test (file_id, chunk_text, embedding, metadata)
-                        VALUES %s
-                    """
-                    # execute_values batches the inserts instantly
-                    execute_values(cur, query, data)
+                    for i, (doc, embedding) in enumerate(zip(chunks, embeddings)):
+                        cur.execute(
+                            """
+                            INSERT INTO embeddings_test 
+                                (file_id, chunk_index, chunk_text, embedding, metadata)
+                            VALUES (%s, %s, %s, %s, %s)
+                            RETURNING embedding_id
+                            """,
+                            (
+                                file_id,
+                                i,  # explicit index
+                                doc.page_content,
+                                embedding,
+                                Json(parse_metadata(doc.metadata)),
+                            ),
+                        )
+                        row = cur.fetchone()
+                        embedding_ids.append(str(row[0]))
 
-                conn.commit()  # Don't forget to commit!
+                conn.commit()
 
-            logger.info(f"✅ Stored {len(data)} embeddings in bulk.")
+            logger.info(f"✅ Stored {len(embedding_ids)} embeddings.")
+            return embedding_ids
 
         except Exception as e:
-            logger.exception(f"Error while storing embeddings: {e}")
+            logger.exception(f"Error storing embeddings: {e}")
             raise
 
     # =========================
@@ -268,7 +273,7 @@ class RagPipeline:
                     json={
                         "model": "qwen2.5-coder-14b",
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 1024,
+                        "max_tokens": 2048,
                     },
                 )
                 response.raise_for_status()
@@ -307,6 +312,7 @@ class RagPipeline:
         chunks: str,
         doc_type: str,
         entities: list,
+        embedding_ids: list,
         driver,
     ) -> None:
 
@@ -335,8 +341,10 @@ class RagPipeline:
             )
 
             prev_chunk_id = None
-            for i, (chunk, extraction) in enumerate(zip(chunks, entities)):
-                chunk_id = f"{file_id}_chunk_{i}"
+            for i, (chunk, extraction, emb_id) in enumerate(
+                zip(chunks, entities, embedding_ids)
+            ):
+                chunk_id = emb_id
                 section = " > ".join(
                     filter(
                         None,
@@ -352,7 +360,7 @@ class RagPipeline:
                     """
                 MERGE (c:Chunk {chunk_id: $chunk_id})
                 SET c.text = $text,
-                    c.file = $file_id,
+                    c.file_id = $file_id,
                     c.notebook_id = $notebook_id,
                     c.section = $section,
                     c.index = $index
@@ -408,7 +416,12 @@ class RagPipeline:
                 for rel in extraction.get("relationships", []):
                     source_name = entity_map.get(rel.get("source"))
                     target_name = entity_map.get(rel.get("target"))
-                    rel_type = rel.get("type", "RELATED_TO").strip().upper()
+                    rel_type = (
+                        rel.get("type", "RELATED_TO")
+                        .strip()
+                        .upper()
+                        .replace(" ", "_") 
+                    )
 
                     if not source_name or not target_name:
                         continue
@@ -466,7 +479,9 @@ if __name__ == "__main__":
 
         doc_type = obj.detect_document_type(chunks[0].page_content)
         # print(doc_type)
-        entities = [obj.extract_entities(chunk.page_content, doc_type) for chunk in chunks]
+        entities = [
+            obj.extract_entities(chunk.page_content, doc_type) for chunk in chunks
+        ]
         # print(ent_rel)
 
         conn_result = obj.store_graph(

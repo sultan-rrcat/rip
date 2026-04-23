@@ -1,9 +1,11 @@
 from pydantic import BaseModel
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from uuid import uuid4
 from core.logging import setup_logging
 from core.db import pg_connection
+from core.dependencies import get_neo4j
+from neo4j import Driver
 
 router = APIRouter()
 logger = setup_logging()
@@ -97,7 +99,7 @@ def rename_notebook(id: str, data: dict):
 
 
 @router.delete("/api/notebooks/{id}")
-def delete_notebook(id: str):
+def delete_notebook(id: str, driver: Driver = Depends(get_neo4j)):
     logger.info(f"Deleting notebook: {id}")
 
     try:
@@ -107,7 +109,22 @@ def delete_notebook(id: str):
                     "DELETE FROM notebooks WHERE notebook_id=%s",
                     (id,)
                 )
-
+        with driver.session() as session:
+            session.run(
+                """
+                MATCH (n {notebook_id: $notebook_id})
+                DETACH DELETE n
+                """,
+                notebook_id=id,
+            )
+        
+            session.run(
+                """
+                MATCH (e:Entity)
+                WHERE NOT EXISTS { MATCH ()-[:MENTIONS]->(e) }
+                DETACH DELETE e
+                """,
+            )
         logger.info(f"Notebook deleted: {id}")
         return {"message": "deleted"}
 

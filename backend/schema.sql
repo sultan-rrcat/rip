@@ -1,3 +1,7 @@
+-- Table: public.embeddings_test
+
+-- DROP TABLE IF EXISTS public.embeddings_test;
+
 CREATE TABLE IF NOT EXISTS public.embeddings_test
 (
     embedding_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -7,6 +11,7 @@ CREATE TABLE IF NOT EXISTS public.embeddings_test
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     metadata jsonb,
     text_search tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, chunk_text)) STORED,
+    chunk_index integer,
     CONSTRAINT embeddings_test_pkey PRIMARY KEY (embedding_id),
     CONSTRAINT embeddings_test_file_id_fkey FOREIGN KEY (file_id)
         REFERENCES public.files (file_id) MATCH SIMPLE

@@ -4,11 +4,12 @@ from core.logging import setup_logging
 from core.dependencies import get_rag
 from core.db import pg_connection
 from rag.vector_rag import VectorRAG
+from rag.graph_rag import GraphRAG
 import config
 
 logger = setup_logging()
 
-def run_rag_pipeline(file_id: str, rag: VectorRAG):
+def run_rag_pipeline(file_id: str, rag: GraphRAG, driver):
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
@@ -45,25 +46,54 @@ def run_rag_pipeline(file_id: str, rag: VectorRAG):
             logger.exception(f"Eror generating embeddings. {e}")
             raise
         try:
-            rag.store_chunks_and_embeddings(file_id, chunks, embeddings)
+            embedding_ids = rag.store_chunks_and_embeddings(file_id, chunks, embeddings)
             logger.info(f"embeddings stored.")
         except Exception as e:
             logger.exception(f"Error storing embeddings. {e}")
             raise
 
-        # try:
-        #     context = rag.retrieve_context(user_prompt)
-        # except Exception as e:
-        #     logger.exception(f"Error retrieving context. {e}")
-        #     raise
+        try:
+            doc_type = rag.detect_document_type(chunks[0].page_content)
+            logger.info(f"Document type detected: {doc_type}")
+        except Exception:
+            logger.warning("Doc type detection failed, defaulting to general")
+            doc_type = "general"
+
+        try:
+            entities = [rag.extract_entities(chunk.page_content, doc_type) for chunk in chunks]
+            logger.info(f"Entities extracted for {len(chunks)} chunks")
+        except Exception:
+            logger.exception("Entity extraction failed")
+            raise
+
+        # store graph in Neo4j
+        try:
+            rag.store_graph(            
+                notebook_id=notebook_id,
+                file_id=file_id,
+                file_name=file_name,
+                chunks=chunks,
+                doc_type=doc_type,
+                entities=entities,
+                embedding_ids = embedding_ids,
+                driver=driver,
+            )
+            logger.info(f"Graph stored for file: {file_name}")
+        except Exception:
+            logger.exception("Graph storage failed")
+            raise
 
         # update file status
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE files SET file_status = 'ready' WHERE file_id = %s",
-                    (file_id,),
-                )
+        try:
+            with pg_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE files SET file_status = 'ready' WHERE file_id = %s",
+                        (file_id,),
+                    )
+        except Exception as e:
+            logger.exception(f"Error updating file status: {e}")
+
     except Exception as e:
         logger.exception(f"Error: {e}")
 

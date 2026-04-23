@@ -30,7 +30,7 @@ export default function Card({ isNew, title, id, setNotebooks }) {
     const navigate = useNavigate();
 
     async function createNotebook() {
-        const data = await createNotebookAPI("Untitled")
+        const data = await createNotebookAPI("Untitled Vault")
         navigate(`/notebook/${data.notebook_id}`)
     }
 
