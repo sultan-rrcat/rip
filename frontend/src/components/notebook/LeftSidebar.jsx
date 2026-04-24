@@ -88,6 +88,15 @@ export default function LeftSidebar({ files, onUpload, onDelete, onRenameNoteboo
     )
 }
 
+function formatFileSize(bytes) {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+
 function FileItem({ file, onDelete }) {
     const bgColor = {
         uploading: 'bg-blue-50',
@@ -103,7 +112,7 @@ function FileItem({ file, onDelete }) {
                     <PictureAsPdfIcon fontSize="small" className='text-red-500 shrink-0' />
                     <div className='min-w-0'>
                         <p className='text-[10px] text-gray-800 truncate' title={file.name}>{file.name}</p>
-                        <p className='text-[9px] text-gray-400'>{file.size}</p>
+                        <p className='text-[9px] text-gray-400'>{formatFileSize(file.size)}</p>
                         <p className='text-[9px] text-gray-400 flex items-center gap-2'>
                             {file.status === 'uploading' && (
                                 <>
