@@ -1,3 +1,7 @@
+
+# pipeline.py 
+
+
 from sentence_transformers import SentenceTransformer, CrossEncoder
 
 # import config
@@ -11,9 +15,9 @@ from uuid import uuid4
 from psycopg2.extras import execute_values, Json
 import json
 import os
-import asyncio
 import httpx
 from textwrap import dedent
+
 
 from core.logging import setup_logging
 from core.db import pg_connection
@@ -22,6 +26,7 @@ from core.prompts import DETECTION_PROMPT
 from core.prompts import EXTRACTION_PROMPTS
 
 import config
+import asyncio
 
 logger = setup_logging()
 
@@ -231,7 +236,7 @@ class RagPipeline:
             #     print(f"DEBUG: Classified as: {raw_text}")
             #     return raw_text
 
-            with httpx.Client(timeout=120.0) as client:
+            with httpx.Client(timeout=300.0) as client:
                 response = client.post(
                     f"{config.LLM_URL}/v1/chat/completions",
                     json={
@@ -302,6 +307,48 @@ class RagPipeline:
 
         except Exception as e:
             logger.warning(f"Entity extraction failed. {e}")
+            return {"entities": [], "relationships": []}
+
+    async def extract_entities_async(self, chunk_text: str, doc_type: str, semaphore: asyncio.Semaphore = None) -> dict:
+        if semaphore:
+            async with semaphore:
+                return await self._do_extract(chunk_text, doc_type)
+        return await self._do_extract(chunk_text, doc_type)
+
+    async def _do_extract(self, chunk_text: str, doc_type: str) -> dict:
+        prompt_template = EXTRACTION_PROMPTS.get(doc_type, EXTRACTION_PROMPTS["general"])
+        prompt = prompt_template.format(text=chunk_text)
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    f"{config.LLM_URL}/v1/chat/completions",
+                    json={
+                        "model": "qwen2.5-coder-14b",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 2048,
+                    },
+                )
+                response.raise_for_status()
+                data = response.json()["choices"][0]["message"]["content"]
+                raw = data.strip()
+
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1]
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+
+                parsed = json.loads(raw)
+                entities = parsed.get("entities", [])
+                relationships = parsed.get("relationships", [])
+
+                logger.info(f"Extracted {len(entities)} entities & {len(relationships)} relationships.")
+                return {"entities": entities, "relationships": relationships}
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse failed for chunk extraction: {e}")
+            return {"entities": [], "relationships": []}
+        except Exception as e:
+            logger.warning(f"Entity extraction failed: {e}")
             return {"entities": [], "relationships": []}
 
     def store_graph(

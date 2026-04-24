@@ -4,7 +4,6 @@ from core.db import pg_connection
 
 logger = setup_logging()
 
-
 class GraphRAG(RagPipeline):
 
     # =========================

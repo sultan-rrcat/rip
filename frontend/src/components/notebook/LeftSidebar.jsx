@@ -29,7 +29,7 @@ export default function LeftSidebar({ files, onUpload, onDelete, onRenameNoteboo
     }, [notebookName])
 
     return (
-        <div className='flex flex-col'>
+        <div className='flex flex-col h-full'>
             {/* name field  */}
             <div className='flex p-3 m-1 bg-white overflow-hidden border border-gray-400 rounded-xl items-center'>
                 {isRenaming ? (
@@ -63,7 +63,7 @@ export default function LeftSidebar({ files, onUpload, onDelete, onRenameNoteboo
                     </div>
 
                     {/* file list  */}
-                    <nav className="m-5 px-2 border border-gray-200 rounded-xl">
+                    <nav className="m-5 px-2 border border-gray-200 rounded-xl flex-1 overflow-y-auto">
                         {files.length === 0 && (
                             <div className="px-4 py-8 text-center">
                                 <FolderOpenIcon />

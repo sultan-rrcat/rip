@@ -12,6 +12,10 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 def setup_logging():
     logger = logging.getLogger()
+
+    if logger.hasHandlers():
+        return logger
+        
     logger.setLevel(logging.INFO)
     log_format = logging.Formatter(
         "%(asctime)s - %(filename)s:%(lineno)d - %(levelname)s - %(message)s"
@@ -25,8 +29,6 @@ def setup_logging():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(log_format)
 
-    if logger.hasHandlers():
-        logger.handlers.clear()
 
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
