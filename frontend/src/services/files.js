@@ -1,4 +1,4 @@
-const API = "http://localhost:5000"
+import {API} from '../config.js'
 
 export async function getFilesAPI(notebookId) {
   console.log(`[files] GET /api/notebooks/${notebookId}/files`)

@@ -1,8 +1,8 @@
-const LLM_URL = import.meta.env.VITE_LLM_URL
+import {API} from '../config.js'
 
-console.log("LLM_URL:", LLM_URL)
+console.log("LLM_URL:", API)
 export async function sendMessage(text, notebook_id){
-    const response = await fetch(`${LLM_URL}/api/prompt`, {
+    const response = await fetch(`${API}/api/prompt`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({notebook_id: notebook_id, prompt: text})
@@ -20,7 +20,7 @@ export async function sendMessage(text, notebook_id){
 
 
 export async function sendMessageStream(text, notebook_id, onChunk) {
-    const response = await fetch(`${LLM_URL}/api/prompt/stream`, {
+    const response = await fetch(`${API}/api/prompt/stream`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
