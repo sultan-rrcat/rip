@@ -3,9 +3,9 @@ import LocalLibraryIcon from '@mui/icons-material/LocalLibrary';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, memo } from 'react';
 
-export default function LeftSidebar({ files, onUpload, onDelete, onRenameNotebook, notebookName }) {
+const LeftSidebar = memo(function LeftSidebar({ files, onUpload, onDelete, onRenameNotebook, notebookName }) {
     const readyCount = files.filter(f => f.status === 'ready').length
     const [isRenaming, setIsRenaming] = useState(false)
     const [tempName, setTempName] = useState(notebookName)
@@ -86,7 +86,9 @@ export default function LeftSidebar({ files, onUpload, onDelete, onRenameNoteboo
         </div>
 
     )
-}
+})
+
+export default LeftSidebar
 
 function formatFileSize(bytes) {
   if (bytes === 0) return "0 B";

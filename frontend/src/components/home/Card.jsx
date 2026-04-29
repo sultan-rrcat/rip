@@ -17,10 +17,11 @@ import { useNavigate } from 'react-router-dom'
 
 import { createNotebookAPI, renameNotebookAPI, deleteNotebookAPI } from "../../services/notebooks";
 
-
 import { useState, useEffect } from 'react'
 
-export default function Card({ isNew, title, id, setNotebooks }) {
+export default function Card({ isNew, title, id, setNotebooks, onDelete }) {
+    // console.log(`Notebook-Properties: id: ${id} - title: ${title} - isNew: ${isNew}`)
+
     const [openEdit, setOpenEdit] = useState(false)
     const [openDelete, setOpenDelete] = useState(false)
     const [newTitle, setNewTitle] = useState(title)
@@ -61,11 +62,15 @@ export default function Card({ isNew, title, id, setNotebooks }) {
     }
 
     async function handleDeleteConfirm() {
-        await deleteNotebookAPI(id)
-        setNotebooks(prev =>
-            prev.filter(n => n.notebook_id !== id)
-        )
         setOpenDelete(false)
+        try {
+            await deleteNotebookAPI(id)
+            onDelete(id)
+        } catch (err) {
+            console.error(err)
+        } finally {
+            setOpenDelete(false)
+        }
     }
 
     function handleSaveKeyDown(e) {

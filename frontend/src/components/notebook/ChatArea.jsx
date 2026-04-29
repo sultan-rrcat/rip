@@ -1,12 +1,12 @@
 import SmartToyIcon from '@mui/icons-material/SmartToy';
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, memo } from "react";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 
 
-export default function ChatArea({ messages }) {
+const ChatArea = memo(function ChatArea({ messages }) {
     const bottomRef = useRef(null)
 
     useEffect(() => {
@@ -43,7 +43,9 @@ export default function ChatArea({ messages }) {
         </div>
     )
 
-}
+})
+
+export default ChatArea
 
 function AssistantMessage({ text, children, sources = [] }) {
     return (

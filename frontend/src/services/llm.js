@@ -1,6 +1,6 @@
 import {API} from '../config.js'
 
-console.log("LLM_URL:", API)
+console.log("BACKEND API URL:", API)
 export async function sendMessage(text, notebook_id){
     const response = await fetch(`${API}/api/prompt`, {
         method: 'POST',

@@ -1,9 +1,9 @@
 import SendIcon from '@mui/icons-material/Send';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 
 const CODE_PASTE_THRESHOLD = 200;
 
-export default function Footer({ onSendMessage, isLoading }) {
+const Footer = memo(function Footer({ onSendMessage, isLoading }) {
     const [inputText, setInputText] = useState("");
     const [isCode, setIsCode] = useState(false);
     const textareaRef = useRef(null);
@@ -88,4 +88,6 @@ export default function Footer({ onSendMessage, isLoading }) {
             </div>
         </footer>
     );
-}
+})
+
+export default Footer

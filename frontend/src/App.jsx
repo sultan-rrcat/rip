@@ -7,7 +7,7 @@ export default function App(){
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Home/>}/>
-        <Route path="/notebook/:id" element={<Notebook/>}/>
+        <Route path="/notebook/:notebook_id" element={<Notebook/>}/>
       </Routes>
     </BrowserRouter>
   )

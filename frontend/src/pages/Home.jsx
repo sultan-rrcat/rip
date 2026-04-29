@@ -1,11 +1,12 @@
 import Card from '../components/home/Card'
 import { useState, useEffect } from 'react'
+import { API } from '../config'
 
 export default function Home() {
     const [notebooks, setNotebooks] = useState([])
 
     useEffect(() => {
-        fetch("http://localhost:5000/api/notebooks")
+        fetch(`${API}/api/notebooks`)
             .then(res => res.json())
             .then(data => setNotebooks(data))
     }, [])
@@ -22,6 +23,11 @@ export default function Home() {
                             title={n.notebook_name}
                             id={n.notebook_id}
                             setNotebooks={setNotebooks}
+                            onDelete={(id) => {
+                                setNotebooks(prev =>
+                                    prev.filter(n => n.notebook_id !== id)
+                                )
+                            }}
                         />
                     )))}
                 </div>
