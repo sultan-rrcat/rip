@@ -21,10 +21,11 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 - [ ] Preserve the real uploaded file extension instead of always storing `.pdf`; validate supported types (Known Issue #7).
 - [ ] Re-enable or remove the disabled semantic chunker (`rag/pipeline.py`); tune chunking for equations/tables.
 - [ ] Add durable ingestion status/job tracking (currently a background task with no retry or progress) — relates to ADR-005.
-- [ ] Expand backend tests beyond the health check; make them runnable without local models + Neo4j (Known Issue #9).
+- [ ] Expand backend tests beyond the health check; make them runnable without local models (Known Issue #9).
 
 ## Phase 2: Dead code & cleanup
-- [ ] Remove or wire the `AgenticRAG` stub and unused `BaseRAG` (Known Issue #6; see ADR-006).
+- [x] Remove the `AgenticRAG` stub (removed along with the graph RAG stack; see ADR-007).
+- [ ] Remove or wire the unused `BaseRAG` (Known Issue #6; see ADR-006).
 - [ ] Remove unused `all-MiniLM-L6-v2` and Ollama config entries (Known Issue #6).
 - [ ] Mount or delete unused UI components (`Header`, `RightSidebar`, `Main`, `Notification`) and unused API clients (Known Issue #8).
 - [ ] Rename `embeddings_test` to a non-test name and normalize the files list response shape (Known Issue #10).
@@ -32,9 +33,8 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 ## Phase 3: Feature roadmap
 - [ ] Robust source citation & highlighting in chat responses.
 - [ ] Notebook document management polish (drag-and-drop upload, per-file status/progress indicators).
-- [ ] Multi-file / multi-notebook graph relationship expansion.
 - [ ] Local evaluation harness for retrieval accuracy and end-to-end answer quality.
 
 ## Phase 4: Offline evaluation & benchmarking
 - [ ] Performance profiling of local `qwen2.5-coder-14b` inference and streaming latency.
-- [ ] Latency budgets for ingestion (Docling + entity extraction) at realistic document volumes.
+- [ ] Latency budgets for ingestion (Docling parsing + embedding) at realistic document volumes.

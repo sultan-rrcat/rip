@@ -14,13 +14,12 @@ from pydantic import BaseModel
 from typing import Optional
 from core.logging import setup_logging
 from core.db import pg_connection
-from core.dependencies import get_rag, get_neo4j
+from core.dependencies import get_rag
 from services.file_processor import run_rag_pipeline
 from rag.pipeline import RagPipeline
 from uuid import uuid4
 import os
 import config
-from neo4j import Driver
 
 router = APIRouter()
 logger = setup_logging()
@@ -118,7 +117,7 @@ def update_file_status(file_id: str, data: dict):
 
 
 @router.delete("/api/files/{file_id}")
-def delete_file(file_id: str, driver: Driver = Depends(get_neo4j)):
+def delete_file(file_id: str):
     logger.info(f"Deleting file: {file_id}")
 
     try:
@@ -126,40 +125,8 @@ def delete_file(file_id: str, driver: Driver = Depends(get_neo4j)):
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM files WHERE file_id = %s", (file_id,))
 
-        with driver.session() as session:
-            # Delete chunks belonging to this file
-            session.run(
-                """
-                MATCH (c:Chunk {file_id: $file_id})
-                DETACH DELETE c
-                """,
-                file_id=file_id,
-            )
-
-            # Delete the Document node
-            session.run(
-                """
-                MATCH (d:Document {file_id: $file_id})
-                DETACH DELETE d
-                """,
-                file_id=file_id,
-            )
-
-            # Delete orphaned entities (no chunk mentions them anymore)
-            session.run(
-                """
-                MATCH (e:Entity)
-                WHERE NOT EXISTS { MATCH ()-[:MENTIONS]->(e) }
-                DETACH DELETE e
-                """,
-            )
-
         logger.info(f"File deleted: {file_id}")
         return {"message": "deleted"}
-
-    except Exception:
-        logger.exception(f"Error deleting file: {file_id}")
-        raise HTTPException(status_code=500, detail="Failed to delete file")
 
     except Exception:
         logger.exception(f"Error deleting file: {file_id}")
@@ -200,7 +167,7 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
 
 @router.post("/api/files/{file_id}/process")
 def process_file(
-    file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag), driver: Driver = Depends(get_neo4j)
+    file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag)
 ):
     with pg_connection() as conn:
         with conn.cursor() as cur:
@@ -208,5 +175,5 @@ def process_file(
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="File not found")
 
-    background_tasks.add_task(run_rag_pipeline, file_id, rag, driver)
+    background_tasks.add_task(run_rag_pipeline, file_id, rag)
     return {"message": "processing started"}

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from services.llm import ask_qwen, stream_qwen
-from core.dependencies import get_rag, get_neo4j
+from core.dependencies import get_rag
 from core.logging import setup_logging
 from services.chat import format_context_for_llm
 from services.chat import extract_sources
@@ -9,8 +9,6 @@ from services.rewritter import rewrite_prompt
 import json
 from pydantic import BaseModel
 from rag.vector_rag import VectorRAG
-from rag.graph_rag import GraphRAG
-from neo4j import Driver
 
 
 logger = setup_logging()
@@ -21,14 +19,14 @@ class PromptRequest(BaseModel):
     notebook_id: str
 
 @router.post("/api/prompt/stream")
-async def prompt_stream(request: PromptRequest, rag: GraphRAG = Depends(get_rag), driver: Driver = Depends(get_neo4j)):
+async def prompt_stream(request: PromptRequest, rag: VectorRAG = Depends(get_rag)):
     user_prompt = request.prompt
     notebook_id = request.notebook_id
 
     async def generate():
         try:
             try:
-                context_json = rag.retrieve_context(user_prompt, notebook_id, driver)
+                context_json = rag.retrieve_context(notebook_id, user_prompt)
                 logger.info(f"ContextJSON: {context_json}")
                 formatted_context = format_context_for_llm(context_json)
                 sources = extract_sources(context_json)

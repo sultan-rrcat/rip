@@ -2,15 +2,11 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
 from routes import notebooks, files, messages, llm
 from dotenv import load_dotenv
 from rag.vector_rag import VectorRAG
-from rag.graph_rag import GraphRAG
-from core.db import neo4j_driver
 from core.logging import setup_logging
 from contextlib import asynccontextmanager
-import httpx
 
 load_dotenv()
 logger = setup_logging()
@@ -18,14 +14,12 @@ logger = setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Initiating ML models...")
-    app.state.rag = GraphRAG()
-    app.state.neo4j = neo4j_driver()
+    app.state.rag = VectorRAG()
     logger.info("ML models loaded successfully.")
 
     yield #transfering control back to fastapi
 
     logger.info(f"Shutting down and clearing models...")
-    await app.state.neo4j.close()
     app.state.rag = None
 
 

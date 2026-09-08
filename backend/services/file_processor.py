@@ -3,15 +3,13 @@
 import os
 import asyncio
 from core.logging import setup_logging
-from core.dependencies import get_rag
 from core.db import pg_connection
 from rag.vector_rag import VectorRAG
-from rag.graph_rag import GraphRAG
 import config
 
 logger = setup_logging()
 
-async def run_rag_pipeline(file_id: str, rag: GraphRAG, driver):
+async def run_rag_pipeline(file_id: str, rag: VectorRAG):
     try:
         # ─── Fetch metadata ───
         with pg_connection() as conn:
@@ -54,54 +52,12 @@ async def run_rag_pipeline(file_id: str, rag: GraphRAG, driver):
             raise
 
         try:
-            embedding_ids = await asyncio.to_thread(
+            await asyncio.to_thread(
                 rag.store_chunks_and_embeddings, file_id, chunks, embeddings
             )
             logger.info("Embeddings stored")
         except Exception:
             logger.exception("Embedding storage failed")
-            raise
-
-        # ─── Doc type detection ───
-        try:
-            doc_type = await asyncio.to_thread(
-                rag.detect_document_type, chunks[0].page_content
-            )
-            logger.info(f"Doc type: {doc_type}")
-        except Exception:
-            logger.warning("Doc type detection failed, defaulting to general")
-            doc_type = "general"
-
-        # ─── Entity extraction — all chunks concurrently ───
-        try:
-            semaphore = asyncio.Semaphore(10)
-            
-            entities = await asyncio.gather(*[
-                rag.extract_entities_async(chunk.page_content, doc_type, semaphore)
-                for chunk in chunks
-            ])
-            entities = list(entities)
-            logger.info(f"Entities extracted: {len(chunks)} chunks")
-        except Exception:
-            logger.exception("Entity extraction failed")
-            raise
-
-        # ─── Store graph ───
-        try:
-            await asyncio.to_thread(
-                rag.store_graph,
-                notebook_id=notebook_id,
-                file_id=file_id,
-                file_name=file_name,
-                chunks=chunks,
-                doc_type=doc_type,
-                entities=entities,
-                embedding_ids=embedding_ids,
-                driver=driver,
-            )
-            logger.info(f"Graph stored: {file_name}")
-        except Exception:
-            logger.exception("Graph storage failed")
             raise
 
         # ─── Mark ready ───

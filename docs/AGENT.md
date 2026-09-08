@@ -31,12 +31,11 @@ Guidance for human and AI-agent contributors working in this repository. This fi
 
 ```
 backend/
-  app.py            FastAPI app; mounts routes; lifespan loads GraphRAG + Neo4j
+  app.py            FastAPI app; mounts routes; lifespan loads VectorRAG
   config.py         upload dir, model paths (D:\models\...), LLM_URL
   schema.sql        Postgres schema (notebooks, files, messages, embeddings_test)
-  core/             db.py, dependencies.py, logging.py, prompts.py
-  rag/              pipeline.py (ingestion), graph_rag.py (active), vector_rag.py,
-                    agentic_rag.py (stub), base.py (unused)
+  core/             db.py, dependencies.py, logging.py
+  rag/              pipeline.py (ingestion), vector_rag.py (active), base.py (unused)
   routes/           notebooks.py, files.py, messages.py, llm.py
   services/         chat.py, file_processor.py, llm.py, rewritter.py (note spelling)
   tests/            test_app.py
@@ -93,6 +92,6 @@ git push origin main
 - **Env vars:** all LLM calls read `LLM_URL` (from `config.py`); set `LLM_URL`. (The old unused `LLM_API_URL` read in `app.py` was removed.)
 - **Ports:** backend runs on `8000` (per `frontend/src/config.js`); the `/process` trigger now uses that same base URL. Keep API calls routed through `src/config.js` rather than hardcoding ports.
 - **Model paths are hardcoded** to `D:\models\...` in `config.py`; changing them affects ingestion/startup.
-- **`AgenticRAG` is an unfinished stub** and `BaseRAG` is unused — don't build on them as if they work.
-- **Non-stream `/api/prompt`** has a known `VectorRAG.retrieve_context` signature bug (Known Issues #2); prefer `/api/prompt/stream`.
+- **`BaseRAG` is unused** — the concrete RAG classes extend `RagPipeline` directly; don't build on `BaseRAG` as if it's wired in.
+- **Retrieval:** both `/api/prompt` and `/api/prompt/stream` use `VectorRAG` (the graph RAG stack was removed; see ADR-007).
 - When you fix a bug from the Known Issues list, move/annotate it in `docs/ARCHITECTURE.md` and `docs/PLAN.md` accordingly.

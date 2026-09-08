@@ -11,7 +11,6 @@ This guide reflects the repository as it exists today. Every file and variable n
 | Python | 3.11+ (per `pyproject.toml`) |
 | Node.js | 20.19+ or 22.12+ (Vite 7 requirement; no `engines` pinned in `package.json`) |
 | PostgreSQL | Server reachable over the network; **pgvector extension must be enabled** (the schema uses `vector(1024)`, and no repo code or script creates the extension) |
-| Neo4j | Running and reachable at the `NEO4J_URI` configured below |
 | Local model weights | Present on disk at the hardcoded paths in `backend/config.py` (see below) |
 | LLM endpoint | An OpenAI-compatible HTTP server (`/v1/chat/completions`) serving `qwen2.5-coder-14b`, reachable at the `LLM_URL` configured below |
 
@@ -45,9 +44,6 @@ Keys used by the code (`.env.example` + `backend/config.py` + `backend/core/db.p
 | `DB_PASSWORD` | `core/db.py` | Postgres password |
 | `DB_HOST` | `core/db.py` | Postgres host |
 | `DB_PORT` | `core/db.py` | Default `5432` |
-| `NEO4J_URI` | `core/db.py` | Default `bolt://localhost:7687` |
-| `NEO4J_USER` | `core/db.py` | Default `neo4j` |
-| `NEO4J_PASSWORD` | `core/db.py` | — |
 
 > Note: `backend/app.py` reads `LLM_API_URL`, but no request path uses it — the services all read `LLM_URL`. Set `LLM_URL`. See Known Issues.
 
@@ -67,7 +63,7 @@ No migration/bootstrap script exists. Create the schema once, manually:
    psql "host=<DB_HOST> port=<DB_PORT> dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
    ```
 
-`schema.sql` creates four tables — `notebooks`, `files`, `messages`, `embeddings_test` — plus an HNSW vector index (`embeddings_test_embedding_idx`) and a GIN full-text index (`text_search_idx`). Neo4j needs no schema bootstrap; nodes/relationships are created by the ingestion pipeline.
+`schema.sql` creates four tables — `notebooks`, `files`, `messages`, `embeddings_test` — plus an HNSW vector index (`embeddings_test_embedding_idx`) and a GIN full-text index (`text_search_idx`).
 
 ---
 
@@ -93,7 +89,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 
 Health check: `GET http://localhost:8000/api/health` → `{"status": "ok"}`.
 
-> On startup the lifespan loads the embedding model and reranker from the `D:\models\...` paths and opens a Neo4j driver. If those are unavailable, startup fails.
+> On startup the lifespan loads the embedding model and reranker from the `D:\models\...` paths. If those are unavailable, startup fails.
 >
 > The frontend expects this backend on the port in `frontend/src/config.js` (currently `http://localhost:8000`). See the port mismatch note under Known Issues in `docs/ARCHITECTURE.md`.
 
@@ -129,7 +125,7 @@ npm run dev
 | Backend lint | `ruff` | Configured in `pyproject.toml` |
 | Frontend lint | `npm run lint` | `frontend/` |
 
-Caveat: the single backend test (`backend/tests/test_app.py`) constructs the FastAPI app, so it loads the local models and opens Neo4j on startup; it only covers the health endpoint.
+Caveat: the single backend test (`backend/tests/test_app.py`) constructs the FastAPI app, so it loads the local models on startup; it only covers the health endpoint.
 
 ---
 

@@ -9,8 +9,8 @@ A RAG chatbot prototype ("RIP") in the style of Google NotebookLM, built for a p
 ## What it does
 
 - Create **notebooks** that group uploaded documents and a chat history.
-- Upload PDFs, which are parsed (**Docling**), chunked, embedded, and indexed in both a vector store (PostgreSQL + pgvector) and a knowledge graph (Neo4j).
-- Ask questions against a notebook; answers are produced from **hybrid retrieval** (vector similarity + full-text + graph traversal) reranked and fed to a local LLM, with sources returned.
+- Upload PDFs, which are parsed (**Docling**), chunked, embedded, and indexed in a vector store (PostgreSQL + pgvector).
+- Ask questions against a notebook; answers are produced from **hybrid retrieval** (vector similarity + full-text) reranked and fed to a local LLM, with sources returned.
 - Chat is streamed token-by-token over SSE.
 
 See `docs/ARCHITECTURE.md` for the full picture and `docs/SETUP.md` to run it locally.
@@ -34,12 +34,11 @@ Core end-to-end flow works: create notebook → upload PDF → background ingest
 ### Backend (`backend/`)
 - FastAPI (Python 3.11+), async lifespan startup, background-task ingestion
 - PostgreSQL with **pgvector** (vector search + full-text via `tsvector`/GIN)
-- Neo4j graph database (entity-relationship graph traversal)
 
 ### Models
 | Role | Model | How it is reached |
 |---|---|---|
-| LLM (chat, rewriting, entity extraction) | `qwen2.5-coder-14b` | OpenAI-compatible HTTP endpoint at `LLM_URL` (env) |
+| LLM (chat, rewriting) | `qwen2.5-coder-14b` | OpenAI-compatible HTTP endpoint at `LLM_URL` (env) |
 | Embeddings | `bge-m3` (1024-dim) | Local weights, hardcoded `D:\models\bge-m3` in `backend/config.py` |
 | Reranker | `bge_reranker_v2_m3` | Local weights, hardcoded `D:\models\reranker\bge_reranker_v2_m3` |
 | Document parsing | Docling | Local library |
@@ -53,8 +52,8 @@ Core end-to-end flow works: create notebook → upload PDF → background ingest
 │   ├── app.py          App entry, lifespan, router mounting
 │   ├── config.py       Model paths, upload dir, env reads
 │   ├── schema.sql      PostgreSQL schema (notebooks, files, messages, embeddings)
-│   ├── core/           DB connections, logging, FastAPI deps, prompt templates
-│   ├── rag/            Retrieval: pipeline, vector_rag, graph_rag (agentic stub)
+│   ├── core/           DB connections, logging, FastAPI deps
+│   ├── rag/            Retrieval: pipeline, vector_rag
 │   ├── routes/         HTTP endpoints: notebooks, files, messages, llm
 │   ├── services/       chat, file_processor, llm, rewritter
 │   ├── tests/          Minimal tests
@@ -73,7 +72,7 @@ Core end-to-end flow works: create notebook → upload PDF → background ingest
 
 ## Quickstart
 
-1. Follow `docs/SETUP.md` (env, Postgres+pgvector, Neo4j, models, dependency install).
+1. Follow `docs/SETUP.md` (env, Postgres+pgvector, models, dependency install).
 2. Backend: `cd backend && uvicorn app:app --host 0.0.0.0 --port 8000 --reload`
 3. Frontend: `cd frontend && npm install && npm run dev`
 

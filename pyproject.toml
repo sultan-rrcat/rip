@@ -16,7 +16,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "psycopg2-binary>=2.9.12",
     "pgvector>=0.4.2",
-    "neo4j>=6.1.0",
     "docling>=2.81.0",
     "sentence-transformers>=5.2.3",
     "httpx>=0.28.1",

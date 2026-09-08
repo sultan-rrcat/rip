@@ -32,5 +32,22 @@
   - **Known Issue #4 (broken upload error path):** `frontend/src/services/files.js` `uploadFileAPI` error branch now throws instead of referencing undefined `uuidv4`/`setFiles`.
   - **Known Issue #5 (wrong id):** `frontend/src/hooks/notebooks/useMessages.js` error branch now uses `notebook_id` instead of bare `id`.
   - Updated `docs/ARCHITECTURE.md` (marked #1–#5 fixed), `docs/PLAN.md` (checked off those fix items), and `docs/AGENT.md` (refreshed "known traps").
-- **Notes:** tests/lint were not run per user instruction. Pre-existing unused imports (`VectorRAG`, `httpx` in `app.py`) and Known Issues #6–#10 (dead code, hardcoded model paths, unmounted UI, test coverage, legacy naming) remain open.
+- **Status:** Completed successfully.
+
+---
+
+## [2026-09-08] - Remove Graph RAG stack
+- **Task:** Remove the Graph RAG features and all traces; make `VectorRAG` the single retrieval path; update docs; delete the stale `prompt.md` artifact.
+- **Actions Taken:**
+  - Deleted `backend/rag/graph_rag.py` (`GraphRAG` orchestrator), `backend/rag/agentic_rag.py` (stub importing `GraphRAG`), and `backend/core/prompts.py` (`EXTRACTION_PROMPTS`/`DETECTION_PROMPT` only fed graph ingestion).
+  - `rag/pipeline.py`: removed `detect_document_type`, `extract_entities`, `extract_entities_async`, `_do_extract`, `store_graph`, and the `__main__` scratch block; cleaned now-unused imports.
+  - `core/db.py`: removed `neo4j_driver()` and `NEO4J_*` env reads. `core/dependencies.py`: removed `get_neo4j`; `get_rag` now returns `VectorRAG`.
+  - `app.py`: lifespan constructs `VectorRAG()` only; Neo4j driver creation/close removed.
+  - `routes/llm.py`: `/api/prompt/stream` now uses `VectorRAG` (`retrieve_context(notebook_id, user_prompt)`) with no Neo4j driver.
+  - `routes/files.py` / `routes/notebooks.py`: delete endpoints are Postgres-only (cascade handles embeddings); no graph cleanup or driver.
+  - `services/file_processor.py`: ingestion is now load → chunk → embed → store → ready (doc-type detection, entity extraction, graph storage removed).
+  - `pyproject.toml`: dropped the `neo4j` dependency (uninstalled from the venv). `.env` / `.env.example`: `NEO4J_*` keys removed.
+  - Docs updated: `Readme.md`, `ARCHITECTURE.md` (topology, components, data model, ingestion/retrieval flows, API table, Known Issues #6/#9), `SETUP.md`, `AGENT.md`, `PLAN.md`; `ADR.md`: ADR-002 marked superseded, added ADR-007 recording the removal.
+  - Deleted `prompt.md` (historical generation prompt referencing `graph_rag.py`).
+- **Notes:** verified with `ruff check` (no new errors vs. pre-existing baseline), `pytest`, and an import smoke test of the FastAPI app. Existing data in the Neo4j database is orphaned; dropping the Neo4j service/database is an ops step outside the repo.
 - **Status:** Completed successfully.
