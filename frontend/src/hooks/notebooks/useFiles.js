@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { getFilesAPI, deleteFileAPI, uploadFileAPI } from "../../services/files"
+import { API } from "../../config"
 
 export function useFiles(notebook_id) {
   const [files, setFiles] = useState([])
@@ -53,7 +54,7 @@ export function useFiles(notebook_id) {
     }
 
     try {
-      await fetch(`http://localhost:5000/api/files/${newFile.id}/process`, {
+      await fetch(`${API}/api/files/${newFile.id}/process`, {
         method: "POST"
       })
     } catch (err) {

@@ -1,6 +1,5 @@
 #app.py 
 
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -29,8 +28,6 @@ async def lifespan(app: FastAPI):
     await app.state.neo4j.close()
     app.state.rag = None
 
-
-LLM_URL = os.getenv("LLM_API_URL", "http://10.10.30.65:8000")
 
 logger.info("Logging has been successfully set up.")
 

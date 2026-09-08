@@ -57,9 +57,7 @@ export async function uploadFileAPI(notebookId, file) {
 
   if (!res.ok) {
     console.error("Upload failed")
-    const newFile = { id: uuidv4(), name: file.name, status: "error" }
-    setFiles(prev => [...prev, newFile])
-    return
+    throw new Error("Upload failed")
   }
 
   const data = await res.json()

@@ -74,7 +74,7 @@ async def prompt(request: PromptRequest, rag: VectorRAG = Depends(get_rag)):
         # rag = RagPipeline()
         logger.info("RAG pipeline initialized - For Prompt")
         try:
-            context_json = rag.retrieve_context(user_prompt)
+            context_json = rag.retrieve_context(request.notebook_id, user_prompt)
             logger.info(f"context_json: {context_json}")
 
             formatted_context = format_context_for_llm(context_json)

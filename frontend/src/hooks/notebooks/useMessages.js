@@ -86,7 +86,7 @@ export function useMessages(notebook_id) {
       )
     } catch (err) {
       const errorMessage = await createMessageAPI(
-        id,
+        notebook_id,
         "error",
         `Something went wrong. Error: ${err}`
       )
