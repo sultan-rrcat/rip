@@ -11,3 +11,5 @@ backend/external
 
 .env
 frontend/.env
+.git_gitea
+.git_github
