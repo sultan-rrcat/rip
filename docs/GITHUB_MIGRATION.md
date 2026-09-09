@@ -72,3 +72,19 @@ After this you can keep the remote permanently and push to both with two command
 
 
 Option A does not require you to keep the .git_github mirror at all.
+
+
+Merge options
+Option 1 – add GitHub as a second remote to the workspace .git – simplest ongoing workflow
+1. Ensure the workspace has GitHub remote:
+git remote add github https://github.com/sultan-rrcat/rip.git
+2. Fetch the external change:
+git fetch github
+3. Merge/rebase into your main:
+git merge github/main
+# or
+git rebase github/main
+4. Push the merged result back to Gitea:
+git push origin main
+Optionally also push to GitHub to keep them in sync:
+git push github main
