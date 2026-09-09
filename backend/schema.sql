@@ -1,3 +1,6 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Table: public.embeddings_test
 
 -- DROP TABLE IF EXISTS public.embeddings_test;
@@ -12,17 +15,11 @@ CREATE TABLE IF NOT EXISTS public.embeddings_test
     metadata jsonb,
     text_search tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, chunk_text)) STORED,
     chunk_index integer,
-    CONSTRAINT embeddings_test_pkey PRIMARY KEY (embedding_id),
-    CONSTRAINT embeddings_test_file_id_fkey FOREIGN KEY (file_id)
-        REFERENCES public.files (file_id) MATCH SIMPLE
-        ON UPDATE NO ACTION
-        ON DELETE CASCADE
+    CONSTRAINT embeddings_test_pkey PRIMARY KEY (embedding_id)
 )
 
 TABLESPACE pg_default;
 
-ALTER TABLE IF EXISTS public.embeddings_test
-    OWNER to trainee;
 -- Index: embeddings_test_embedding_idx
 
 -- DROP INDEX IF EXISTS public.embeddings_test_embedding_idx;
@@ -62,9 +59,11 @@ CREATE TABLE IF NOT EXISTS public.files
 
 TABLESPACE pg_default;
 
-ALTER TABLE IF EXISTS public.files
-    OWNER to trainee;
-
+ALTER TABLE IF EXISTS public.embeddings_test
+    ADD CONSTRAINT embeddings_test_file_id_fkey FOREIGN KEY (file_id)
+    REFERENCES public.files (file_id)
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
 
 -- Table: public.messages
 
@@ -88,9 +87,6 @@ CREATE TABLE IF NOT EXISTS public.messages
 
 TABLESPACE pg_default;
 
-ALTER TABLE IF EXISTS public.messages
-    OWNER to trainee;
-
 -- Table: public.notebooks
 
 -- DROP TABLE IF EXISTS public.notebooks;
@@ -105,5 +101,3 @@ CREATE TABLE IF NOT EXISTS public.notebooks
 
 TABLESPACE pg_default;
 
-ALTER TABLE IF EXISTS public.notebooks
-    OWNER to trainee;

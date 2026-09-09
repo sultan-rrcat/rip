@@ -1,0 +1,51 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${DB_NAME:-prototype_rip}
+      POSTGRES_USER: ${DB_USER:-trainee}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dbpass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DB_NAME: ${DB_NAME:-prototype_rip}
+      DB_USER: ${DB_USER:-trainee}
+      DB_PASSWORD: ${DB_PASSWORD:-dbpass}
+      DB_HOST: db
+      DB_PORT: 5432
+      LLM_URL: ${LLM_URL:?Set LLM_URL in .env}
+      BGE_M3_MODEL_PATH: /models/bge-m3
+      BGE_RERANKER_V2_M3: /models/reranker/bge_reranker_v2_m3
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ${BGE_MODEL_DIR:?Set BGE_MODEL_DIR in .env}:/models/bge-m3:ro
+      - ${RERANKER_MODEL_DIR:?Set RERANKER_MODEL_DIR in .env}:/models/reranker/bge_reranker_v2_m3:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
