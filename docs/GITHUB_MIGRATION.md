@@ -57,37 +57,18 @@ git push origin main
 ```
 
 ### Syncing Gitea → GitHub
-Option A – use the mirror:
-```powershell
-git --git-dir=.git_github --work-tree=. pull origin main
-git --git-dir=.git_github --work-tree=. push github main
-git --git-dir=.git_github --work-tree=. push github --tags
-```
 
-Option B – temporarily add GitHub remote to workspace:
-```powershell
+How to push the same commit to GitHub
+Option A – add GitHub as a second remote to your workspace .git once and push both:
 git remote add github https://github.com/sultan-rrcat/rip.git
+
+# Gitea
+git push origin main
+
+# GitHub
 git push github main
 git push github --tags
-git remote remove github
-```
+After this you can keep the remote permanently and push to both with two commands.
 
-Option C – keep both remotes:
-```powershell
-git remote add github https://github.com/sultan-rrcat/rip.git
-git push origin main   # Gitea
-git push github main   # GitHub
-```
 
-### Working with GitHub only
-```powershell
-git --git-dir=.git_github --work-tree=. status
-git --git-dir=.git_github --work-tree=. add .
-git --git-dir=.git_github --work-tree=. commit -m "message"
-git --git-dir=.git_github --work-tree=. push github main
-```
-
-**Notes**
-- `.gitignore` now locally ignores `.git_gitea` and `.git_github` to avoid tracking the repo dirs.
-- No branch renaming was performed; `main` is used for both remotes.
-- Auth for GitHub HTTPS is already configured.
+Option A does not require you to keep the .git_github mirror at all.
