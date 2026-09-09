@@ -7,6 +7,7 @@ __pycache__/
 
 backend/uploads
 backend/logs
+backend/external
 
 .env
 frontend/.env

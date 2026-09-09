@@ -3,8 +3,6 @@
 
 
 from sentence_transformers import CrossEncoder
-
-# import config
 from langchain_opendataloader_pdf import OpenDataLoaderPDFLoader
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -34,6 +32,8 @@ class RagPipeline:
     # =========================
     def document_loader(self, file):
         try:
+            
+            raise Exception
             # 🔥 Primary: Docling
             converter = DocumentConverter()
             result = converter.convert(file)
