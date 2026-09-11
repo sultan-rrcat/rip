@@ -18,6 +18,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY}
+        HTTPS_PROXY: ${HTTPS_PROXY}
+        NO_PROXY: ${NO_PROXY},host.docker.internal
     environment:
       DB_NAME: ${DB_NAME:-prototype_rip}
       DB_USER: ${DB_USER:-trainee}
@@ -42,6 +46,10 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY}
+        HTTPS_PROXY: ${HTTPS_PROXY}
+        NO_PROXY: ${NO_PROXY},host.docker.internal
     ports:
       - "5173:80"
     depends_on:
