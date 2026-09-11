@@ -78,7 +78,7 @@ Thin handlers over `core.db` / `core.dependencies`, with response shaping. Full 
 - **API clients** — `services/notebooks.js`, `messages.js`, `files.js`, `llm.js`; base URL `http://localhost:8000` hardcoded in `src/config.js`.
 - **Styling** — Tailwind v4 (`@import "tailwindcss"` in `index.css`) + MUI v7 components/icons on the **default** MUI theme (no `ThemeProvider`/`createTheme`). Inter font via `@fontsource/inter`.
 
-Not mounted / dead: `Header.jsx`, `RightSidebar.jsx`, `Main.jsx`, `Notification.jsx` (see Known Issues).
+Previously unmounted components (`Header`, `RightSidebar`, `Main`, `Notification`) were deleted (see Known Issue #8).
 
 ---
 
@@ -162,6 +162,6 @@ Tracked items where the code differs from intent or is broken/unfinished. File r
 | 5 | **Wrong id in error branch:** `useMessages` persisted an error with bare `id` (undefined). **Fixed:** now uses `notebook_id`. | `frontend/src/hooks/notebooks/useMessages.js` (fixed) |
 | 6 | **Dead code / unused:** `all-MiniLM-L6-v2` path, Ollama vars in `config.py`; `BaseRAG`; commented-out semantic chunker in `pipeline.py`. **Fixed:** all removed — `config.py` holds only live keys, `rag/base.py` deleted, chunker block deleted from `pipeline.py`. | `backend/config.py`, `backend/rag/pipeline.py` (fixed) |
 | 7 | **Hardcoded Windows model paths** (`D:\models\...`) and hardcoded `.pdf` storage suffix regardless of uploaded type → not portable; only PDFs ingest reliably. **Fixed:** model paths are env-configurable (`config.py`); upload + ingestion preserve the real file extension (`routes/files.py`, `services/file_processor.py`). | `backend/config.py`, `backend/routes/files.py`, `backend/services/file_processor.py` (fixed) |
-| 8 | **Unmounted/dead UI:** `Header`, `RightSidebar`, `Main`, `Notification` are not rendered; several exported API functions and `sendMessage` (non-stream) are unused. | `frontend/src/pages/Notebook.jsx`, `frontend/src/components/notebook/` |
+| 8 | **Unmounted/dead UI:** `Header`, `RightSidebar`, `Main`, `Notification` were not rendered. **Fixed:** deleted; `Notebook.tsx` comment blocks removed. Several exported API functions and `sendMessage` (non-stream) remain unused. | `frontend/src/pages/Notebook.tsx` (fixed) |
 | 9 | **Test coverage is minimal & environment-bound:** the single test loads local models on app construction and only checks `/api/health`. | `backend/tests/test_app.py` |
 | 10 | **Legacy naming:** the embeddings table is `embeddings_test`; file display uses `{id,name,size,status}` while DB columns are `file_*`. | `backend/schema.sql`, `backend/routes/files.py` |

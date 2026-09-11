@@ -23,14 +23,9 @@ export default function Notebook() {
         onRenameNotebook={renameNotebook}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
-        {/* <Header /> */}
         <ChatArea messages={messages} />
         <Footer onSendMessage={handleSendMessage} />
       </main>
-
-      {/* <RightSidebar
-        files={files}
-      /> */}
     </div>
   )
 }

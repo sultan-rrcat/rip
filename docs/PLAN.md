@@ -27,7 +27,7 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 - [x] Remove the `AgenticRAG` stub (removed along with the graph RAG stack; see ADR-007).
 - [x] Remove or wire the unused `BaseRAG` (Known Issue #6; see ADR-006). **Done:** `rag/base.py` deleted; `VectorRAG` extends `RagPipeline` directly.
 - [x] Remove unused `all-MiniLM-L6-v2` and Ollama config entries (Known Issue #6). **Done:** only live keys remain in `config.py`; commented-out semantic chunker removed from `pipeline.py`.
-- [ ] Mount or delete unused UI components (`Header`, `RightSidebar`, `Main`, `Notification`) and unused API clients (Known Issue #8).
+- [x] Delete unused UI components (`Header`, `RightSidebar`, `Main`, `Notification`) (Known Issue #8). **Done.** Unused API clients still open.
 - [ ] Rename `embeddings_test` to a non-test name and normalize the files list response shape (Known Issue #10).
 
 ## Phase 3: Feature roadmap
