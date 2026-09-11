@@ -43,8 +43,7 @@ Everything (Docling parsing, BGE-M3 embeddings, BGE reranker, chat LLM) runs loc
 - CORS allows all origins (`allow_origins=["*"]`).
 
 ### `config.py` — configuration
-- `UPLOAD_DIR`, hardcoded model paths (`D:\models\...`), and `LLM_URL = os.getenv("LLM_URL")`.
-- Dead entries kept for reference: `ALL_MINILM_L6_V2_MODEL_PATH`, `OLLAMA_URL`, `OLLAMA_EXTRACTION_MODEL` (no live code path uses them).
+- `UPLOAD_DIR`, model paths (`BGE_M3_MODEL_PATH`, `BGE_RERANKER_V2_M3` — env-configurable with local `models/` fallbacks), and `LLM_URL = os.getenv("LLM_URL")`.
 
 ### `core/`
 - `db.py` — `pg_connection()` (sync `psycopg2` context manager). Reads the `DB_*` env vars.
@@ -56,7 +55,6 @@ Everything (Docling parsing, BGE-M3 embeddings, BGE reranker, chat LLM) runs loc
 |---|---|
 | `pipeline.py` | `RagPipeline` — ingestion primitives (load → chunk → embed → store). Base for the RAG classes. |
 | `vector_rag.py` | `VectorRAG(RagPipeline)` — **the active retrieval orchestrator**: vector + full-text search with Reciprocal Rank Fusion and BGE reranking (used by both prompt endpoints). |
-| `base.py` | `BaseRAG` ABC — currently unused by the concrete classes. |
 
 ### `routes/` — HTTP layer
 Thin handlers over `core.db` / `core.dependencies`, with response shaping. Full table below.
@@ -162,7 +160,7 @@ Tracked items where the code differs from intent or is broken/unfinished. File r
 | 3 | **Frontend port mismatch:** `/process` trigger hardcoded to `http://localhost:5000`. **Fixed:** now uses `API` from `src/config.js`. | `frontend/src/hooks/notebooks/useFiles.js` (fixed) |
 | 4 | **Broken upload error path:** `uploadFileAPI` referenced undefined `uuidv4`/`setFiles`. **Fixed:** error branch now throws. | `frontend/src/services/files.js` (fixed) |
 | 5 | **Wrong id in error branch:** `useMessages` persisted an error with bare `id` (undefined). **Fixed:** now uses `notebook_id`. | `frontend/src/hooks/notebooks/useMessages.js` (fixed) |
-| 6 | **Dead code / unused:** `all-MiniLM-L6-v2` path, Ollama vars in `config.py`; `BaseRAG` unused; commented-out semantic chunker in `pipeline.py`. | `backend/config.py`, `backend/rag/base.py`, `backend/rag/pipeline.py` |
+| 6 | **Dead code / unused:** `all-MiniLM-L6-v2` path, Ollama vars in `config.py`; `BaseRAG`; commented-out semantic chunker in `pipeline.py`. **Fixed:** all removed — `config.py` holds only live keys, `rag/base.py` deleted, chunker block deleted from `pipeline.py`. | `backend/config.py`, `backend/rag/pipeline.py` (fixed) |
 | 7 | **Hardcoded Windows model paths** (`D:\models\...`) and hardcoded `.pdf` storage suffix regardless of uploaded type → not portable; only PDFs ingest reliably. | `backend/config.py`, `backend/routes/files.py:178` |
 | 8 | **Unmounted/dead UI:** `Header`, `RightSidebar`, `Main`, `Notification` are not rendered; several exported API functions and `sendMessage` (non-stream) are unused. | `frontend/src/pages/Notebook.jsx`, `frontend/src/components/notebook/` |
 | 9 | **Test coverage is minimal & environment-bound:** the single test loads local models on app construction and only checks `/api/health`. | `backend/tests/test_app.py` |

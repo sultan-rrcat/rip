@@ -17,7 +17,7 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 - [ ] Decide and document the LLM endpoint + model contract (OpenAI-compatible `/v1/chat/completions`, `qwen2.5-coder-14b`) as the single source of truth.
 
 ## Phase 1: Ingestion & retrieval hardening
-- [ ] Make model paths configurable via env (remove hardcoded `D:\models\...`) (Known Issue #7).
+- [x] Make model paths configurable via env (remove hardcoded `D:\models\...`) (Known Issue #7). **Done:** `BGE_M3_MODEL_PATH`/`BGE_RERANKER_V2_M3` read from env with local fallbacks.
 - [ ] Preserve the real uploaded file extension instead of always storing `.pdf`; validate supported types (Known Issue #7).
 - [ ] Re-enable or remove the disabled semantic chunker (`rag/pipeline.py`); tune chunking for equations/tables.
 - [ ] Add durable ingestion status/job tracking (currently a background task with no retry or progress) — relates to ADR-005.
@@ -25,8 +25,8 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 
 ## Phase 2: Dead code & cleanup
 - [x] Remove the `AgenticRAG` stub (removed along with the graph RAG stack; see ADR-007).
-- [ ] Remove or wire the unused `BaseRAG` (Known Issue #6; see ADR-006).
-- [ ] Remove unused `all-MiniLM-L6-v2` and Ollama config entries (Known Issue #6).
+- [x] Remove or wire the unused `BaseRAG` (Known Issue #6; see ADR-006). **Done:** `rag/base.py` deleted; `VectorRAG` extends `RagPipeline` directly.
+- [x] Remove unused `all-MiniLM-L6-v2` and Ollama config entries (Known Issue #6). **Done:** only live keys remain in `config.py`; commented-out semantic chunker removed from `pipeline.py`.
 - [ ] Mount or delete unused UI components (`Header`, `RightSidebar`, `Main`, `Notification`) and unused API clients (Known Issue #8).
 - [ ] Rename `embeddings_test` to a non-test name and normalize the files list response shape (Known Issue #10).
 

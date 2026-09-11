@@ -91,7 +91,6 @@ git push origin main
 
 - **Env vars:** all LLM calls read `LLM_URL` (from `config.py`); set `LLM_URL`. (The old unused `LLM_API_URL` read in `app.py` was removed.)
 - **Ports:** backend runs on `8000` (per `frontend/src/config.js`); the `/process` trigger now uses that same base URL. Keep API calls routed through `src/config.js` rather than hardcoding ports.
-- **Model paths are hardcoded** to `D:\models\...` in `config.py`; changing them affects ingestion/startup.
-- **`BaseRAG` is unused** — the concrete RAG classes extend `RagPipeline` directly; don't build on `BaseRAG` as if it's wired in.
+- **Model paths** (`BGE_M3_MODEL_PATH`, `BGE_RERANKER_V2_M3`) are env-configurable with local `models/` fallbacks; changing them affects ingestion/startup.
 - **Retrieval:** both `/api/prompt` and `/api/prompt/stream` use `VectorRAG` (the graph RAG stack was removed; see ADR-007).
 - When you fix a bug from the Known Issues list, move/annotate it in `docs/ARCHITECTURE.md` and `docs/PLAN.md` accordingly.
