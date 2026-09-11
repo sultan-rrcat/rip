@@ -14,7 +14,7 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 - [x] Fix frontend port mismatch: route the `/process` call through `src/config.js` instead of hardcoded `localhost:5000` (Known Issue #3).
 - [x] Fix `uploadFileAPI` error branch (undefined `uuidv4`/`setFiles`) (Known Issue #4).
 - [x] Fix `useMessages` error branch using `id` instead of `notebook_id` (Known Issue #5).
-- [ ] Decide and document the LLM endpoint + model contract (OpenAI-compatible `/v1/chat/completions`, `qwen2.5-coder-14b`) as the single source of truth.
+- [x] Decide and document the LLM endpoint + model contract (OpenAI-compatible `/v1/chat/completions`, `qwen2.5-coder-14b`) as the single source of truth. **Done:** documented in `SETUP.md`, `ARCHITECTURE.md`, `ADR.md`, and `Readme.md`; live behavior pinned by the prompt integration tests.
 
 ## Phase 1: Ingestion & retrieval hardening
 - [x] Make model paths configurable via env (remove hardcoded `D:\models\...`) (Known Issue #7). **Done:** `BGE_M3_MODEL_PATH`/`BGE_RERANKER_V2_M3` read from env with local fallbacks.

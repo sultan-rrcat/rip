@@ -51,3 +51,20 @@
   - Deleted `prompt.md` (historical generation prompt referencing `graph_rag.py`).
 - **Notes:** verified with `ruff check` (no new errors vs. pre-existing baseline), `pytest`, and an import smoke test of the FastAPI app. Existing data in the Neo4j database is orphaned; dropping the Neo4j service/database is an ops step outside the repo.
 - **Status:** Completed successfully.
+
+---
+
+## [2026-09-11] - PLAN.md remaining-issues sweep
+- **Task:** Fix the remaining PLAN.md items (#6 dead code, #7 `.pdf` hardcoding, #8 dead UI, #9 tests, #10 table rename, Phase 0 LLM contract); commit step-by-step.
+- **Actions Taken:**
+  - Committed pre-existing working-copy changes in two commits (`refactor(backend)` dead-code removal, `chore(docker)` proxy build args).
+  - #6: verified `OLLAMA_*`/`BaseRAG`/semantic chunker gone from code; marked Known Issue #6 fixed in `ARCHITECTURE.md`/`PLAN.md`; cleaned `AGENT.md` traps.
+  - #7: upload (`routes/files.py`) and ingestion (`services/file_processor.py`) now preserve the real file extension (`.pdf` fallback); marked fixed in docs.
+  - #8: deleted `Header.tsx`, `RightSidebar.tsx`, `Main.tsx`, `Notification.tsx`; cleaned `Notebook.tsx` comments; `tsc -b` passes.
+  - #10: renamed `embeddings_test` → `embeddings` in `schema.sql` + `pipeline.py` + `vector_rag.py` + docs; migration comment in `schema.sql` header.
+  - #9: new 14-test integration suite (`conftest.py` + `test_app.py`) on the real stack — DB/models/APIs, no mocks; prompt tests skip when the LLM is down. Run with the `agent_env` interpreter.
+  - Fixes found via testing: `config.py` now accepts `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` aliases (`.env` names didn't match the `*_PATH` names `config.py` read, so local boot crashed); `schema.sql` FK constraint made re-runnable via a `DO` guard.
+  - Phase 0: LLM endpoint + model contract checkbox marked done.
+- **Verification:** `pytest` 14/14 PASSED with `agent_env` (exit 0); backend boots via direct `uvicorn` (`/api/health` ok); frontend serves via `npm run dev` (200).
+- **Known cosmetic issue:** test runs print a shutdown access-violation dump from native threads after going green (exit code stays 0); noted in `AGENT.md`.
+- **Status:** Completed successfully.
