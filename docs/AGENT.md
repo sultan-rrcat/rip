@@ -26,10 +26,10 @@ backend/app/
   tools/base.py, registry.py, executor.py, rag_query.py  # rest Phase 2
   orchestration/plan.py, planner.py, validator.py, aggregator.py,
     engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
-  store/conversations.py  # Postgres, notebook-scoped
-  runs/manager.py         # ephemeral
+  store/runs.py          # Postgres CRUD for runs + run_events
+  runs/manager.py        # Postgres-backed RunManager
   bff/envelope.py
-  api/runs.py, conversations.py, admin.py (3 endpoints), health.py
+  api/runs.py, admin.py (3 endpoints), health.py
 frontend/src/
   services/runs.ts, types/runs.ts
   hooks/notebooks/useMessages.ts  # useState+EventSource, no zustand/query
@@ -61,6 +61,7 @@ End: `pytest` + `ruff`, check box with commit SHA, append `SESSION_LOG.md` (`## 
 - **Ollama, not `LLM_URL`.** Set `OLLAMA_BASE_URL`, model `qwen2.5:14b`.
 - **Port `8000`.** No `8010`. Frontend `VITE_API_URL`, vite proxies `/v1/` only.
 - **`/api/prompt[/stream]` gone.** Use `POST /v1/runs` + SSE. Keep `/api/health` alias.
-- **`messages.conversation_id` nullable.** `NULL` = pre-merge history; new writes set `notebook_id + conversation_id`.
-- **Summary only when >10 turns.** Don't force per-request summarization.
+- **`messages.conversation_id` dropped.** Messages linked by `notebook_id` only. One notebook = one conversation.
+- **Summary by context window, not turn count.** Triggers at ~70% of model context. Don't force per-request summarization.
+- **Runs persist to Postgres.** `runs` + `run_events` tables. SSE replays full event history on reconnect. Only stop button terminates.
 - **Test teardown dump** (torch/CUDA access-violation after pass, exit 0) is not a failure.

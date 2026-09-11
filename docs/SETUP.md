@@ -46,7 +46,7 @@ No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
 ```
 
-Creates `notebooks`, `files`, `messages` (+ `conversation_id`), `embeddings`, `conversations`, HNSW + GIN indexes.
+Creates `notebooks` (with summary fields), `files`, `messages`, `embeddings`, `runs`, `run_events`, HNSW + GIN indexes.
 
 ## 4. Run (Day-1: Postgres + Ollama only)
 
@@ -71,7 +71,7 @@ Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (alias `GET
 1. Create notebook, upload PDF → `ready`.
 2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.
 3. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta*→step_completed→summary→run_completed`.
-4. Confirm `rag.query` chunks + Ollama answer; conversation row has `summary` only when >10 turns.
+4. Confirm `rag.query` chunks + Ollama answer; notebook has `summary` when context window ~70% full.
 
 ## 6. Tests & lint
 
