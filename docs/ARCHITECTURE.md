@@ -24,7 +24,7 @@ Decoupled client–server over HTTP. Browser → FastAPI → PostgreSQL (pgvecto
                   ▼                                          ▼                               ▼
     ┌──────────────────────────┐             ┌─────────────────────────────────┐
     │ PostgreSQL + pgvector    │             │  OpenAI-compatible LLM endpoint │
-    │  embeddings_test (1024d) │             │  /v1/chat/completions           │
+    │  embeddings (1024d) │             │  /v1/chat/completions           │
     │  notebooks · files ·     │             │  model: qwen2.5-coder-14b       │
     │  messages                │             └─────────────────────────────────┘
     └──────────────────────────┘
@@ -90,7 +90,7 @@ Previously unmounted components (`Header`, `RightSidebar`, `Main`, `Notification
 | `notebooks` | `notebook_id` PK, `notebook_name`, `created_at` | Top-level grouping unit |
 | `files` | `file_id` PK, `notebook_id` FK→`notebooks` (CASCADE), `file_name`, `file_size`, `file_status`, `created_at` | `file_status` ∈ {`processing`, `ready`, `error`} (set in code) |
 | `messages` | `message_id` PK, `notebook_id` FK→`notebooks` (CASCADE), `role` (CHECK ∈ `user/assistant/error`), `text`, `sources` jsonb, `created_at` | Chat history per notebook |
-| `embeddings_test` | `embedding_id` PK, `file_id` FK→`files` (CASCADE), `chunk_text`, `embedding vector(1024)`, `text_search tsvector` (generated, English), `metadata` jsonb, `chunk_index` | Chunk store; naming retains an early `_test` suffix |
+| `embeddings` | `embedding_id` PK, `file_id` FK→`files` (CASCADE), `chunk_text`, `embedding vector(1024)`, `text_search tsvector` (generated, English), `metadata` jsonb, `chunk_index` | Chunk store |
 
 Indexes: HNSW on `embedding` (`vector_cosine_ops`); GIN on `text_search`.
 
@@ -104,7 +104,7 @@ Triggered by `POST /api/files/{file_id}/process` as a FastAPI background task �
 2. Parse with **Docling** (`MarkdownDocument`), fallback to LangChain PDF loader (`pipeline.py document_loader`).
 3. Split by Markdown headers (`#/##/###` → H1/H2/H3 section metadata) via `MarkdownHeaderTextSplitter`; semantic chunking exists but is commented out.
 4. Embed each chunk with **BGE-M3** (1024-dim).
-5. Store chunks in `embeddings_test`.
+5. Store chunks in `embeddings`.
 6. Mark file `ready`; on any failure mark `error`.
 
 ---
@@ -164,4 +164,4 @@ Tracked items where the code differs from intent or is broken/unfinished. File r
 | 7 | **Hardcoded Windows model paths** (`D:\models\...`) and hardcoded `.pdf` storage suffix regardless of uploaded type → not portable; only PDFs ingest reliably. **Fixed:** model paths are env-configurable (`config.py`); upload + ingestion preserve the real file extension (`routes/files.py`, `services/file_processor.py`). | `backend/config.py`, `backend/routes/files.py`, `backend/services/file_processor.py` (fixed) |
 | 8 | **Unmounted/dead UI:** `Header`, `RightSidebar`, `Main`, `Notification` were not rendered. **Fixed:** deleted; `Notebook.tsx` comment blocks removed. Several exported API functions and `sendMessage` (non-stream) remain unused. | `frontend/src/pages/Notebook.tsx` (fixed) |
 | 9 | **Test coverage is minimal & environment-bound:** the single test loads local models on app construction and only checks `/api/health`. | `backend/tests/test_app.py` |
-| 10 | **Legacy naming:** the embeddings table is `embeddings_test`; file display uses `{id,name,size,status}` while DB columns are `file_*`. | `backend/schema.sql`, `backend/routes/files.py` |
+| 10 | **Legacy naming:** the embeddings table was `embeddings_test`. **Fixed:** renamed to `embeddings` across `schema.sql` + code (existing DBs: see the migration comment in `schema.sql`). File display uses `{id,name,size,status}` while DB columns are `file_*`. | `backend/schema.sql`, `backend/routes/files.py` (partially fixed) |

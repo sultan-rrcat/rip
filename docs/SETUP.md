@@ -63,7 +63,7 @@ No migration/bootstrap script exists. Create the schema once, manually:
    psql "host=<DB_HOST> port=<DB_PORT> dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
    ```
 
-`schema.sql` creates four tables — `notebooks`, `files`, `messages`, `embeddings_test` — plus an HNSW vector index (`embeddings_test_embedding_idx`) and a GIN full-text index (`text_search_idx`).
+`schema.sql` creates four tables — `notebooks`, `files`, `messages`, `embeddings` — plus an HNSW vector index (`embeddings_embedding_idx`) and a GIN full-text index (`text_search_idx`). Existing databases created before the rename need the migration in the `schema.sql` header comment.
 
 ---
 

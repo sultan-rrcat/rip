@@ -1,11 +1,17 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Table: public.embeddings_test
+-- Table: public.embeddings
+--
+-- Migration for existing databases:
+--   ALTER TABLE IF EXISTS public.embeddings_test RENAME TO embeddings;
+--   ALTER INDEX IF EXISTS public.embeddings_test_pkey RENAME TO embeddings_pkey;
+--   ALTER INDEX IF EXISTS public.embeddings_test_embedding_idx RENAME TO embeddings_embedding_idx;
+--   ALTER TABLE IF EXISTS public.embeddings RENAME CONSTRAINT embeddings_test_file_id_fkey TO embeddings_file_id_fkey;
 
--- DROP TABLE IF EXISTS public.embeddings_test;
+-- DROP TABLE IF EXISTS public.embeddings;
 
-CREATE TABLE IF NOT EXISTS public.embeddings_test
+CREATE TABLE IF NOT EXISTS public.embeddings
 (
     embedding_id uuid NOT NULL DEFAULT gen_random_uuid(),
     file_id uuid,
@@ -15,17 +21,17 @@ CREATE TABLE IF NOT EXISTS public.embeddings_test
     metadata jsonb,
     text_search tsvector GENERATED ALWAYS AS (to_tsvector('english'::regconfig, chunk_text)) STORED,
     chunk_index integer,
-    CONSTRAINT embeddings_test_pkey PRIMARY KEY (embedding_id)
+    CONSTRAINT embeddings_pkey PRIMARY KEY (embedding_id)
 )
 
 TABLESPACE pg_default;
 
--- Index: embeddings_test_embedding_idx
+-- Index: embeddings_embedding_idx
 
--- DROP INDEX IF EXISTS public.embeddings_test_embedding_idx;
+-- DROP INDEX IF EXISTS public.embeddings_embedding_idx;
 
-CREATE INDEX IF NOT EXISTS embeddings_test_embedding_idx
-    ON public.embeddings_test USING hnsw
+CREATE INDEX IF NOT EXISTS embeddings_embedding_idx
+    ON public.embeddings USING hnsw
     (embedding vector_cosine_ops)
     TABLESPACE pg_default;
 -- Index: text_search_idx
@@ -33,7 +39,7 @@ CREATE INDEX IF NOT EXISTS embeddings_test_embedding_idx
 -- DROP INDEX IF EXISTS public.text_search_idx;
 
 CREATE INDEX IF NOT EXISTS text_search_idx
-    ON public.embeddings_test USING gin
+    ON public.embeddings USING gin
     (text_search)
     TABLESPACE pg_default;
 
@@ -59,8 +65,8 @@ CREATE TABLE IF NOT EXISTS public.files
 
 TABLESPACE pg_default;
 
-ALTER TABLE IF EXISTS public.embeddings_test
-    ADD CONSTRAINT embeddings_test_file_id_fkey FOREIGN KEY (file_id)
+ALTER TABLE IF EXISTS public.embeddings
+    ADD CONSTRAINT embeddings_file_id_fkey FOREIGN KEY (file_id)
     REFERENCES public.files (file_id)
     ON UPDATE NO ACTION
     ON DELETE CASCADE;

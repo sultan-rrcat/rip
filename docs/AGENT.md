@@ -32,10 +32,10 @@ Guidance for human and AI-agent contributors working in this repository. This fi
 ```
 backend/
   app.py            FastAPI app; mounts routes; lifespan loads VectorRAG
-  config.py         upload dir, model paths (D:\models\...), LLM_URL
-  schema.sql        Postgres schema (notebooks, files, messages, embeddings_test)
+  config.py         upload dir, model paths (env-configurable), LLM_URL
+  schema.sql        Postgres schema (notebooks, files, messages, embeddings)
   core/             db.py, dependencies.py, logging.py
-  rag/              pipeline.py (ingestion), vector_rag.py (active), base.py (unused)
+  rag/              pipeline.py (ingestion), vector_rag.py (active)
   routes/           notebooks.py, files.py, messages.py, llm.py
   services/         chat.py, file_processor.py, llm.py, rewritter.py (note spelling)
   tests/            test_app.py

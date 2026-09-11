@@ -20,7 +20,7 @@ class VectorRAG(RagPipeline):
                     cur.execute(
                         """
                         SELECT chunk_text, metadata, 1-(embedding<=>%s::vector) as similarity
-                        FROM embeddings_test
+                        FROM embeddings
                         WHERE file_id IN (select file_id from files where notebook_id=%s)
                         ORDER BY embedding<=>%s::vector
                         LIMIT %s
@@ -34,9 +34,9 @@ class VectorRAG(RagPipeline):
                     # 2. Keyword (Full Text) Search
                     cur.execute(
                         """
-                        SELECT chunk_text, metadata, 
+                        SELECT chunk_text, metadata,
                             ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
-                        FROM embeddings_test
+                        FROM embeddings
                         WHERE file_id IN (select file_id from files where notebook_id=%s)
                         AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
                         ORDER BY rank DESC

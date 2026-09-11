@@ -158,7 +158,7 @@ class RagPipeline:
                     for i, (doc, embedding) in enumerate(zip(chunks, embeddings)):
                         cur.execute(
                             """
-                            INSERT INTO embeddings_test 
+                            INSERT INTO embeddings
                                 (file_id, chunk_index, chunk_text, embedding, metadata)
                             VALUES (%s, %s, %s, %s, %s)
                             RETURNING embedding_id
