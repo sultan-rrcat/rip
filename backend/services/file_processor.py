@@ -25,7 +25,8 @@ async def run_rag_pipeline(file_id: str, rag: VectorRAG):
 
         notebook_id = str(result[0])
         file_name = result[1]
-        file_path = os.path.join(config.UPLOAD_DIR, notebook_id, f"{file_id}.pdf")
+        ext = os.path.splitext(file_name or "")[1] or ".pdf"
+        file_path = os.path.join(config.UPLOAD_DIR, notebook_id, f"{file_id}{ext}")
 
         logger.info(f"Starting pipeline: {file_name}")
 

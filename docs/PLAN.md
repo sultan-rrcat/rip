@@ -18,7 +18,7 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 
 ## Phase 1: Ingestion & retrieval hardening
 - [x] Make model paths configurable via env (remove hardcoded `D:\models\...`) (Known Issue #7). **Done:** `BGE_M3_MODEL_PATH`/`BGE_RERANKER_V2_M3` read from env with local fallbacks.
-- [ ] Preserve the real uploaded file extension instead of always storing `.pdf`; validate supported types (Known Issue #7).
+- [x] Preserve the real uploaded file extension instead of always storing `.pdf` (Known Issue #7). **Done:** upload + ingestion derive `{ext}` from the filename (`.pdf` fallback). Type validation still open.
 - [ ] Re-enable or remove the disabled semantic chunker (`rag/pipeline.py`); tune chunking for equations/tables.
 - [ ] Add durable ingestion status/job tracking (currently a background task with no retry or progress) — relates to ADR-005.
 - [ ] Expand backend tests beyond the health check; make them runnable without local models (Known Issue #9).

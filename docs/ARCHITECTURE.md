@@ -100,7 +100,7 @@ Indexes: HNSW on `embedding` (`vector_cosine_ops`); GIN on `text_search`.
 
 Triggered by `POST /api/files/{file_id}/process` as a FastAPI background task → `services/file_processor.run_rag_pipeline`:
 
-1. Load metadata; locate `backend/uploads/{notebook_id}/{file_id}.pdf` (note: always stored as `.pdf`).
+1. Load metadata; locate `backend/uploads/{notebook_id}/{file_id}{ext}` where `{ext}` is the uploaded file's extension (`.pdf` fallback).
 2. Parse with **Docling** (`MarkdownDocument`), fallback to LangChain PDF loader (`pipeline.py document_loader`).
 3. Split by Markdown headers (`#/##/###` → H1/H2/H3 section metadata) via `MarkdownHeaderTextSplitter`; semantic chunking exists but is commented out.
 4. Embed each chunk with **BGE-M3** (1024-dim).
@@ -140,7 +140,7 @@ Non-stream endpoint `POST /api/prompt` uses the same `VectorRAG` retrieval and r
 | `POST /api/notebooks/{id}/files` | Register file row | status `processing` |
 | `PATCH /api/files/{file_id}/status` | Update status | body `{status}` |
 | `DELETE /api/files/{file_id}` | Delete file | Postgres (embeddings cascade) |
-| `POST /api/files/upload` | Upload multipart | `notebook_id` + `file` (saved as `{file_id}.pdf`) |
+| `POST /api/files/upload` | Upload multipart | `notebook_id` + `file` (saved as `{file_id}{ext}`, preserving the uploaded extension) |
 | `POST /api/files/{file_id}/process` | Start background ingestion | returns `{"message":"processing started"}` |
 | `GET /api/notebooks/{id}/messages` | List chat history | ordered by `created_at ASC` |
 | `POST /api/notebooks/{id}/messages` | Save a message | body `{role, text, sources?}` |
@@ -161,7 +161,7 @@ Tracked items where the code differs from intent or is broken/unfinished. File r
 | 4 | **Broken upload error path:** `uploadFileAPI` referenced undefined `uuidv4`/`setFiles`. **Fixed:** error branch now throws. | `frontend/src/services/files.js` (fixed) |
 | 5 | **Wrong id in error branch:** `useMessages` persisted an error with bare `id` (undefined). **Fixed:** now uses `notebook_id`. | `frontend/src/hooks/notebooks/useMessages.js` (fixed) |
 | 6 | **Dead code / unused:** `all-MiniLM-L6-v2` path, Ollama vars in `config.py`; `BaseRAG`; commented-out semantic chunker in `pipeline.py`. **Fixed:** all removed — `config.py` holds only live keys, `rag/base.py` deleted, chunker block deleted from `pipeline.py`. | `backend/config.py`, `backend/rag/pipeline.py` (fixed) |
-| 7 | **Hardcoded Windows model paths** (`D:\models\...`) and hardcoded `.pdf` storage suffix regardless of uploaded type → not portable; only PDFs ingest reliably. | `backend/config.py`, `backend/routes/files.py:178` |
+| 7 | **Hardcoded Windows model paths** (`D:\models\...`) and hardcoded `.pdf` storage suffix regardless of uploaded type → not portable; only PDFs ingest reliably. **Fixed:** model paths are env-configurable (`config.py`); upload + ingestion preserve the real file extension (`routes/files.py`, `services/file_processor.py`). | `backend/config.py`, `backend/routes/files.py`, `backend/services/file_processor.py` (fixed) |
 | 8 | **Unmounted/dead UI:** `Header`, `RightSidebar`, `Main`, `Notification` are not rendered; several exported API functions and `sendMessage` (non-stream) are unused. | `frontend/src/pages/Notebook.jsx`, `frontend/src/components/notebook/` |
 | 9 | **Test coverage is minimal & environment-bound:** the single test loads local models on app construction and only checks `/api/health`. | `backend/tests/test_app.py` |
 | 10 | **Legacy naming:** the embeddings table is `embeddings_test`; file display uses `{id,name,size,status}` while DB columns are `file_*`. | `backend/schema.sql`, `backend/routes/files.py` |

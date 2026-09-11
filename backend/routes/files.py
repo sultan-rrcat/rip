@@ -141,8 +141,9 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
     notebook_path = os.path.join(config.UPLOAD_DIR, notebook_id)
     os.makedirs(notebook_path, exist_ok=True)
 
-    # Save file with file id
-    file_path = os.path.join(notebook_path, f"{file_id}.pdf")
+    # Save file with file id, preserving the uploaded extension
+    ext = os.path.splitext(file.filename or "")[1] or ".pdf"
+    file_path = os.path.join(notebook_path, f"{file_id}{ext}")
 
     content = await file.read()
     file_size = len(content)
