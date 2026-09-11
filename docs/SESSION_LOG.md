@@ -68,3 +68,19 @@
 - **Verification:** `pytest` 14/14 PASSED with `agent_env` (exit 0); backend boots via direct `uvicorn` (`/api/health` ok); frontend serves via `npm run dev` (200).
 - **Known cosmetic issue:** test runs print a shutdown access-violation dump from native threads after going green (exit code stays 0); noted in `AGENT.md`.
 - **Status:** Completed successfully.
+
+---
+
+## [2026-09-11] - Docs consolidation: MERGE_PLAN as single truth (hard rm)
+
+- **Task:** Make `MERGE_PLAN.md` survive vibe sessions; delete merge-dead docs; update helpers + README.
+- **Actions Taken:**
+  - `MERGE_PLAN.md`: added §0 Authority + session starter + invariants/forbidden list; salvaged ARCHITECTURE chunking/retrieval/ingestion notes to Appendix A; moved PLAN Phase 3 items to Phase 2; added Decision Log Q1–Q16.
+  - Deleted (hard `git rm`): `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/GITHUB_MIGRATION.md`.
+  - `ADR.md`: marked 002/003/006 superseded by merge; appended ADR-008..013 stubs.
+  - `SETUP.md`: rewrote to Day-1 target (Pydantic, Ollama, port 8000, compose, smoke test).
+  - `AGENT.md`: rewrote to `backend/app/` target map + merge ritual + traps.
+  - `Readme.md`: rewrote to RIP merge index pointing at MERGE_PLAN.
+- **Template for next sessions:**
+  `## [date] - MERGE Box #N - prompt/commit/status`
+- **Status:** Completed (uncommitted working tree).

@@ -1,98 +1,69 @@
-# RAG Chatbot Assistant (NotebookLM-style)
+# RIP — Research Intelligence Platform (Athena→RIP Merge)
 
-A RAG chatbot prototype ("RIP") in the style of Google NotebookLM, built for a physics R&D organization. The system is designed for **internal, offline use only**: data, models, and processing stay within the local network.
+Single-codebase, offline research assistant: document RAG + multi-agent orchestration + tool execution.
 
-> Project/repo name: `rip-prototype` · Python backend + React frontend.
-
----
-
-## What it does
-
-- Create **notebooks** that group uploaded documents and a chat history.
-- Upload PDFs, which are parsed (**Docling**), chunked, embedded, and indexed in a vector store (PostgreSQL + pgvector).
-- Ask questions against a notebook; answers are produced from **hybrid retrieval** (vector similarity + full-text) reranked and fed to a local LLM, with sources returned.
-- Chat is streamed token-by-token over SSE.
-
-See `docs/ARCHITECTURE.md` for the full picture and `docs/SETUP.md` to run it locally.
+> **Single point of truth: `docs/MERGE_PLAN.md`.** Start every vibe session there (§0 Authority + session starter). This README is an index only.
 
 ---
 
-## Current status (prototype)
+## What it does (Day-1 target)
 
-Core end-to-end flow works: create notebook → upload PDF → background ingestion → streamed Q&A with source listing. Several rough edges, dead-code paths, and known bugs are tracked in the [Known Issues & Deviations](docs/ARCHITECTURE.md#known-issues--deviations) section and in `docs/PLAN.md`.
+- Notebooks group documents + chat threads (`conversations` notebook-scoped).
+- Uploads parsed (Docling), chunked, embedded (BGE-M3), stored in Postgres+pgvector.
+- Chat goes through `POST /v1/runs` + SSE (`run_started→plan→delta→summary→run_completed`) with reasoning agent + `rag.query`.
+- Phase 2 (deferred): coding/vision agents, `plot.chart`, `doc.generate`, `code.sandbox`, `image.generate`, Redis, Langfuse container.
 
----
-
-## Tech stack (as implemented)
-
-### Frontend (`frontend/`)
-- React 19 + Vite (dev/build tooling)
-- Tailwind CSS v4 (via `@tailwindcss/vite`) for styling
-- Material UI v7 + MUI icons for interactive components (default theme)
-- React Router v7 · `react-markdown` / `remark-gfm` for chat rendering
-
-### Backend (`backend/`)
-- FastAPI (Python 3.11+), async lifespan startup, background-task ingestion
-- PostgreSQL with **pgvector** (vector search + full-text via `tsvector`/GIN)
-
-### Models
-| Role | Model | How it is reached |
-|---|---|---|
-| LLM (chat, rewriting) | `qwen2.5-coder-14b` | OpenAI-compatible HTTP endpoint at `LLM_URL` (env) |
-| Embeddings | `bge-m3` (1024-dim) | Local weights, hardcoded `D:\models\bge-m3` in `backend/config.py` |
-| Reranker | `bge_reranker_v2_m3` | Local weights, hardcoded `D:\models\reranker\bge_reranker_v2_m3` |
-| Document parsing | Docling | Local library |
+Pre-merge prototype (VectorRAG notebook Q&A) works; merge replaces `/api/prompt[/stream]` with `/v1/runs`.
 
 ---
 
-## Repository layout
+## Tech stack (target)
+
+| Role | Choice |
+|---|---|
+| Backend | FastAPI 3.11+, LangGraph DAG, `backend/app/` root |
+| Retrieval | `VectorRAG`: pgvector cosine + full-text RRF + BGE rerank |
+| LLM | Ollama `qwen2.5:14b` (`OLLAMA_BASE_URL`) |
+| DB | Postgres+pgvector (`notebooks/files/embeddings/conversations/messages`) |
+| Frontend | React 19 + Vite, Tailwind + MUI v7, `useState+EventSource` (no store lib Day-1) |
+
+---
+
+## Layout
 
 ```
-├── backend/            FastAPI app
-│   ├── app.py          App entry, lifespan, router mounting
-│   ├── config.py       Model paths, upload dir, env reads
-│   ├── schema.sql      PostgreSQL schema (notebooks, files, messages, embeddings)
-│   ├── core/           DB connections, logging, FastAPI deps
-│   ├── rag/            Retrieval: pipeline, vector_rag
-│   ├── routes/         HTTP endpoints: notebooks, files, messages, llm
-│   ├── services/       chat, file_processor, llm, rewritter
-│   ├── tests/          Minimal tests
-│   └── uploads/        Uploaded files (per-notebook, git-ignored)
-├── frontend/           React + Vite SPA
-│   └── src/
-│       ├── pages/      Home (notebook gallery), Notebook (workspace)
-│       ├── components/ Card, LeftSidebar, ChatArea, Footer (+ unmounted Header/RightSidebar)
-│       ├── hooks/      useNotebook, useMessages, useFiles
-│       └── services/   API clients (notebooks, files, messages, llm)
-├── pyproject.toml      Backend dependency manifest + ruff/pytest config
-└── .env.example        Environment variable template
+backend/app/   main.py, core/, rag/, routes/, services/, providers/, agents/,
+               tools/, orchestration/, store/, runs/, bff/, api/
+frontend/src/  pages/, components/, hooks/notebooks/, services/runs.ts, types/runs.ts
+docs/          MERGE_PLAN.md (master), AGENT.md, SETUP.md, ADR.md, SESSION_LOG.md
 ```
 
 ---
 
 ## Quickstart
 
-1. Follow `docs/SETUP.md` (env, Postgres+pgvector, models, dependency install).
-2. Backend: `cd backend && uvicorn app:app --host 0.0.0.0 --port 8000 --reload`
-3. Frontend: `cd frontend && npm install && npm run dev`
+1. `docs/SETUP.md` (env, DB, Ollama, compose).
+2. `docker compose up postgres backend frontend` — Day-1 boot.
+3. Frontend dev: `cd frontend && npm install && npm run dev`.
 
-The frontend targets the backend URL defined in `frontend/src/config.js`.
+Backend: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`.
 
 ---
 
-## Documentation index
+## Documentation index (surviving files only)
 
-| Document | Audience | Purpose |
-|---|---|---|
-| `docs/SETUP.md` | Onboarding devs | Exact install, config, and run steps |
-| `docs/ARCHITECTURE.md` | Devs + stakeholders | Topology, data flow, API, known issues |
-| `docs/AGENT.md` | AI agents / sessions | Working rules + accurate repo map |
-| `docs/ADR.md` | Stakeholders + devs | Architecture decision records |
-| `docs/PLAN.md` | Devs | Status-true roadmap |
-| `docs/SESSION_LOG.md` | Devs | Session history |
+| Document | Purpose |
+|---|---|
+| `docs/MERGE_PLAN.md` | **Master spec** — goal, decisions Q1–Q16, contracts, order, logs |
+| `docs/SETUP.md` | Runnable env/DB/compose/smoke test |
+| `docs/AGENT.md` | Session rules + target map + ritual |
+| `docs/ADR.md` | History + merge ADRs 008–013 |
+| `docs/SESSION_LOG.md` | Append-only session history |
+
+Deleted as merge-dead: `ARCHITECTURE.md` (salvaged to MERGE Appendix A), `PLAN.md` (open items → MERGE Phase 2), `GITHUB_MIGRATION.md` (ops one-off).
 
 ---
 
 ## Contributing
 
-Follow the git feature-branch workflow in `docs/AGENT.md`. Keep the docs in sync when behavior changes, and update the Known Issues section when bugs are fixed.
+Feature-branch workflow. One MERGE_PLAN box per session. Update box + `SESSION_LOG.md`; deviations need ADR entry.

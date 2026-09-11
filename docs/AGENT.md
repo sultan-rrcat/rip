@@ -1,97 +1,66 @@
 # Agent & Vibe Coding Guidelines (`AGENT.md`)
 
-Guidance for human and AI-agent contributors working in this repository. This file is kept in sync with the actual code — the folder map and commands below are verified.
+> Merge mode: `docs/MERGE_PLAN.md` is authoritative. Read it §0→API fully before any Athena→RIP work. On conflict, MERGE_PLAN wins.
 
 ---
 
 ## 1. Core principles
 
-- **Privacy & offline-first.** Never add dependencies or code that sends telemetry, logs, or user documents to external cloud services. Everything runs locally or against the internal `LLM_URL`. The whole point of this project is that it stays air-gapped.
-- **Fidelity to the real layout.** Respect the separation:
-  - `backend/routes/` — HTTP endpoints only (thin handlers).
-  - `backend/services/` — business logic (chat, file processing, LLM calls, query rewriting).
-  - `backend/rag/` — retrieval & ingestion engine.
-  - `backend/core/` — DB connections, logging, FastAPI deps, prompt templates.
-  - `frontend/src/components/`, `pages/`, `hooks/`, `services/` — keep API calls in `services/` and data-fetching logic in `hooks/`.
-- **No guessing.** When facing architectural ambiguity, missing requirements, or library choices, **ask the user** rather than guessing. This is a hard rule.
-- **Document reality, not intention.** If behavior drifts from the docs, update the docs (and the Known Issues list in `docs/ARCHITECTURE.md`) rather than hiding the drift.
+- **Privacy & offline-first.** No telemetry or external SaaS. Ollama + local weights only.
+- **One box per session.** Implement exactly one unchecked Day-1 box from MERGE_PLAN Implementation Order. No parallel half-edits.
+- **No guessing.** Ask on architectural ambiguity. Never invent endpoints, config keys, or deps.
+- **Document reality.** Append `SESSION_LOG.md`; append MERGE_PLAN Decision Log for deviations (new ADR entry). Never silently rewrite Decisions/Inavariants.
 
----
-
-## 2. Coding & style conventions
-
-- **Backend (Python):** strict type hints; follow the existing FastAPI dependency-injection pattern (`core/dependencies.py`); use async where I/O-bound; blocking ML work is offloaded with `asyncio.to_thread`. Config goes in `backend/config.py` / env, not scattered in files. Ruff config is in `pyproject.toml` (line length 88, target py311).
-- **Frontend (React):** clean functional components with hooks. Styling is Tailwind utility classes plus MUI v7 components/icons (MUI uses its default theme — do not introduce a `ThemeProvider` unless asked). API access goes through `src/services/*` and is consumed by `src/hooks/*`; components should not `fetch` directly.
-- **Comments:** explain *why*, not *what*. No conversational commentary. (Note: much existing code has emoji/banner comments — don't propagate that style into new code unless asked.)
-- **Dependencies:** backend deps live in the root `pyproject.toml` (there is **no** `requirements.txt`). Frontend deps in `frontend/package.json`.
-
----
-
-## 3. Repository map (current, verified)
+## 2. Target layout (Day-1, `backend/app/` root)
 
 ```
-backend/
-  app.py            FastAPI app; mounts routes; lifespan loads VectorRAG
-  config.py         upload dir, model paths (env-configurable), LLM_URL
-  schema.sql        Postgres schema (notebooks, files, messages, embeddings)
-  core/             db.py, dependencies.py, logging.py
-  rag/              pipeline.py (ingestion), vector_rag.py (active)
-  routes/           notebooks.py, files.py, messages.py, llm.py
-  services/         chat.py, file_processor.py, llm.py, rewritter.py (note spelling)
-  tests/            test_app.py
+backend/app/
+  main.py              lifespan (VectorRAG) + /v1 mounts
+  core/config.py       Pydantic Settings (port 8000, OLLAMA_*)
+  core/db.py, dependencies.py, logging.py
+  rag/pipeline.py, vector_rag.py
+  routes/notebooks.py, files.py, messages.py   # llm.py DELETED
+  services/chat.py, file_processor.py, rewritter.py
+  providers/base.py, ollama.py                 # Day-1
+  agents/base.py, registry.py, reasoning.py    # coding/vision Phase 2
+  tools/base.py, registry.py, executor.py, rag_query.py  # rest Phase 2
+  orchestration/plan.py, planner.py, validator.py, aggregator.py,
+    engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
+  store/conversations.py  # Postgres, notebook-scoped
+  runs/manager.py         # ephemeral
+  bff/envelope.py
+  api/runs.py, conversations.py, admin.py (3 endpoints), health.py
 frontend/src/
-  pages/            Home.jsx, Notebook.jsx
-  components/       home/Card.jsx; notebook/LeftSidebar, ChatArea, Footer (mounted);
-                    notebook/Header, RightSidebar, Main, Notification (NOT mounted)
-  hooks/notebooks/  useNotebook.js, useMessages.js, useFiles.js
-  services/         notebooks.js, messages.js, files.js, llm.js
-  config.js         backend base URL (http://localhost:8000)
-pyproject.toml      backend manifest + ruff + pytest
-.env.example        env template
+  services/runs.ts, types/runs.ts
+  hooks/notebooks/useMessages.ts  # useState+EventSource, no zustand/query
 ```
 
----
+## 3. Coding & style
 
-## 4. Git workflow
+- **Backend:** strict type hints, `from app.*` imports, DI via `core/dependencies.py`, async I/O, `asyncio.to_thread` for ML. Config in `core/config.py` only. Ruff 88/py311.
+- **Frontend:** functional components + hooks. API in `services/*`, data in `hooks/*`, no direct `fetch` in components. Tailwind + MUI v7 default theme. Explain *why*, not *what*.
+- **Deps:** backend root `pyproject.toml` (no `requirements.txt`); frontend `package.json`. Day-1 adds none.
 
-Follow the established feature-branch workflow:
+## 4. Session ritual
 
-```bash
-git checkout main
-git pull origin main
-git checkout -b feature/<feature-name>
-# make changes, test, commit
-git add .
-git commit -m "descriptive message"
-git push --set-upstream origin feature/<feature-name>
-git rebase main
-git checkout main
-git merge feature/<feature-name>
-git push origin main
-```
-
----
+Start: read MERGE_PLAN §0→API, pick one Day-1 box.
+End: `pytest` + `ruff`, check box with commit SHA, append `SESSION_LOG.md` (`## [date] - MERGE Box #N - prompt/commit/status`).
 
 ## 5. Commands
 
 | Task | Command | Where |
 |---|---|---|
-| Install backend | `pip install -e .` | repo root |
-| Run backend | `uvicorn app:app --host 0.0.0.0 --port 8000 --reload` | `backend/` |
-| Backend tests | `C:\Users\trainee\ENV\agent_env\Scripts\python.exe -m pytest` (the `agent_env` interpreter has all backend deps; system Python does not) | repo root |
-| Backend lint | `ruff` | repo root |
-| Frontend install | `npm install` | `frontend/` |
-| Frontend dev | `npm run dev` | `frontend/` |
-| Frontend lint | `npm run lint` | `frontend/` |
-| Frontend build | `npm run build` | `frontend/` |
+| Install backend | `pip install -e .` | root |
+| Run backend | `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload` | `backend/` |
+| Backend tests | `pytest` | root |
+| Backend lint | `ruff` | root |
+| Frontend install/dev/lint/build | `npm install` / `npm run dev` / `npm run lint` / `npm run build` | `frontend/` |
 
----
+## 6. Known traps (Day-1)
 
-## 6. Known traps (read before editing)
-
-- **Env vars:** all LLM calls read `LLM_URL` (from `config.py`); set `LLM_URL`. (The old unused `LLM_API_URL` read in `app.py` was removed.)
-- **Ports:** backend runs on `8000` (per `frontend/src/config.js`); the `/process` trigger now uses that same base URL. Keep API calls routed through `src/config.js` rather than hardcoding ports.
-- **Model paths** (`BGE_M3_MODEL_PATH`, `BGE_RERANKER_V2_M3`) are env-configurable with local `models/` fallbacks; changing them affects ingestion/startup.
-- **Retrieval:** both `/api/prompt` and `/api/prompt/stream` use `VectorRAG` (the graph RAG stack was removed; see ADR-007).
-- When you fix a bug from the Known Issues list, move/annotate it in `docs/ARCHITECTURE.md` and `docs/PLAN.md` accordingly.
-- **Test runs print a shutdown access-violation dump** (faulthandler, `pyarrow` import in a background native thread) *after* all tests pass. It is a torch/CUDA teardown artifact on Windows, not a test failure — the exit code is 0 and every test reports `PASSED`.
+- **Ollama, not `LLM_URL`.** Set `OLLAMA_BASE_URL`, model `qwen2.5:14b`.
+- **Port `8000`.** No `8010`. Frontend `VITE_API_URL`, vite proxies `/v1/` only.
+- **`/api/prompt[/stream]` gone.** Use `POST /v1/runs` + SSE. Keep `/api/health` alias.
+- **`messages.conversation_id` nullable.** `NULL` = pre-merge history; new writes set `notebook_id + conversation_id`.
+- **Summary only when >10 turns.** Don't force per-request summarization.
+- **Test teardown dump** (torch/CUDA access-violation after pass, exit 0) is not a failure.
