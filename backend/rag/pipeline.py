@@ -119,26 +119,6 @@ class RagPipeline:
             )
             return final_chunks
 
-            # STEP 2: Semantic chunking
-            # semantic_splitter = SemanticChunker(self.embedding_model)
-
-            # final_chunks = []
-
-            # for doc in structured_docs:
-            #     chunks = semantic_splitter.split_text(doc.page_content)
-
-            #     for chunk in chunks:
-            #         final_chunks.append(
-            #             Document(
-            #                 page_content=chunk,
-            #                 metadata=doc.metadata  # preserve structure
-            #             )
-            #         )
-
-            # logger.info(f"[Step 2] Final chunks: {len(final_chunks)}")
-
-            # return structured_docs
-
         except Exception as e:
             logger.exception(f"Error splitting: {e}")
             raise
