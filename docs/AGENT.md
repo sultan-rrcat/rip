@@ -78,7 +78,7 @@ git push origin main
 |---|---|---|
 | Install backend | `pip install -e .` | repo root |
 | Run backend | `uvicorn app:app --host 0.0.0.0 --port 8000 --reload` | `backend/` |
-| Backend tests | `pytest` | repo root |
+| Backend tests | `C:\Users\trainee\ENV\agent_env\Scripts\python.exe -m pytest` (the `agent_env` interpreter has all backend deps; system Python does not) | repo root |
 | Backend lint | `ruff` | repo root |
 | Frontend install | `npm install` | `frontend/` |
 | Frontend dev | `npm run dev` | `frontend/` |
@@ -94,3 +94,4 @@ git push origin main
 - **Model paths** (`BGE_M3_MODEL_PATH`, `BGE_RERANKER_V2_M3`) are env-configurable with local `models/` fallbacks; changing them affects ingestion/startup.
 - **Retrieval:** both `/api/prompt` and `/api/prompt/stream` use `VectorRAG` (the graph RAG stack was removed; see ADR-007).
 - When you fix a bug from the Known Issues list, move/annotate it in `docs/ARCHITECTURE.md` and `docs/PLAN.md` accordingly.
+- **Test runs print a shutdown access-violation dump** (faulthandler, `pyarrow` import in a background native thread) *after* all tests pass. It is a torch/CUDA teardown artifact on Windows, not a test failure — the exit code is 0 and every test reports `PASSED`.

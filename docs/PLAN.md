@@ -21,7 +21,7 @@ The end-to-end prototype works: create notebook → upload PDF → background in
 - [x] Preserve the real uploaded file extension instead of always storing `.pdf` (Known Issue #7). **Done:** upload + ingestion derive `{ext}` from the filename (`.pdf` fallback). Type validation still open.
 - [ ] Re-enable or remove the disabled semantic chunker (`rag/pipeline.py`); tune chunking for equations/tables.
 - [ ] Add durable ingestion status/job tracking (currently a background task with no retry or progress) — relates to ADR-005.
-- [ ] Expand backend tests beyond the health check; make them runnable without local models (Known Issue #9).
+- [x] Expand backend tests beyond the health check (Known Issue #9). **Done:** 14 integration tests against the real stack (DB + models + APIs, no mocks); prompt tests skip when the LLM is unreachable. Note: tests need local models + DB by design (per decision: no mocks).
 
 ## Phase 2: Dead code & cleanup
 - [x] Remove the `AgenticRAG` stub (removed along with the graph RAG stack; see ADR-007).
