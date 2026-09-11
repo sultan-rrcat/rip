@@ -14,13 +14,14 @@ This guide reflects the repository as it exists today. Every file and variable n
 | Local model weights | Present on disk at the hardcoded paths in `backend/config.py` (see below) |
 | LLM endpoint | An OpenAI-compatible HTTP server (`/v1/chat/completions`) serving `qwen2.5-coder-14b`, reachable at the `LLM_URL` configured below |
 
-### Local model paths (hardcoded in `backend/config.py`)
-These are **Windows absolute paths baked into code**, not environment-driven:
+### Local model paths (env-driven in `backend/config.py`)
+Each path honors a primary variable with a `.env`-style alias fallback,
+then a local `backend/models/` default:
 
-| Constant | Path |
-|---|---|
-| `BGE_M3_MODEL_PATH` | `D:\models\bge-m3` |
-| `BGE_RERANKER_V2_M3` | `D:\models\reranker\bge_reranker_v2_m3` |
+| Primary | Alias (`.env` / `.env.example`) | Default |
+|---|---|---|
+| `BGE_M3_MODEL_PATH` | `BGE_MODEL_DIR` | `backend/models/bge-m3` |
+| `BGE_RERANKER_V2_M3` | `RERANKER_MODEL_DIR` | `backend/models/reranker/bge_reranker_v2_m3` |
 
 `backend/download.py` is a one-off utility that downloads `BAAI/bge-m3` to `D:/models/bge-m3` (requires HF Hub access at download time only). It does not download the reranker.
 

@@ -65,11 +65,20 @@ CREATE TABLE IF NOT EXISTS public.files
 
 TABLESPACE pg_default;
 
-ALTER TABLE IF EXISTS public.embeddings
-    ADD CONSTRAINT embeddings_file_id_fkey FOREIGN KEY (file_id)
-    REFERENCES public.files (file_id)
-    ON UPDATE NO ACTION
-    ON DELETE CASCADE;
+-- ADD CONSTRAINT has no IF NOT EXISTS guard, so wrap it to keep schema.sql
+-- safe to re-run (used by the integration test session fixture).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'embeddings_file_id_fkey'
+    ) THEN
+        ALTER TABLE public.embeddings
+            ADD CONSTRAINT embeddings_file_id_fkey FOREIGN KEY (file_id)
+            REFERENCES public.files (file_id)
+            ON UPDATE NO ACTION
+            ON DELETE CASCADE;
+    END IF;
+END $$;
 
 -- Table: public.messages
 

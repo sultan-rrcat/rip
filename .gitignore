@@ -5,6 +5,9 @@ __pycache__/
 *.pyc
 *.log
 
+.pytest_cache/
+.ruff_cache/
+
 backend/uploads
 backend/logs
 backend/external
