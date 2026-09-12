@@ -3,23 +3,35 @@ requires = ["setuptools>=61.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rip-prototype"
-version = "0.1.0"
-description = "Open-source local NotebookLM RAG Chatbot Assistant"
-readme = "Readme.md"
+name = "rip"
+version = "1.0.0"
 requires-python = ">=3.11"
 dependencies = [
+    # Core
     "fastapi>=0.135.1",
-    "uvicorn>=0.41.0",
+    "uvicorn[standard]>=0.41.0",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
     "python-dotenv>=1.2.2",
+    # Database
     "psycopg2-binary>=2.9.12",
     "pgvector>=0.4.2",
+    # RAG pipeline (kept from RIP)
     "docling>=2.81.0",
     "sentence-transformers>=5.2.3",
+    # Orchestration (from Athena requirements.txt)
+    "langgraph>=1.1.6",
+    "langfuse>=4.14.5",  # optional at runtime (langfuse_enabled=false = no-op), required for import
+    # HTTP (Ollama provider needs trust_env=False; see ollama.py)
     "httpx>=0.28.1",
+    # Config
+    "pyyaml>=6.0",
+    # Tools (doc.generate pipeline, Athena ADR-026)
+    "python-docx>=1.1.0",
+    "reportlab>=4.0",
 ]
+# Dropped: google-genai (Gemini removed), neo4j (graph removed).
+# Dev: ruff, pytest (backend/tests/). No mypy gate for vibe sessions (ruff + pytest only).
 
 [tool.ruff]
 line-length = 88
