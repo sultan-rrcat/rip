@@ -2,8 +2,8 @@ from pydantic import BaseModel
 from typing import Optional, Any
 from fastapi import APIRouter, HTTPException
 import json
-from core.logging import setup_logging
-from core.db import pg_connection
+from app.core.logging import setup_logging
+from app.core.db import pg_connection
 
 router = APIRouter()
 logger = setup_logging()

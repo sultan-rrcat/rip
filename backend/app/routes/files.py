@@ -12,14 +12,14 @@ from fastapi import (
 )
 from pydantic import BaseModel
 from typing import Optional
-from core.logging import setup_logging
-from core.db import pg_connection
-from core.dependencies import get_rag
-from services.file_processor import run_rag_pipeline
-from rag.pipeline import RagPipeline
+from app.core.logging import setup_logging
+from app.core.db import pg_connection
+from app.core.dependencies import get_rag
+from app.services.file_processor import run_rag_pipeline
+from app.rag.pipeline import RagPipeline
 from uuid import uuid4
 import os
-import config
+from app.core import config
 
 router = APIRouter()
 logger = setup_logging()

@@ -12,10 +12,10 @@ from psycopg2.extras import Json
 import json
 
 
-from core.logging import setup_logging
-from core.db import pg_connection
+from app.core.logging import setup_logging
+from app.core.db import pg_connection
 
-import config
+from app.core import config
 
 logger = setup_logging()
 

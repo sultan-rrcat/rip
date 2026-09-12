@@ -2,10 +2,10 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes import notebooks, files, messages, llm
+from app.routes import notebooks, files, messages
 from dotenv import load_dotenv
-from rag.vector_rag import VectorRAG
-from core.logging import setup_logging
+from app.rag.vector_rag import VectorRAG
+from app.core.logging import setup_logging
 from contextlib import asynccontextmanager
 
 load_dotenv()
@@ -29,7 +29,8 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(notebooks.router)
 app.include_router(files.router)
 app.include_router(messages.router)
-app.include_router(llm.router)
+# NOTE (Phase 1.1): llm.router excluded — app/services/llm.py + rewritter.py
+# deleted per Q33; app/routes/llm.py orphaned pending Phase 4.3 deletion.
 
 # Enable CORS
 # middleware - code that runs before and after every request

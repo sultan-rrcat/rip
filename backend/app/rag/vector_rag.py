@@ -1,6 +1,6 @@
-from rag.pipeline import RagPipeline
-from core.logging import setup_logging
-from core.db import pg_connection
+from app.rag.pipeline import RagPipeline
+from app.core.logging import setup_logging
+from app.core.db import pg_connection
 
 logger = setup_logging()
 

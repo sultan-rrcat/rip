@@ -1,14 +1,14 @@
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from services.llm import ask_qwen, stream_qwen
-from core.dependencies import get_rag
-from core.logging import setup_logging
-from services.chat import format_context_for_llm
-from services.chat import extract_sources
-from services.rewritter import rewrite_prompt
+from app.services.llm import ask_qwen, stream_qwen
+from app.core.dependencies import get_rag
+from app.core.logging import setup_logging
+from app.services.chat import format_context_for_llm
+from app.services.chat import extract_sources
+from app.services.rewritter import rewrite_prompt
 import json
 from pydantic import BaseModel
-from rag.vector_rag import VectorRAG
+from app.rag.vector_rag import VectorRAG
 
 
 logger = setup_logging()

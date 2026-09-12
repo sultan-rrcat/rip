@@ -2,10 +2,10 @@
 
 import os
 import asyncio
-from core.logging import setup_logging
-from core.db import pg_connection
-from rag.vector_rag import VectorRAG
-import config
+from app.core.logging import setup_logging
+from app.core.db import pg_connection
+from app.rag.vector_rag import VectorRAG
+from app.core import config
 
 logger = setup_logging()
 
