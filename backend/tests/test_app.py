@@ -14,7 +14,7 @@ import os
 from app.main import app
 from conftest import needs_llm, wait_for_file_status
 
-from app.core import config
+from app.core.config import settings
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
@@ -112,7 +112,7 @@ class TestFiles:
         assert response.status_code == 200
         file_id = response.json()["id"]
         assert os.path.exists(
-            os.path.join(config.UPLOAD_DIR, test_notebook, f"{file_id}.txt")
+            os.path.join(settings.upload_dir, test_notebook, f"{file_id}.txt")
         )
 
     def test_upload_without_extension_defaults_to_pdf(
@@ -126,7 +126,7 @@ class TestFiles:
         assert response.status_code == 200
         file_id = response.json()["id"]
         assert os.path.exists(
-            os.path.join(config.UPLOAD_DIR, test_notebook, f"{file_id}.pdf")
+            os.path.join(settings.upload_dir, test_notebook, f"{file_id}.pdf")
         )
 
     def test_process_file_reaches_terminal_status(

@@ -30,8 +30,7 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from app.core import config  # noqa: E402
-from app.core.config import Settings  # noqa: E402
+from app.core.config import Settings, settings  # noqa: E402
 from app.core.db import pg_connection  # noqa: E402
 
 
@@ -82,7 +81,7 @@ def test_notebook(client):
     yield notebook_id
     # Teardown: DB cascade handles files/messages/embeddings.
     client.delete(f"/api/notebooks/{notebook_id}")
-    notebook_dir = os.path.join(config.UPLOAD_DIR, notebook_id)
+    notebook_dir = os.path.join(settings.upload_dir, notebook_id)
     shutil.rmtree(notebook_dir, ignore_errors=True)
 
 
