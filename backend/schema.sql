@@ -3,13 +3,14 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- ─── notebooks ──────────────────────────────────────────────────────────────
 -- One notebook = one conversation = one chat history.
--- Summary is internal (context-window compression), not user-visible.
+-- conversation_summary is internal (context-window compression), not user-visible.
+-- Distinct from SSE event type "summary" (final user-visible answer).
 
 CREATE TABLE IF NOT EXISTS public.notebooks
 (
     notebook_id   uuid NOT NULL DEFAULT gen_random_uuid(),
     notebook_name text  COLLATE pg_catalog."default" NOT NULL,
-    summary       text,                                     -- rolling Ollama summary (internal)
+    conversation_summary       text,                         -- rolling Ollama summary (internal)
     summary_message_count integer DEFAULT 0,                 -- folded_count dedup
     created_at    timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT notebooks_pkey PRIMARY KEY (notebook_id)

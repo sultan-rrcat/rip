@@ -15,13 +15,13 @@
 
 - [ ] **1.1 Create `backend/app/` root**
   - Files: MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`; COPY `athena/backend/app/core/classutils.py`, `constants.py` → `rip/backend/app/core/`
-  - Edits: apply import map `routes.→app.routes.`, `core.→app.core.`, `services.→app.services.`, `rag.→app.rag.`; empty `__init__.py` per package; workdir `rip/backend/`; `backend/Dockerfile` CMD → `app.main:app`
+  - Edits: apply import map `routes.→app.routes.`, `core.→app.core.`, `services.→app.services.`, `rag.→app.rag.`; empty `__init__.py` per package; workdir `rip/backend/`; `backend/Dockerfile` CMD → `app.main:app`; DELETE `services/rewritter.py` + `services/llm.py` (Q33); migrate `backend/tests/conftest.py` → `from app.core.config import Settings`, `from app.main import app`, Ollama probe `OLLAMA_BASE_URL/api/tags` (Q38)
   - Test: `ruff check backend/app` (from `rip/`)
-  - Done: imports resolve, no `flat backend/app.py` refs remain, `classutils.py` and `constants.py` present
+  - Done: imports resolve, no `flat backend/app.py` refs remain, rewritter/llm gone, conftest migrated
 
 - [ ] **1.2 Verify `schema.sql`**
   - Files: `rip/backend/schema.sql` (read-only unless drift)
-  - Edits: none — must already have `notebooks.summary`, `messages` by `notebook_id` only, `runs` + `run_events`
+  - Edits: must have `notebooks.conversation_summary` + `summary_message_count`, `messages` by `notebook_id` only, `runs` + `run_events` (Q38)
   - Test: `psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql` twice (must be re-runnable)
   - Done: 6 tables exist: `notebooks/files/embeddings/messages/runs/run_events`
 
@@ -67,31 +67,31 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
 
 - [ ] **3.1 Tools (all 5)**
   - Files: COPY `base.py`, `registry.py`, `executor.py` → `app/tools/`; REWRITE `rag_query.py`; COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py`
-  - Edits: drop `from app.plugins.api import ToolPlugin` (inherit directly from `Tool` in `base.py`); delete approval gate in `executor.py`; export `get_default_tool_registry()` factory in `registry.py`; `rag_query.py` reuse existing `VectorRAG` singleton (via `app.core.dependencies.get_rag` or module-level singleton, do NOT re-instantiate `VectorRAG()` to avoid reloading PyTorch models); `notebook_id` from `Run`, never LLM
+  - Edits: drop `ToolPlugin`; delete approval gate in `executor.py`; `rag_query.py` reuse `VectorRAG` singleton via `get_rag`; return shape feeds `extract_sources()` for Q32; `notebook_id` from Run, never LLM
   - Test: `pytest backend/tests/test_tools.py -q` — `rag.query` returns chunks for a test notebook with files
   - Done: all 5 tools import and inherit from `Tool`, `rag.query` e2e works without model reload
 
 - [ ] **3.2 Orchestration**
   - Files: COPY `plan.py`, `planner.py`, `validator.py`, `aggregator.py`, `engine.py`, `plan_graph.py`, `orchestrator.py`, `memory.py`, `results.py` → `app/orchestration/`
-  - Edits: `planner.py` gemini→Ollama; `aggregator.py` deterministic only; `engine.py` remove reflection edge; `plan_graph.py` remove approval gate, capture `notebook_id` in node closure and inject into tool inputs (`resolved_input["notebook_id"] = notebook_id`); `orchestrator.py` `run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore; `memory.py` Q28: `WINDOW_SIZE=10`, `len//4`, budget `int(ollama_context_window=32768*0.7)`, `_SUMMARY_MAX_TOKENS=512` via `ollama_default_model`, `folded_count↔notebooks.summary_message_count`
+  - Edits: `planner.py` gemini→Ollama; `aggregator.py` Q36 deterministic rules (1 success→output; multiple→labeled join; clarification→verbatim; all failed→errors; no LLM); `engine.py` remove reflection; `plan_graph.py` no approval gate, inject `notebook_id`; `orchestrator.py` signature with `notebook_id` + `context`; `memory.py` Q28 port, persist target `notebooks.conversation_summary`
   - Test: `pytest backend/tests/test_orchestration.py -q`
   - Done: Planner → Engine → Aggregator passes on a `rag.query` plan with `notebook_id` injected
 
 - [ ] **3.3 Runs store (Postgres)**
-  - Files: WRITE `rip/backend/app/store/runs.py` (Postgres CRUD using `core.db.pg_connection` and `schema.sql` `runs` + `run_events` tables; DO NOT copy Athena's SQLite store); DO NOT copy `store/conversations.py`
-  - Edits: Run + RunEvent CRUD on Postgres (`%s` placeholders, jsonb serialization, monotonic seq)
-  - Test: `pytest backend/tests/test_runs_store.py -q` — create run, append events, replay by `seq`
-  - Done: runs survive restart, replay in order from PostgreSQL
+  - Files: WRITE `rip/backend/app/store/runs.py` (Postgres CRUD using `core.db.pg_connection` and `schema.sql` `runs` + `run_events` tables; DO NOT copy Athena's SQLite store)
+  - Edits: Run + RunEvent CRUD; `append_event` skips `delta` type (Q35); monotonic seq
+  - Test: `pytest backend/tests/test_runs_store.py -q` — create run, append events, replay by `seq` (no deltas stored)
+  - Done: runs survive restart, structural replay in order from PostgreSQL
 
 ---
 
 ## Phase 4 — API + main + cleanup
 
-- [ ] **4.1 Runs + admin + health API + artifacts**
-  - Files: COPY `athena/backend/app/bff/envelope.py` → `app/bff/` (for `/api/*` only); COPY `athena/backend/app/artifacts.py` → `app/artifacts.py` (adapted to save files under `{upload_dir}/{notebook_id}/`); `api/runs.py` + `runs/manager.py`, `api/admin.py` (health + plugins + reload only), `api/health.py` → `app/api/`
-  - Edits: `CreateRunRequest{notebook_id: UUID, message: str}` → `POST /v1/runs → 202 {run_id}` bare (no envelope/auth); `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events` (full replay `ORDER BY seq`, `id:<seq>`), `POST /v1/runs/{id}/cancel`, `GET /health` + `GET /api/health` alias; backend never writes `messages`; artifacts emitted as download links
+- [ ] **4.1 Runs + admin + health API + artifacts + worker**
+  - Files: COPY `bff/envelope.py` → `app/bff/`; REWRITE `artifacts.py` (Q34 file-based under `{upload_dir}/{notebook_id}/artifacts/`); WRITE `api/deps.py` (Ollama + registries + orchestrator, no PluginManager); COPY/adapt `api/runs.py`; **REWRITE `runs/manager.py` (Q31 worker contract)**; stub `api/admin.py` (Q37: `GET /v1/admin/health` only); COPY `api/health.py`
+  - Edits: `CreateRunRequest{notebook_id, message}` → `202 {run_id}` bare; SSE replays persisted events only (Q35); emit `sources` on `rag.query` (Q32); artifacts as download URLs (Q34); worker loads/persists `conversation_summary`; never writes `messages`
   - Test: `curl -X POST localhost:8000/v1/runs -H "Content-Type: application/json" -d '{"notebook_id":"<uuid>","message":"hello"}'` → `202`
-  - Done: runs lifecycle + SSE replay + cancel work
+  - Done: runs lifecycle + structural SSE replay + sources + cancel work
 
 - [ ] **4.2 Rewrite `app/main.py`**
   - Files: REPLACE `rip/backend/app/main.py`
@@ -113,7 +113,7 @@ Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api
 
 - [ ] **5.1 `types/runs.ts`**
   - Files: CREATE `frontend/src/types/runs.ts`
-  - Edits: discriminated union `RunEvent` with `seq: number` on every variant (see `MERGE_PLAN.md §Frontend`, copy verbatim); `PlanStep{step_id,agent_id?,tool_id?,description}`, `Artifact{artifact_id,kind,path|url}`
+  - Edits: discriminated union `RunEvent` with `seq: number` on every variant (see `MERGE_PLAN.md §Frontend`); include `sources` + `cancelled`; `Artifact{artifact_id, kind, filename, url}` (Q34)
   - Test: `npx tsc -b` in `frontend/`
   - Done: typecheck passes
 
@@ -125,9 +125,9 @@ Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api
 
 - [ ] **5.3 `hooks/notebooks/useMessages.ts` + UI components**
   - Files: EDIT `frontend/src/hooks/notebooks/useMessages.ts`, `frontend/src/components/notebook/ChatArea.tsx` (and/or `Footer.tsx`); DELETE `services/llm.ts` import
-  - Edits: `createMessageAPI(user)` → `createRun()` → `EventSource`; `useState` accumulation; `plan` in `<details>` collapsible; `delta/summary` as tokens; `artifacts` as download links; cancel button connected to `cancelRun()`; dedupe SSE by `seq`; single `createMessageAPI(assistant)` on `run_completed`
-  - Test: manual chat — send message, see `plan` collapse, tokens stream, cancel button works
-  - Done: tokens stream, refresh mid-run replays via SSE, cancel stops run
+  - Edits: run lifecycle; handle `sources` event (Q32); `delta` live only; on reconnect apply persisted events (Q35 — no delta replay); `artifacts` download links (Q34); cancel button; single `createMessageAPI(assistant, text, sources)` on `run_completed`
+  - Test: manual chat — send message, see plan collapse, tokens stream, sources appear, cancel works
+  - Done: tokens stream live, refresh replays structural events, cancel stops run
 
 - [ ] **5.4 `config.ts` + `vite.config.ts` + `nginx.conf` + `Dockerfile`**
   - Files: EDIT `frontend/src/config.ts`, `frontend/vite.config.ts`, `frontend/nginx.conf`, `backend/Dockerfile`
@@ -144,14 +144,13 @@ Phase 5 exit: full UI chat works: Gallery → Workspace → send → plan + answ
 - [ ] **6.1 Backend suite**
   - Test: `pytest` (from `rip/`) + `ruff check .`
   - Done: green; only known noise is torch/CUDA teardown dump after pass (exit 0, not a failure)
-  - Q29 conftest migration (do in Phase 1, not Phase 6): `tests/conftest.py` → `from app.core.config import Settings` (not `import config`), `from app.main import app` (not `from app import app`), `sys.path` insert `backend/`, Ollama probe `OLLAMA_BASE_URL/api/tags` (not `LLM_URL/v1/models`)
 
 - [ ] **6.2 Smoke test (must pass before merge done)**
   1. Create notebook → upload PDF → poll `GET /api/notebooks/{id}/files` until `ready`
   2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`
-  3. `GET /v1/runs/{id}/events` streams `run_started → plan → step_started → delta* → step_completed → summary → run_completed`
-  4. Confirm `rag.query` chunks + Ollama answer; long history triggers `summary` at ~70% context
-  5. Refresh mid-run → reconnect `/events` → full replay, no duplicate assistant message
+  3. `GET /v1/runs/{id}/events` streams `run_started → plan → step_started → delta* (live) → step_completed → sources? → summary → artifacts? → run_completed`
+  4. Confirm `rag.query` chunks + Ollama answer; `sources` SSE event present; long history updates `notebooks.conversation_summary`
+  5. Refresh mid-run → reconnect `/events` → structural replay (no delta flood), no duplicate assistant message
   6. `POST /v1/runs/{id}/cancel` → `cancelled`, worker stops before next step
 
 - [ ] **6.3 Frontend checks**
@@ -179,4 +178,5 @@ Phase 5 exit: full UI chat works: Gallery → Workspace → send → plan + answ
 - Ollama empty → `OLLAMA_BASE_URL` reachable, `qwen2.5:14b` pulled (`ollama list`).
 - Startup crash (models) → `BGE_M3_MODEL_PATH` / `BGE_RERANKER_V2_M3` wrong; fix `.env`.
 - Upload stuck `processing` → `run_rag_pipeline` has no retry; re-`POST /api/files/{id}/process`.
-- SSE stops on refresh → check `run_events` rows exist; frontend must re-`GET /events` and dedupe by `(type, step_id, seq)`.
+- SSE stops on refresh → check `run_events` rows exist (structural only); frontend re-`GET /events`, dedupe by `seq`; resume text from `step_completed`/`summary` (deltas not replayed — Q35).
+- Confused `summary` vs `conversation_summary` → SSE `summary` = final answer; DB column = internal memory (Q38).

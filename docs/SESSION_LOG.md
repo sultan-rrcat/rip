@@ -95,3 +95,16 @@
   - `MERGE_PLAN.md`: Updated What's Kept from Athena table, Backend Directory Structure, and Implementation Order; appended Decision Log Q30.
   - `ADR.md`: Added ADR-017 documenting direct capability inheritance, tool decoupling, and `VectorRAG` singleton reuse.
 - **Status:** Completed.
+
+---
+
+## [2026-09-12] - Pre-implementation review hardening (Q31–Q38)
+
+- **Task:** Lock integration gaps from merge plan review; update docs + schema before Phase 1 implementation.
+- **Actions Taken:**
+  - `MERGE_PLAN.md`: Run worker contract (Q31); sources SSE (Q32); drop rewritter (Q33); file-based artifacts (Q34); structural-only event persistence (Q35); deterministic aggregator (Q36); admin health stub (Q37); `conversation_summary` rename (Q38); Decision Log Q31–Q38.
+  - `IMPLEMENTATION_PLAN.md`: conftest in Phase 1.1; worker rewrite in Phase 4; frontend sources/delta/artifact handling; smoke test updates.
+  - `ADR.md`: ADR-018..024; updated ADR-014/015/016.
+  - `CONTEXT.md`, `AGENT.md`, `SETUP.md`: terminology and traps.
+  - `backend/schema.sql`: `notebooks.summary` → `conversation_summary`.
+- **Status:** Completed.

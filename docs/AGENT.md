@@ -20,16 +20,18 @@ backend/app/
   core/db.py, dependencies.py, logging.py
   rag/pipeline.py, vector_rag.py
   routes/notebooks.py, files.py, messages.py   # llm.py DELETED
-  services/chat.py, file_processor.py, rewritter.py
-  providers/base.py, ollama.py
+  services/chat.py, file_processor.py          # rewritter.py + llm.py DELETED (Q33)
+  providers/base.py, ollama.py, streaming.py
   agents/base.py, registry.py, reasoning.py, coding.py, vision.py
   tools/base.py, registry.py, executor.py, rag_query.py, plot_chart.py, doc_generate.py, code_sandbox.py, image_generate.py
   orchestration/plan.py, planner.py, validator.py, aggregator.py,
     engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
-  store/runs.py          # Postgres CRUD for runs + run_events
-  runs/manager.py        # Postgres-backed RunManager
+  store/runs.py          # Postgres CRUD for runs + run_events (no deltas — Q35)
+  runs/manager.py        # REWRITE worker (Q31): memory, sources, never write messages
+  artifacts.py           # file-based artifacts (Q34)
   bff/envelope.py        # standard wrapper {data, error}
-  api/runs.py, admin.py (3 endpoints), health.py
+  api/deps.py            # wire Ollama + registries (no PluginManager)
+  api/runs.py, admin.py (health stub only), health.py
 frontend/src/
   services/runs.ts, types/runs.ts
   hooks/notebooks/useMessages.ts  # useState+EventSource
@@ -62,16 +64,22 @@ End: `pytest` + `ruff`, check box with commit SHA, append `SESSION_LOG.md` (`## 
 - **Port `8000`.** No `8010`. Frontend `VITE_API_URL`, vite proxies `/api/` + `/v1/`, nginx proxies both too.
 - **`/api/prompt[/stream]` gone.** Use `POST /v1/runs {notebook_id,message}` + `EventSource /events`. Keep `/api/health` alias. No envelope on `/v1/*`.
 - **`messages` owned by frontend.** Backend `runs/manager` never writes `messages`; dedupe SSE by `seq`.
-- **`messages.conversation_id` dropped.** Messages linked by `notebook_id` only. One notebook = one conversation.
-- **Summary by context window, not turn count.** Triggers at ~70% of model context. Don't force per-request summarization.
-- **Runs persist to Postgres.** `runs` + `run_events` tables. SSE replays full event history on reconnect. Only stop button terminates.
+- **`conversation_summary` ≠ SSE `summary`.** DB column = internal memory compression; SSE `summary` = final answer text (Q38).
+- **`delta` not replayed.** Persist structural events only (Q35); reconnect uses `step_completed`/`summary` for text.
+- **No query rewrite.** `rewritter.py` dropped (Q33); Planner handles retrieval intent.
+- **Sources via SSE.** `{type:"sources"}` after `rag.query` (Q32); not a separate pre-RAG call.
+- **Artifacts on disk.** File URLs in SSE, not inline base64 (Q34).
+- **Admin health stub only.** No `/v1/admin/plugins` or `/reload` (Q37).
+- **Runs persist to Postgres.** Structural events in `run_events`; only stop button terminates.
 - **Import map + workdir.** `routes.→app.routes.` etc.; run from `backend/` as `app.main:app`; Dockerfile CMD `app.main:app`.
 - **Config aliases.** Support `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR`; `cors_origins: str`.
+- **Test path.** `backend/tests/` (not `backend/app/tests/`). Conftest migrates in Phase 1.1.
 - **Test teardown dump** (torch/CUDA access-violation after pass, exit 0) is not a failure.
 
 ## 7. Missing best-practices checklist (vibe-tool must not skip)
 
 - `backend/Dockerfile` CMD + `frontend/nginx.conf` `/v1/` block + `vite.config.ts` proxy (see MERGE_PLAN §Frontend).
-- `backend/tests/test_providers|tools|orchestration|runs_store.py` — real DB + real Ollama; mock only if Ollama down; document in Phase 6.
-- Artifacts under `{UPLOAD_DIR}/{notebook_id}/`, served as download links from SSE `artifacts` event.
+- `backend/tests/test_providers|tools|orchestration|runs_store.py` — real DB + real Ollama; mock only if Ollama down.
+- Artifacts under `{UPLOAD_DIR}/{notebook_id}/artifacts/`, served as download links from SSE `artifacts` event (Q34).
 - `BGE`/`reranker` paths + `sandbox_image` pull (`docker pull python:3.11-slim`) before Phase 3.1.
+- Run worker contract (Q31) — do not copy Athena `manager.py` verbatim.

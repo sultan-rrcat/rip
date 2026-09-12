@@ -47,7 +47,7 @@ No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
 ```
 
-Creates `notebooks` (with summary fields), `files`, `messages`, `embeddings`, `runs`, `run_events`, vector + text-search indexes.
+Creates `notebooks` (with `conversation_summary` + `summary_message_count`), `files`, `messages`, `embeddings`, `runs`, `run_events`, vector + text-search indexes.
 
 ## 4. Run (Required: Postgres + Ollama. Optional: Redis, Langfuse)
 
@@ -72,8 +72,8 @@ Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see MERGE_PLAN §
 
 1. Create notebook, upload PDF → `ready`.
 2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.
-3. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta*→step_completed→summary→run_completed`.
-4. Confirm `rag.query` chunks + Ollama answer; notebook has `summary` when context window ~70% full.
+3. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta* (live)→step_completed→sources?→summary→run_completed`.
+4. Confirm `rag.query` chunks + Ollama answer + `sources` SSE event; notebook `conversation_summary` updates when context window ~70% full.
 
 ## 6. Tests & lint
 

@@ -6,9 +6,9 @@
 - **Precedence:** this file wins over any other doc on conflicts. `ARCHITECTURE.md`, `PLAN.md` are deleted; `ADR.md`/`SETUP.md`/`AGENT.md` defer to this file for merge work.
 - **Change rule:** append to Decision Log only, never silently rewrite Decisions/Inavariants. Revisit requires new ADR entry.
 - **Session starter (copy-paste):** "Read MERGE_PLAN §0→API fully. Implement exactly one unchecked box in Implementation Order. No new endpoints/config/deps. Run pytest+ruff. Append SESSION_LOG on exit."
-- **Invariants:** `POST /v1/runs→202`, SSE `run_started/plan/step_started/delta/step_completed/summary/run_completed/artifacts/error`, `routes/llm.py` deleted (no shim), `/api/health` alias kept, port `8000`, `CORS *`, `rag.query(notebook_id,query,top_k=8)` direct import, single `messages` table (notebook_id only, no conversation_id), runs persist to Postgres (survive refresh, full SSE replay), summary by context window (~70% of model context), one notebook = one conversation.
-- **Locked Q1–Q7 (2026-09-12, agreed):** (1) `POST /v1/runs` body is exactly `{notebook_id: UUID, message: str}` → `202 {run_id: UUID}`; no auth/quota/tenant; no BFF envelope on `/v1/*` (bare JSON); BFF `{data,error}` applies only to `/api/*` if used. (2) Message ownership = frontend only: `POST user msg` before `POST /v1/runs`, `POST assistant msg` once on `run_completed/summary`; `runs/manager.py` + orchestrator never touch `messages`. (3) SSE via `EventSource` (no auth headers needed); `GET /v1/runs/{id}/events` replays all `run_events ORDER BY seq` with `id:<seq>`; frontend dedupes by `seq`; no `?last_event_id=` in v1. (4) Move map: `from routes.X→from app.routes.X`, `from core.X→from app.core.X`, `from services.X→from app.services.X`, `from rag.X→from app.rag.X`; run from `rip/backend/` as `uvicorn app.main:app`; empty `__init__.py` per package. (5) Env mapping frozen — see §Config table; `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` kept as aliases; `cors_origins` is `str="*"` (not `list[str]`); `LLM_URL`/`NEO4J_*`/`DATABASE_URL` forbidden. (6) `rag.query` is sync `def rag_query(notebook_id: str, query: str, top_k: int = 8) -> list[dict]` calling `VectorRAG().retrieve_context(notebook_id, query, top_k=top_k)`; `notebook_id` injected by orchestrator from `Run.notebook_id`, never LLM-generated. (7) Frontend: `config.ts` keeps `export const API = VITE_API_URL`; `vite.config.ts` proxies `/api/` + `/v1/` → `http://localhost:8000`; `useMessages.ts` renders `plan` as `<details>` collapsible, `delta/summary` as tokens, `artifacts` as download links, cancel button → `POST /v1/runs/{id}/cancel`.
-- **Forbidden:** `8010`, `zustand`/`react-query`, Redis-required, dual messages tables, Gemini/`LLM_URL`, approval gate return, flat `backend/app.py`, full `admin.py` console.
+- **Invariants:** `POST /v1/runs→202`, SSE types `run_started/plan/step_started/delta/step_completed/sources/summary/run_completed/artifacts/error/cancelled`; `delta` live-only (not persisted); persisted events replay on reconnect; `routes/llm.py` + `services/rewritter.py` + `services/llm.py` deleted (no shim); `/api/health` alias kept; port `8000`; `CORS *`; `rag.query(notebook_id,query,top_k=8)` direct import; single `messages` table (notebook_id only, no conversation_id); runs persist to Postgres; `notebooks.conversation_summary` (internal memory, not SSE `summary`); one notebook = one conversation; run worker always orchestrates, never writes `messages`.
+- **Locked Q1–Q7 (2026-09-12, agreed):** (1) `POST /v1/runs` body is exactly `{notebook_id: UUID, message: str}` → `202 {run_id: UUID}`; no auth/quota/tenant; no BFF envelope on `/v1/*` (bare JSON); BFF `{data,error}` applies only to `/api/*` if used. (2) Message ownership = frontend only: `POST user msg` before `POST /v1/runs`, `POST assistant msg` once on `run_completed/summary`; `runs/manager.py` + orchestrator never touch `messages`. (3) SSE via `EventSource` (no auth headers needed); `GET /v1/runs/{id}/events` replays persisted `run_events ORDER BY seq` (structural + final text, no deltas — Q35) with `id:<seq>`; frontend dedupes by `seq`; no `?last_event_id=` in v1. (4) Move map: `from routes.X→from app.routes.X`, `from core.X→from app.core.X`, `from services.X→from app.services.X`, `from rag.X→from app.rag.X`; run from `rip/backend/` as `uvicorn app.main:app`; empty `__init__.py` per package. (5) Env mapping frozen — see §Config table; `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` kept as aliases; `cors_origins` is `str="*"` (not `list[str]`); `LLM_URL`/`NEO4J_*`/`DATABASE_URL` forbidden. (6) `rag.query` is sync `def rag_query(notebook_id: str, query: str, top_k: int = 8) -> list[dict]` calling `VectorRAG().retrieve_context(notebook_id, query, top_k=top_k)`; `notebook_id` injected by orchestrator from `Run.notebook_id`, never LLM-generated. (7) Frontend: `config.ts` keeps `export const API = VITE_API_URL`; `vite.config.ts` proxies `/api/` + `/v1/` → `http://localhost:8000`; `useMessages.ts` renders `plan` as `<details>` collapsible, `delta/summary` as tokens, `artifacts` as download links, cancel button → `POST /v1/runs/{id}/cancel`.
+- **Forbidden:** `8010`, `zustand`/`react-query`, Redis-required, dual messages tables, Gemini/`LLM_URL`, `services/rewritter.py` (query rewrite dropped Q33), approval gate return, flat `backend/app.py`, full `admin.py` console, PluginManager, persisting `delta` events to `run_events`.
 
 ## Goal
 
@@ -30,7 +30,7 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 | Complexity classifier | Removed | Always orchestrate; no pre-routing LLM call |
 | Reflection loop | Removed | Honest failure; no retry replanning |
 | LLM aggregation | Removed | Deterministic aggregation; step output is the answer |
-| Conversation memory | Context-window-based summary + recent messages | Summary generated by Ollama when context window ~70% full; summary stored on `notebooks` table (internal, not user-visible); recent messages kept verbatim — Q5/Q7/Q20 |
+| Conversation memory | Context-window-based `conversation_summary` + recent messages | Summary generated by Ollama when context window ~70% full; stored on `notebooks.conversation_summary` (internal, not user-visible); distinct from SSE `summary` event (final answer); recent messages kept verbatim — Q20/Q38 |
 | Backend root | `backend/app/` (Athena style) | Single `from app.*` import root; RIP flat `app.py/config.py` move under `app/main.py`, `app/core/config.py` |
 | LangGraph | Kept | Battle-tested parallel execution for plan DAG |
 | API prefix | `/v1/*` + `/api/*` | Athena's run lifecycle under `/v1/`; RIP's notebook CRUD under `/api/` |
@@ -84,7 +84,7 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 | Approval gate (`app/approvals/` + gate in `plan_graph.py` + `executor.py` enforcement) | ~220 | Side-effecting tools execute directly (local only) |
 | `/v1/invoke` sync endpoint (`app/api/invoke.py`) | ~148 | Frontend uses runs + SSE only |
 | Multi-tenancy (scattered + `tenancy.py`, `quotas.py`) | ~150 | Single-tenant |
-| `admin_config.py`, admin override staging | ~298 | No admin UI (minimal admin 3 endpoints only) |
+| `admin_config.py`, admin override staging | ~298 | No admin UI (health stub only — Q37) |
 | Tracing provider wrapper (`app/providers/tracing.py`) | ~132 | Langfuse integration is separate |
 | Gemini provider, llama-server provider | ~499 | Ollama-only |
 | SQL agent + sql.read tool | ~508 | No demo DBs |
@@ -107,19 +107,19 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 | image.generate tool | `app/tools/image_generate.py` | Keep, adapt for Ollama; inherit from `Tool` |
 | Planner | `app/orchestration/planner.py` | Keep; `gemini_model_*` → Ollama |
 | PlanValidator | `app/orchestration/validator.py` | Keep as-is (generic, no SQL refs) |
-| Aggregator | `app/orchestration/aggregator.py` | **Simplify**: deterministic only, no LLM |
+| Aggregator | `app/orchestration/aggregator.py` | **Simplify (Q36)**: deterministic only — 1 success → its output; multiple → labeled concatenation; clarification step → verbatim; all failed → join errors; never LLM |
 | Outer graph (LangGraph) | `app/orchestration/engine.py` | **Remove reflection edge** |
 | Inner graph (LangGraph) | `app/orchestration/plan_graph.py` | **Remove approval gate**; capture `notebook_id` in node closures and inject into tool inputs |
 | Orchestrator facade | `app/orchestration/orchestrator.py` | Remove multi-tenancy (`tenant="dev"` → `notebook_id`). Q28 locked signature: `def run(self, request_text: str, notebook_id: str, on_event=None, context: str|None = None, cancel_event=None) -> OrchestrationResult`; `notebook_id` passed to every tool call (esp. `rag.query`); `context` = `MemoryContext.as_prompt()` text; remove `ApprovalStore`/`max_reflection_cycles`/`quotas`/`tenancy` params |
-| Memory | `app/orchestration/memory.py` | **Keep context-window summary** on Ollama (~70% of model context, stored on `notebooks`). Q28 locked port: `WINDOW_SIZE=10`, `estimate_tokens=len//4`, `MAX=sum(int(ollama_context_window*summary_threshold_pct))`, `_SUMMARY_MAX_TOKENS=512`, `provider.generate(model=ollama_default_model, ...)` (never `gemini_model_*`), `folded_count ↔ notebooks.summary_message_count` |
+| Memory | `app/orchestration/memory.py` | **Keep context-window summary** on Ollama (~70% of model context, stored on `notebooks.conversation_summary`). Q28 locked port: `WINDOW_SIZE=10`, `estimate_tokens=len//4`, `MAX=sum(int(ollama_context_window*summary_threshold_pct))`, `_SUMMARY_MAX_TOKENS=512`, `provider.generate(model=ollama_default_model, ...)` (never `gemini_model_*`), `folded_count ↔ notebooks.summary_message_count`; worker loads/persists via run lifecycle (Q31) |
 | Plan + results models | `app/orchestration/plan.py`, `app/orchestration/results.py` | Keep |
 | Store | `app/store/conversations.py` | **Do not copy**: notebook = conversation, no separate conversations table. Summary moves to `notebooks` table. |
-| Run lifecycle | `app/api/runs.py` + `app/runs/manager.py` + `app/store/runs.py` | **Postgres-backed**: native `psycopg2` CRUD over `runs` + `run_events` in `store/runs.py` (not Athena SQLite); survive refresh; full SSE replay on reconnect; only stop button terminates |
-| Artifacts | `app/artifacts.py` | Keep & adapt from Athena: save generated files to `{upload_dir}/{notebook_id}/`, surface download links via SSE `artifacts` event |
+| Run lifecycle | `app/api/runs.py` + `app/runs/manager.py` + `app/store/runs.py` + `app/api/deps.py` | **REWRITE worker (Q31)**: Postgres-backed `runs` + `run_events`; always orchestrate; load `conversation_summary` + messages → `build_memory_context()` → pass `context=`; persist updated summary to notebooks; never write `messages`; persist structural SSE events only (Q35) |
+| Artifacts | `app/artifacts.py` | **REWRITE (Q34)**: write files to `{upload_dir}/{notebook_id}/artifacts/{artifact_id}/{filename}`; SSE `artifacts` carries `{artifact_id, kind, filename, url}` download links (not inline base64) |
 | Core utilities | `app/core/classutils.py`, `constants.py` | Copy from Athena: `classutils.py` for abstract checks in tools/agents; `constants.py` for confidence constants |
 | Conversations API | `app/api/conversations.py` | **Do not copy**: notebook = conversation, no separate endpoint needed |
 | BFF envelope | `app/bff/envelope.py` | Keep — standard wrapper {data, error} around API responses |
-| Admin endpoints | `app/api/admin.py` | Minimal only (health + plugins + reload); drop full console |
+| Admin endpoints | `app/api/admin.py` | **Stub (Q37)**: `GET /v1/admin/health` only — static registry health, no PluginManager; drop `/plugins` and `/reload` |
 
 ## What's Kept from RIP (Untouched)
 
@@ -131,7 +131,6 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 | Message persistence | `routes/messages.py` |
 | Chat formatting | `services/chat.py` |
 | File ingestion | `services/file_processor.py` |
-| Query rewriting | `services/rewritter.py` |
 | Database connection | `core/db.py` |
 | Dependencies | `core/dependencies.py` |
 | Logging | `core/logging.py` |
@@ -145,11 +144,11 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 
 ```
 backend/
-├── schema.sql                  # VERIFY — already has notebooks.summary, messages by notebook_id only, runs + run_events (no rewrite unless drift)
+├── schema.sql                  # VERIFY — notebooks.conversation_summary + summary_message_count, messages by notebook_id only, runs + run_events
 ├── Dockerfile
 └── app/                        # ALL core logic (Athena style, single `from app.*` root)
     ├── main.py                 # REWRITE — merge RIP lifespan (VectorRAG) + Athena /v1 mounts
-    ├── artifacts.py            # COPY & ADAPT from Athena: deliver artifacts under {upload_dir}/{notebook_id}/
+    ├── artifacts.py            # REWRITE (Q34): file-based artifacts under {upload_dir}/{notebook_id}/artifacts/
     ├── core/                   # MOVE from RIP backend/core/ + COPY classutils.py, constants.py from Athena + REWRITE config
     │   ├── config.py           # REWRITE — merged Pydantic Settings (port 8000)
     │   ├── classutils.py       # COPY (from Athena, needed by tools/agents)
@@ -168,10 +167,9 @@ backend/
     │   └── messages.py         # KEEP — notebook_id only, no conversation_id
     │                           # DELETE llm.py (POST /api/prompt[/stream] removed, no shim)
     │
-    ├── services/               # MOVE (from RIP, keep)
+    ├── services/               # MOVE (from RIP, keep; DELETE rewritter.py + llm.py — Q33)
     │   ├── chat.py
-    │   ├── file_processor.py
-    │   └── rewritter.py
+    │   └── file_processor.py
     │
     ├── providers/              # COPY from athena/backend/app/providers/ (base.py, ollama.py, streaming.py; drop gemini, llama_server, tracing)
     │   ├── __init__.py
@@ -203,33 +201,48 @@ backend/
     │   ├── plan.py
     │   ├── planner.py          # gemini_model_* → ollama_default_model
     │   ├── validator.py        # keep as-is (no SQL refs)
-    │   ├── aggregator.py       # SIMPLIFIED — deterministic only
+    │   ├── aggregator.py       # SIMPLIFIED — deterministic only (Q36 rules)
     │   ├── engine.py           # SIMPLIFIED — no reflection
     │   ├── plan_graph.py       # SIMPLIFIED — no approval gate; notebook_id injected in closures
     │   ├── orchestrator.py     # SIMPLIFIED — notebook_id, no tenant
-    │   ├── memory.py           # context-window summary (~70% via Ollama) stored on notebooks
+    │   ├── memory.py           # context-window summary (~70% via Ollama) → notebooks.conversation_summary
     │   └── results.py
     │
     ├── store/                  # WRITE runs.py for Postgres (schema.sql); DO NOT copy conversations.py (notebook = conversation)
     │   ├── __init__.py
     │   └── runs.py             # Run + RunEvent CRUD (Postgres via psycopg2)
     │
-    ├── runs/                   # COPY (from Athena, Postgres-backed)
+    ├── runs/                   # REWRITE manager (Q31); Postgres-backed via store/runs.py
     │   ├── __init__.py
-    │   └── manager.py          # Postgres-backed RunManager + store/runs.py
+    │   └── manager.py          # Run worker: memory load/persist, always orchestrate, event persistence (Q35)
     │
     ├── bff/                    # COPY — standard wrapper {data, error} around API responses
     │   ├── __init__.py
     │   └── envelope.py
     │
-    ├── api/                    # COPY minimal
+    ├── api/                    # COPY minimal + WRITE deps.py
     │   ├── __init__.py
+    │   ├── deps.py             # WRITE — wire Ollama + registries + orchestrator (no PluginManager)
     │   ├── runs.py             # POST /v1/runs, GET /v1/runs/{id}/events (+ cancel/detail)
-    │   ├── admin.py            # minimal: health + plugins + reload only
+    │   ├── admin.py            # stub: GET /v1/admin/health only (Q37)
     │   └── health.py           # GET /health + GET /api/health alias
     │
-    └── tests/                  # KEEP + EXTEND
+    └── tests/                  # KEEP + EXTEND (path: backend/tests/, not backend/app/tests/)
 ```
+
+---
+
+## Run worker contract (Q31 — REWRITE, do not copy Athena manager verbatim)
+
+`runs/manager._worker` replaces Athena's worker + `ask.py` memory wiring:
+
+1. **Always orchestrate** — no complexity classifier, no `_direct` shortcut.
+2. **Never write `messages`** — frontend owns user/assistant rows (Q22).
+3. **Load memory before run** — read `notebooks.conversation_summary`, `summary_message_count`, and `messages` for `notebook_id`; call `build_memory_context(provider, ...)`; pass `context=memory.as_prompt()` to `orchestrator.run()`.
+4. **Persist memory after run** — if `build_memory_context` returns updated summary/count, write to `notebooks.conversation_summary` + `summary_message_count`.
+5. **Emit `sources` on `rag.query`** — after tool completes, publish SSE `{type:"sources", sources:[{source, section}]}` via `extract_sources()` from `services/chat.py` (Q32); persist this event.
+6. **Event persistence (Q35)** — persist structural events to `run_events`; stream `delta` live only (do not INSERT deltas). On reconnect, replay persisted rows; client resumes token UI from latest `step_completed`/`summary`.
+7. **File artifacts (Q34)** — after run, write tool outputs to disk; emit SSE `artifacts` with download URLs.
 
 ---
 
@@ -260,11 +273,9 @@ class CreateRunResponse(BaseModel):
 |--------|------|---------|
 | `POST` | `/v1/runs` | Create async run → HTTP 202, spawns worker |
 | `GET` | `/v1/runs/{id}` | Run detail |
-| `GET` | `/v1/runs/{id}/events` | SSE stream with full replay on reconnect |
+| `GET` | `/v1/runs/{id}/events` | SSE stream; replays persisted structural events on reconnect (Q35) |
 | `POST` | `/v1/runs/{id}/cancel` | Cancel a running run |
-| `GET` | `/v1/admin/health` | Plugin health |
-| `GET` | `/v1/admin/plugins` | List plugins |
-| `POST` | `/v1/admin/reload` | Graceful reload |
+| `GET` | `/v1/admin/health` | Static registry health stub (Q37; no PluginManager) |
 
 ### Existing Endpoints (from RIP, kept)
 
@@ -302,14 +313,16 @@ data: {"type":"sources","sources":[...]}
 data: [DONE]
 ```
 
-### New Athena Protocol (Q3 locked: EventSource + full replay)
+### New Athena Protocol (Q3/Q35/Q32 locked: EventSource + structural replay)
 
 ```python
 # app/api/runs.py — SSE sketch
-# GET /v1/runs/{id}/events: SELECT * FROM run_events WHERE run_id=%s ORDER BY seq;
-# for each row: yield f"id: {seq}\ndata: {json.dumps(payload)}\n\n"
+# Live: worker publishes to subscribers; persist eligible events to run_events (Q35 table below).
+# Reconnect: SELECT * FROM run_events WHERE run_id=%s ORDER BY seq;
+#   for each row: yield f"id: {seq}\ndata: {json.dumps(payload)}\n\n"
 # Frontend: new EventSource(`${API}/v1/runs/${runId}/events`); dedupe by seq.
 # No ?last_event_id= in v1. No auth headers. proxy_buffering off, 600s timeout.
+# delta: live stream only — NOT persisted; reconnect uses step_completed/summary for text.
 ```
 
 ```
@@ -317,13 +330,23 @@ id: <seq>
 data: {"type": "run_started", "run_id": "..."}
 data: {"type": "plan", "goal": "...", "steps": [...]}
 data: {"type": "step_started", "step_id": "...", "agent_id": "..."}
-data: {"type": "delta", "step_id": "...", "content": "<token>"}
+data: {"type": "delta", "step_id": "...", "content": "<token>"}   # LIVE ONLY — not in run_events
 data: {"type": "step_completed", "step_id": "...", "status": "success", "output": "..."}
-data: {"type": "summary", "content": "<full text>"}
+data: {"type": "sources", "sources": [{"source":"...", "section":"..."}]}   # Q32 — on rag.query
+data: {"type": "summary", "content": "<full answer text>"}   # final answer (≠ conversation_summary)
 data: {"type": "run_completed", "status": "success"}
-data: {"type": "artifacts", "artifacts": [...]}
+data: {"type": "artifacts", "artifacts": [{"artifact_id":"...", "kind":"...", "filename":"...", "url":"..."}]}
 data: {"type": "error", "error": "..."}
+data: {"type": "cancelled", "reason": "..."}
 ```
+
+**Event persistence (Q35)**
+
+| Event type | Persist to `run_events`? | Notes |
+|------------|--------------------------|-------|
+| `run_started`, `plan`, `step_started`, `step_completed` | Yes | Structural |
+| `sources`, `summary`, `run_completed`, `artifacts`, `error`, `cancelled` | Yes | Final / citation / terminal |
+| `delta` | **No** | Live subscribers only; reconnect uses `step_completed`/`summary` |
 
 ---
 
@@ -331,7 +354,7 @@ data: {"type": "error", "error": "..."}
 
 ### Tables
 
-- `notebooks` — document collections + chat history + summary (one notebook = one conversation)
+- `notebooks` — document collections + chat history + `conversation_summary` (one notebook = one conversation)
 - `files` — uploaded documents with status
 - `embeddings` — chunked, embedded document content (pgvector)
 - `messages` — chat turns, owned by notebook_id (no conversation_id)
@@ -343,7 +366,7 @@ data: {"type": "error", "error": "..."}
 ```sql
 -- See backend/schema.sql for the full, runnable DDL.
 -- Key points:
---   notebooks: has summary + summary_message_count (internal, context-window compression)
+--   notebooks: conversation_summary + summary_message_count (internal memory; NOT SSE summary event)
 --   messages: notebook_id FK only, no conversation_id
 --   runs: status, goal, plan JSONB, result JSONB
 --   run_events: seq, event_type, payload JSONB (for SSE replay)
@@ -352,7 +375,7 @@ data: {"type": "error", "error": "..."}
 ### Data Model
 
 ```
-notebooks (with summary fields) ──< files ──< embeddings
+notebooks (conversation_summary + summary_message_count) ──< files ──< embeddings
     │
     └──< messages (notebook_id, no conversation_id)
 
@@ -360,8 +383,8 @@ runs ──< run_events
 runs.notebook_id → notebooks
 ```
 
-- **Notebook** = document collection + chat history + summary (one notebook = one conversation)
-- **Runs** = async orchestration units persisted to Postgres (events streamed via SSE; full replay on reconnect; only stop button terminates)
+- **Notebook** = document collection + chat history + internal `conversation_summary` (one notebook = one conversation)
+- **Runs** = async orchestration units persisted to Postgres (structural SSE events replay on reconnect; deltas live-only; only stop button terminates)
 - **Messages** = written by frontend only (Q2): user row before `POST /v1/runs`, assistant row once on `run_completed`; backend never writes `messages` (avoids duplicates).
 
 ---
@@ -433,9 +456,10 @@ class Settings(BaseSettings):
     memory_window_size: int = 10  # advisory verbatim window (WINDOW_SIZE); real constraint is budget
     summary_threshold_pct: float = 0.7
     summary_max_tokens: int = 512  # _SUMMARY_MAX_TOKENS; summary LLM call cap
-    # build_memory_context(provider, stored_summary, messages[{role,content}] oldest-first,
+    # build_memory_context(provider, stored_conversation_summary, messages[{role,content}] oldest-first,
     #   window_size, folded_count) -> (MemoryContext, new_summary, new_count);
     # fold only newly-aged-out turns (folded_count dedup → notebooks.summary_message_count);
+    # persist new summary → notebooks.conversation_summary (NOT the SSE summary event);
     # summarize via ollama_default_model (never gemini_model_*); trim newest-first to budget.
 
     # Observability (optional)
@@ -612,7 +636,7 @@ No new deps — `useState + EventSource` is enough. No `zustand`, no `@tanstack/
 
 | File | Changes |
 |------|---------|
-| `hooks/notebooks/useMessages.ts` | Replace `sendMessageStream` with run lifecycle (Q2+Q7 locked): `createMessageAPI(user)` → `createRun()` → `EventSource` subscribe → `useState` accumulation → `plan` in `<details>` collapsible, `delta/summary` as tokens, `artifacts` as download links, cancel button → `cancelRun()`; on `run_completed` single `createMessageAPI(assistant, text, sources)`; on refresh re-subscribe + dedupe by `seq`; DELETE `services/llm.ts` import |
+| `hooks/notebooks/useMessages.ts` | Replace `sendMessageStream` with run lifecycle (Q2+Q7+Q32): `createMessageAPI(user)` → `createRun()` → `EventSource` subscribe → `useState` accumulation → `plan` in `<details>` collapsible, `delta/summary` as tokens, `sources` event → accumulate citations, `artifacts` as download links, cancel button → `cancelRun()`; on `run_completed` single `createMessageAPI(assistant, text, sources)`; on refresh re-subscribe persisted events + dedupe by `seq` (no delta replay — Q35); DELETE `services/llm.ts` import |
 | `config.ts` | Keep `export const API = import.meta.env.VITE_API_URL` (dev `http://localhost:8000`); no hardcoded host |
 | `vite.config.ts` | Add `server.proxy: {'/api/': 'http://localhost:8000', '/v1/': 'http://localhost:8000'}`; dev port stays `5178` (compose maps `5173:80` via nginx) |
 | `nginx.conf` | Add `location /v1/` block identical to `/api/` (proxy_pass `http://backend:8000`, buffering off, 600s) — current file only has `/api/` |
@@ -623,16 +647,21 @@ No new deps — `useState + EventSource` is enough. No `zustand`, no `@tanstack/
 
 ```typescript
 // types/runs.ts — copy verbatim (Q7 locked)
+export type Source = { source: string; section: string }
+export type Artifact = { artifact_id: string; kind: string; filename: string; url: string }
+
 export type RunEvent =
   | { type: 'run_started'; run_id: string; seq: number }
   | { type: 'plan'; goal: string; steps: PlanStep[]; seq: number }
   | { type: 'step_started'; step_id: string; agent_id?: string; tool_id?: string; seq: number }
-  | { type: 'delta'; step_id: string; content: string; seq: number }
+  | { type: 'delta'; step_id: string; content: string; seq: number }   // live only — not replayed from DB
   | { type: 'step_completed'; step_id: string; status: string; output?: string; seq: number }
+  | { type: 'sources'; sources: Source[]; seq: number }
   | { type: 'summary'; content: string; seq: number }
   | { type: 'run_completed'; status: string; seq: number }
   | { type: 'artifacts'; artifacts: Artifact[]; seq: number }
   | { type: 'error'; error: string; seq: number }
+  | { type: 'cancelled'; reason: string; seq: number }
 ```
 
 ### Updated Streaming Flow
@@ -646,7 +675,7 @@ HTTP 202 { run_id }
     ↓
 GET /v1/runs/{run_id}/events (SSE)
     ↓
-Event: run_started → plan → step_started → delta* → step_completed → summary → run_completed
+Event: run_started → plan → step_started → delta* → step_completed → sources? → summary → artifacts? → run_completed
     ↓
 Frontend accumulates tokens into assistant message (same optimistic UI pattern)
 ```
@@ -657,16 +686,16 @@ Frontend accumulates tokens into assistant message (same optimistic UI pattern)
 
 | Step | What | Files: source → dest + edits | Check | Done when |
 |------|------|------------------------------|-------|-----------|
-| 1 | Create `backend/app/` root, move RIP `core/rag/routes/services/` under it | MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`; COPY `athena/backend/app/core/classutils.py`, `constants.py` → `app/core/`; fix imports to `from app.*` | `ruff check backend/app` | Imports resolve, `uvicorn app.main:app` collects |
-| 2 | Copy + adapt provider: `base.py`, `ollama.py`, `streaming.py` | COPY `athena/backend/app/providers/base.py`, `ollama.py`, `streaming.py` → `app/providers/`; replace all `gemini_model_*` with `ollama_default_model`; drop `ProviderPlugin` and `app.plugins.api` (inherit `ModelProvider` directly); drop `gemini.py`, `llama_server.py`, `tracing.py` | `pytest backend/app/tests/test_providers.py -q` | Ollama chat call succeeds, ThinkFilter strips `<think>` tags |
+| 1 | Create `backend/app/` root, move RIP `core/rag/routes/services/` under it | MOVE dirs; COPY `classutils.py`, `constants.py`; fix imports to `from app.*`; DELETE `services/rewritter.py` + `services/llm.py` (Q33); migrate `backend/tests/conftest.py` to `app.core.config` + `app.main:app` + Ollama probe (Q38) | `ruff check backend/app` | Imports resolve, conftest migrated |
+| 2 | Copy + adapt provider: `base.py`, `ollama.py`, `streaming.py` | COPY providers; gemini→Ollama; drop plugin wrappers | `pytest backend/tests/test_providers.py -q` | Ollama chat call succeeds, ThinkFilter strips `<think>` tags |
 | 3 | Copy agents: base, registry, reasoning, coding, vision | COPY `athena/backend/app/agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `app/agents/`; drop `AgentPlugin` (inherit `Agent` directly); export `get_default_agent_registry(provider)` factory; point models to Ollama | `ruff`; import registry | All 3 agents listed in registry |
-| 4 | Copy tools: base, registry, executor, rag_query, plot, doc, sandbox, image | COPY `athena/backend/app/tools/base.py`, `registry.py`, `executor.py` (delete approval gate) → `app/tools/`; drop `ToolPlugin` (inherit `Tool` directly); export `get_default_tool_registry()` factory; REWRITE `rag_query.py` as `rag.query(notebook_id, query, top_k=8)` reusing `VectorRAG` singleton (via `app.core.dependencies.get_rag` or module getter, do NOT re-instantiate `VectorRAG()` on query); COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py` | `pytest backend/app/tests/test_tools.py -q` | `rag.query` returns chunks for test notebook |
-| 5 | Copy orchestration | COPY `plan.py`, `planner.py` (`gemini_model_*`→`ollama_default_model`, keep `trust_env=False` pattern), `validator.py` as-is, `aggregator.py` (deterministic only), `engine.py` (no reflection edge), `plan_graph.py` (no approval gate, capture `notebook_id` in node closure and inject into tool inputs), `orchestrator.py` (`run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore), `memory.py` (Q28: `WINDOW_SIZE=10`, `len//4` estimator, budget=`int(ollama_context_window*0.7)`, `_SUMMARY_MAX_TOKENS=512`, `folded_count↔summary_message_count`), `results.py` | `pytest backend/app/tests/test_orchestration.py -q` | Planner→Engine→Aggregator e2e passes |
+| 4 | Copy tools: base, registry, executor, rag_query, plot, doc, sandbox, image | COPY tools; REWRITE `rag_query.py` with VectorRAG singleton; emit sources payload shape for worker (Q32) | `pytest backend/tests/test_tools.py -q` | `rag.query` returns chunks for test notebook |
+| 5 | Copy orchestration | COPY orchestration; aggregator Q36 rules; memory → `conversation_summary`; no reflection/approval | `pytest backend/tests/test_orchestration.py -q` | Planner→Engine→Aggregator e2e passes |
 | 6 | Runs store (Postgres) | WRITE `app/store/runs.py` for PostgreSQL (`runs` + `run_events` via `core.db.pg_connection`); DO NOT copy Athena's SQLite store or `store/conversations.py` | `psql -f backend/schema.sql` + `pytest test_runs_store -q` | Runs + events persist + replay in order |
-| 7 | Copy API minimal + artifacts | COPY `bff/envelope.py`, `app/artifacts.py` (adapt to save under `{upload_dir}/{notebook_id}/`), `app/api/runs.py` (+ `runs/manager.py`), `app/api/admin.py` (health + plugins + reload only), `app/api/health.py` (+ `/api/health` alias) | `curl POST /v1/runs → 202` | `POST /v1/runs`, `GET /events`, `/cancel` work |
+| 7 | API + REWRITE worker + artifacts | COPY `bff/envelope.py`; REWRITE `artifacts.py` (Q34 file-based); WRITE `api/deps.py`; COPY/adapt `api/runs.py`; **REWRITE `runs/manager.py` (Q31)**; stub `api/admin.py` (Q37 health only); `api/health.py` | `curl POST /v1/runs → 202` | Runs lifecycle, sources SSE, structural replay, cancel work |
 | 8 | Rewrite `app/core/config.py` | TARGET block in §Config — replace file wholesale (port 8000) | `python -c "from app.core.config import Settings; Settings()"` | Boots without `LLM_URL` |
 | 9 | Rewrite `app/main.py` | Merge RIP lifespan (VectorRAG) + Athena /v1 mounts, no plugins | `uvicorn app.main:app --port 8000` + `GET /api/health → ok` | Both `/api/*` + `/v1/*` serve |
-| 10 | Verify `schema.sql` | VERIFY — already has notebooks.summary, messages by notebook_id only, runs + run_events; no rewrite unless drift | `psql -f backend/schema.sql` re-runnable | All 6 tables exist |
+| 10 | Verify `schema.sql` | VERIFY — `notebooks.conversation_summary`, messages by notebook_id only, runs + run_events (Q38) | `psql -f backend/schema.sql` re-runnable | All 6 tables exist |
 | 11 | Update `pyproject.toml` | TARGET block in §Infrastructure — replace deps wholesale | `pip install -e .` | Install clean |
 | 12 | Replace `docker-compose.yml` | TARGET block — Postgres + backend + frontend (Redis commented as optional) | `docker compose config` | Config valid |
 | 13 | Replace `.env.example` | TARGET block — merged keys | `copy .env.example .env` | Backend boots |
@@ -675,7 +704,7 @@ Frontend accumulates tokens into assistant message (same optimistic UI pattern)
 | 16 | Frontend: add `types/runs.ts` | CREATE discriminated union `RunEvent` (see §Frontend) | `npx tsc -b` | Typecheck passes |
 | 17 | Frontend: update `config.ts`, `vite.config.ts` | EDIT: keep `VITE_API_URL=http://localhost:8000`; proxy `/v1/` → backend | `npm run dev` | No hardcoded `8010` |
 | 18 | Delete `routes/llm.py` | DELETE `app/routes/llm.py` (`/api/prompt[/stream]` removed, no shim) | `rg "/api/prompt" backend frontend` → 0 hits | Old endpoints gone |
-| 19 | Integration testing | `POST /v1/runs` e2e: upload PDF → ready → runs → SSE `run_started→plan→step_started→delta*→step_completed→summary→run_completed` → Ollama answer + `rag.query` chunks | `pytest` | Green |
+| 19 | Integration testing | E2e: upload PDF → runs → SSE chain incl. `sources` + file `artifacts`; refresh mid-run replays structural events (no delta flood); `conversation_summary` updates on long history | `pytest` | Green |
 
 ---
 
@@ -698,7 +727,7 @@ Kept because still true for RAG behavior; all else deleted with that file.
 - **Chunking:** Docling turns PDFs into Markdown, then split on headers (`#/##/###` → H1/H2/H3 metadata). Semantic chunker stays disabled.
 - **Retrieval (`VectorRAG`):** single retrieval path: pgvector similarity + Postgres full-text (`websearch_to_tsquery`) combined by rank fusion → BGE rerank, keep above threshold (top-3 fallback). `vector(1024)`, HNSW index, GIN index on text search.
 - **Ingestion:** `POST /api/files/{id}/process` → background `run_rag_pipeline` (load → chunk → embed → store → `ready`/`error`). No retry/progress (known limit).
-- **Chat format:** numbered `[i (source)]` blocks, `extract_sources` deduped. Query rewrite uses recent context (context-window-based).
+- **Chat format:** numbered `[i (source)]` blocks, `extract_sources` deduped. Sources emitted via SSE `sources` event after `rag.query` (Q32). Query rewrite dropped (Q33).
 - **Open roadmap items (moved from deleted PLAN.md):** robust source citation/highlighting, drag-drop upload + per-file progress, local retrieval eval harness.
 
 ## Decision Log (Q1–Q20, 2026-09-11; Q21–Q29, 2026-09-12; Q30, 2026-09-12)
@@ -708,3 +737,4 @@ Kept because still true for RAG behavior; all else deleted with that file.
 - Q21–Q27 (2026-09-12, agreed): Q21 run contract `{notebook_id,message}→{run_id}`, no envelope on `/v1/*`. Q22 frontend owns `messages` writes. Q23 SSE via EventSource, full replay, dedupe by `seq`. Q24 import map + `backend/` workdir + `app.main:app`. Q25 env alias table + `cors_origins: str`. Q26 sync `rag_query` with orchestrator-injected `notebook_id`. Q27 frontend render spec (collapsible plan, artifacts links, cancel, `/v1/` proxy in vite + nginx, Dockerfile CMD fix).
 - Q28–Q29 (2026-09-12, Round 2): Q28 memory port — `WINDOW_SIZE=10`, `len//4` estimator (no tiktoken), budget `int(ollama_context_window=32768 * 0.7)`, `_SUMMARY_MAX_TOKENS=512` via `ollama_default_model`; orchestrator `run(request_text, notebook_id, on_event, context, cancel_event)`; Ollama `trust_env=False` + `120000ms` timeout + empty `ollama_image_model` honest-fail. Q29 deps frozen (`langfuse` kept for import, `google-genai`/`neo4j` dropped, no mypy gate); compose breaking rename `db→postgres` + `prototype_rip/trainee→rip/rip` requires `down` + fresh `.env`; `CORS_ORIGINS=*` (not JSON list); `conftest.py` must migrate to `app.core.config` + `app.main:app` + Ollama `/api/tags` probe.
 - Q30 (2026-09-12, Review & missing dependencies audit): (1) Providers: copy `streaming.py` (`ThinkFilter`); drop `ProviderPlugin` from `ollama.py` → inherit `ModelProvider`. (2) Agents & Tools: drop `AgentPlugin`/`ToolPlugin` → inherit directly from `Agent`/`Tool`; copy `classutils.py` and `constants.py` from Athena core to RIP core; export `get_default_agent_registry`/`get_default_tool_registry` factories in `registry.py`. (3) `rag.query`: reuse `VectorRAG` singleton from lifespan (`get_rag`) rather than reloading PyTorch models per query. (4) `plan_graph.py`: capture `notebook_id` in node closure and inject into tool inputs (`resolved_input["notebook_id"] = notebook_id`). (5) Artifacts: include `app/artifacts.py` (saved to `{upload_dir}/{notebook_id}/`, surfaced via SSE). (6) `store/runs.py`: write Postgres implementation using `psycopg2` / `core.db.pg_connection` matching `schema.sql`, not Athena's SQLite. (7) Frontend: include `ChatArea.tsx`/`Footer.tsx` for cancel button & run status.
+- Q31–Q38 (2026-09-12, pre-implementation review): Q31 run worker REWRITE — always orchestrate, load/persist `conversation_summary` via `build_memory_context`, never write `messages`, Postgres event log. Q32 sources SSE `{type:"sources", sources:[{source,section}]}` on `rag.query` complete. Q33 drop query rewrite — delete `rewritter.py` + legacy `services/llm.py`. Q34 file-based artifacts at `{upload_dir}/{notebook_id}/artifacts/{artifact_id}/{filename}` with download URLs in SSE. Q35 persist structural events + final text only; `delta` live-only. Q36 deterministic aggregator — 1 success→output, multiple→labeled join, clarification→verbatim, all failed→errors. Q37 admin stub — `GET /v1/admin/health` only, no PluginManager. Q38 schema rename `notebooks.summary`→`conversation_summary`; conftest migrates in Phase 1.
