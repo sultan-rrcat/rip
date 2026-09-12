@@ -1,0 +1,182 @@
+# Implementation Plan — Athena → RIP (phased checklist)
+
+> Complete picture lives in `MERGE_PLAN.md` + `CONTEXT.md`. This file is execution only: phases in order, one checkbox per task, test per task.
+> Rule: one unchecked box per session. On conflict, `MERGE_PLAN.md §0` wins.
+
+## How to use this file
+
+1. Work top to bottom. Do not skip phases.
+2. Each task has Files, Edits, Test, Done. Do all four before checking the box.
+3. End of session: `pytest` + `ruff`, append `SESSION_LOG.md` as `## [date] - PHASE x.y - prompt/commit/status`.
+
+---
+
+## Phase 1 — Skeleton + config (backend boots, no orchestration yet)
+
+- [ ] **1.1 Create `backend/app/` root**
+  - Files: MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`
+  - Edits: apply import map `routes.→app.routes.`, `core.→app.core.`, `services.→app.services.`, `rag.→app.rag.`; empty `__init__.py` per package; workdir `rip/backend/`; `backend/Dockerfile` CMD → `app.main:app`
+  - Test: `ruff check backend/app` (from `rip/`)
+  - Done: imports resolve, no `flat backend/app.py` refs remain
+
+- [ ] **1.2 Verify `schema.sql`**
+  - Files: `rip/backend/schema.sql` (read-only unless drift)
+  - Edits: none — must already have `notebooks.summary`, `messages` by `notebook_id` only, `runs` + `run_events`
+  - Test: `psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql` twice (must be re-runnable)
+  - Done: 6 tables exist: `notebooks/files/embeddings/messages/runs/run_events`
+
+- [ ] **1.3 Rewrite `app/core/config.py`**
+  - Files: REPLACE `rip/backend/app/core/config.py` with TARGET block in `MERGE_PLAN.md §Config`
+  - Edits: port `8000`, `OLLAMA_*`, no `LLM_URL`, no `NEO4J_*`; `cors_origins: str="*"`; support `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` aliases
+  - Test: `python -c "from app.core.config import Settings; print(Settings().port)"` → `8000`
+  - Done: boots without `LLM_URL`
+
+- [ ] **1.4 Update `pyproject.toml` + `.env.example`**
+  - Files: REPLACE `rip/pyproject.toml` deps + `rip/.env.example` keys with TARGET blocks (Q29: keep `langfuse`, drop `google-genai`/`neo4j`; `.env` uses `CORS_ORIGINS=*`, keeps `BGE_MODEL_DIR` aliases)
+  - Edits: no `requirements.txt`, no `neo4j`, no `DATABASE_URL`
+  - Test: `pip install -e .` (from `rip/`) + `copy .env.example .env`
+  - Done: install clean, backend boots to `GET /api/health`
+
+- [ ] **1.5 Replace `docker-compose.yml`**
+  - Files: REPLACE `rip/docker-compose.yml` with TARGET block (Q29 breaking: `db→postgres`, `prototype_rip/trainee→rip/rip`, `postgres_data→pgdata`)
+  - Edits: services `postgres/backend/frontend`, `8000:8000`, `DB_HOST=postgres`, `OLLAMA_BASE_URL=http://host.docker.internal:11434`, Redis commented as optional; run `docker compose down` before `up --build postgres`
+  - Test: `docker compose config`
+  - Done: config valid, `docker compose up postgres` healthy
+
+Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/health → {"status":"ok"}` (old main, new layout).
+
+---
+
+## Phase 2 — Providers + agents
+
+- [ ] **2.1 Providers (`base.py`, `ollama.py`)**
+  - Files: COPY `athena/backend/app/providers/base.py`, `ollama.py` → `rip/backend/app/providers/`
+  - Edits: replace all `gemini_model_*` with `ollama_default_model`; DO NOT copy `gemini.py`, `llama_server.py`, `tracing.py`
+  - Test: `pytest backend/tests/test_providers.py -q` (create if missing: Ollama chat round-trip, mock allowed only if Ollama down)
+  - Done: Ollama `qwen2.5:14b` chat call succeeds
+
+- [ ] **2.2 Agents (reasoning + coding + vision)**
+  - Files: COPY `athena/backend/app/agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `rip/backend/app/agents/`
+  - Edits: point models to `ollama_default_model`
+  - Test: `python -c "from app.agents.registry import list_agents; print(list_agents())"` contains all 3
+  - Done: registry lists reasoning, coding, vision
+
+---
+
+## Phase 3 — Tools + orchestration + runs store
+
+- [ ] **3.1 Tools (all 5)**
+  - Files: COPY `base.py`, `registry.py`, `executor.py` → `app/tools/`; REWRITE `rag_query.py`; COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py`
+  - Edits: delete approval gate in `executor.py`; `rag_query.py` sync `def rag_query(notebook_id: str, query: str, top_k: int = 8)` → `VectorRAG().retrieve_context(... )["results"]` with `from app.rag.vector_rag import VectorRAG`; `notebook_id` from `Run`, never LLM
+  - Test: `pytest backend/tests/test_tools.py -q` — `rag.query` returns chunks for a test notebook with files
+  - Done: all 5 tools import, `rag.query` e2e works
+
+- [ ] **3.2 Orchestration**
+  - Files: COPY `plan.py`, `planner.py`, `validator.py`, `aggregator.py`, `engine.py`, `plan_graph.py`, `orchestrator.py`, `memory.py`, `results.py` → `app/orchestration/`
+  - Edits: `planner.py` gemini→Ollama; `aggregator.py` deterministic only; `engine.py` remove reflection edge; `plan_graph.py` remove approval gate; `orchestrator.py` `run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore; `memory.py` Q28: `WINDOW_SIZE=10`, `len//4`, budget `int(ollama_context_window=32768*0.7)`, `_SUMMARY_MAX_TOKENS=512` via `ollama_default_model`, `folded_count↔notebooks.summary_message_count`
+  - Test: `pytest backend/tests/test_orchestration.py -q`
+  - Done: Planner → Engine → Aggregator passes on a `rag.query` plan
+
+- [ ] **3.3 Runs store (Postgres)**
+  - Files: COPY `athena/backend/app/store/runs.py` → `app/store/runs.py`; DO NOT copy `store/conversations.py`
+  - Edits: Run + RunEvent CRUD on Postgres
+  - Test: `pytest backend/tests/test_runs_store.py -q` — create run, append events, replay by `seq`
+  - Done: runs survive restart, replay in order
+
+---
+
+## Phase 4 — API + main + cleanup
+
+- [ ] **4.1 Runs + admin + health API**
+  - Files: COPY `athena/backend/app/bff/envelope.py` → `app/bff/` (for `/api/*` only); `api/runs.py` + `runs/manager.py`, `api/admin.py` (health + plugins + reload only), `api/health.py` → `app/api/`
+  - Edits: `CreateRunRequest{notebook_id: UUID, message: str}` → `POST /v1/runs → 202 {run_id}` bare (no envelope/auth); `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events` (full replay `ORDER BY seq`, `id:<seq>`), `POST /v1/runs/{id}/cancel`, `GET /health` + `GET /api/health` alias; backend never writes `messages`
+  - Test: `curl -X POST localhost:8000/v1/runs -H "Content-Type: application/json" -d '{"notebook_id":"<uuid>","message":"hello"}'` → `202`
+  - Done: runs lifecycle + SSE replay + cancel work
+
+- [ ] **4.2 Rewrite `app/main.py`**
+  - Files: REPLACE `rip/backend/app/main.py`
+  - Edits: merge RIP lifespan (load VectorRAG once) + Athena `/v1` mounts; no plugin loader
+  - Test: `uvicorn app.main:app --port 8000` + `GET /api/health` and `GET /health` both `ok`
+  - Done: both `/api/*` and `/v1/*` serve
+
+- [ ] **4.3 Delete `routes/llm.py`**
+  - Files: DELETE `rip/backend/app/routes/llm.py`
+  - Edits: remove `/api/prompt` + `/api/prompt/stream`, no shim
+  - Test: search `"/api/prompt"` in `backend/` + `frontend/src/` → 0 hits; `pytest -q` still green
+  - Done: old endpoints gone
+
+Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api/notebooks`, upload via `/api/files`, `POST /v1/runs`, stream `/events`.
+
+---
+
+## Phase 5 — Frontend (runs only)
+
+- [ ] **5.1 `types/runs.ts`**
+  - Files: CREATE `frontend/src/types/runs.ts`
+  - Edits: discriminated union `RunEvent` with `seq: number` on every variant (see `MERGE_PLAN.md §Frontend`, copy verbatim); `PlanStep{step_id,agent_id?,tool_id?,description}`, `Artifact{artifact_id,kind,path|url}`
+  - Test: `npx tsc -b` in `frontend/`
+  - Done: typecheck passes
+
+- [ ] **5.2 `services/runs.ts`**
+  - Files: CREATE `frontend/src/services/runs.ts` (`createRun(notebookId, message)`, `subscribeToRunEvents(runId, onEvent)` via `EventSource`, `cancelRun(runId)`)
+  - Edits: use `VITE_API_URL` via `API` from `@/config`, `EventSource`, no hardcoded host
+  - Test: `npm run lint` in `frontend/`
+  - Done: no lint errors
+
+- [ ] **5.3 `hooks/notebooks/useMessages.ts`**
+  - Files: EDIT `frontend/src/hooks/notebooks/useMessages.ts`; DELETE `services/llm.ts` import
+  - Edits: `createMessageAPI(user)` → `createRun()` → `EventSource`; `useState` accumulation; `plan` in `<details>` collapsible; `delta/summary` as tokens; `artifacts` as download links; cancel button; dedupe SSE by `seq`; single `createMessageAPI(assistant)` on `run_completed`
+  - Test: manual chat — send message, see `plan` collapse, tokens stream
+  - Done: tokens stream, refresh mid-run replays via SSE
+
+- [ ] **5.4 `config.ts` + `vite.config.ts` + `nginx.conf` + `Dockerfile`**
+  - Files: EDIT `frontend/src/config.ts`, `frontend/vite.config.ts`, `frontend/nginx.conf`, `backend/Dockerfile`
+  - Edits: keep `export const API = VITE_API_URL (http://localhost:8000)`; `vite.server.proxy` for `/api/` + `/v1/`; `nginx` add `location /v1/` = `/api/` block; `backend/Dockerfile` CMD `app.main:app`; no `8010`
+  - Test: `npm run dev`, search `8010` in `frontend/src/` → 0 hits
+  - Done: dev proxy works for both `/api/` and `/v1/`
+
+Phase 5 exit: full UI chat works: Gallery → Workspace → send → plan + answer + sources.
+
+---
+
+## Phase 6 — Integration + hardening
+
+- [ ] **6.1 Backend suite**
+  - Test: `pytest` (from `rip/`) + `ruff check .`
+  - Done: green; only known noise is torch/CUDA teardown dump after pass (exit 0, not a failure)
+  - Q29 conftest migration (do in Phase 1, not Phase 6): `tests/conftest.py` → `from app.core.config import Settings` (not `import config`), `from app.main import app` (not `from app import app`), `sys.path` insert `backend/`, Ollama probe `OLLAMA_BASE_URL/api/tags` (not `LLM_URL/v1/models`)
+
+- [ ] **6.2 Smoke test (must pass before merge done)**
+  1. Create notebook → upload PDF → poll `GET /api/notebooks/{id}/files` until `ready`
+  2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`
+  3. `GET /v1/runs/{id}/events` streams `run_started → plan → step_started → delta* → step_completed → summary → run_completed`
+  4. Confirm `rag.query` chunks + Ollama answer; long history triggers `summary` at ~70% context
+  5. Refresh mid-run → reconnect `/events` → full replay, no duplicate assistant message
+  6. `POST /v1/runs/{id}/cancel` → `cancelled`, worker stops before next step
+
+- [ ] **6.3 Frontend checks**
+  - Test: `npm run lint` + `npm run build` in `frontend/`
+  - Done: both pass, no `zustand` / `@tanstack/react-query` added
+
+---
+
+## Test matrix (quick ref)
+
+| Level | Command | Where | Pass means |
+|---|---|---|---|
+| Lint backend | `ruff check .` | `rip/` | 0 errors |
+| Unit backend | `pytest backend/tests/ -q` | `rip/` | green |
+| Typecheck frontend | `npx tsc -b` | `rip/frontend/` | no errors |
+| Lint frontend | `npm run lint` | `rip/frontend/` | clean |
+| Build frontend | `npm run build` | `rip/frontend/` | dist built |
+| Compose | `docker compose config` | `rip/` | valid |
+| Health | `GET localhost:8000/api/health` | browser/curl | `{"status":"ok"}` |
+| Runs e2e | Phase 6.2 steps | curl + UI | full SSE chain + replay + cancel |
+
+## Troubleshooting
+
+- DB connect fail → check `DB_*`, pgvector extension, `schema.sql` applied twice.
+- Ollama empty → `OLLAMA_BASE_URL` reachable, `qwen2.5:14b` pulled (`ollama list`).
+- Startup crash (models) → `BGE_M3_MODEL_PATH` / `BGE_RERANKER_V2_M3` wrong; fix `.env`.
+- Upload stuck `processing` → `run_rag_pipeline` has no retry; re-`POST /api/files/{id}/process`.
+- SSE stops on refresh → check `run_events` rows exist; frontend must re-`GET /events` and dedupe by `(type, step_id, seq)`.

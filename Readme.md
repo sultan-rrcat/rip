@@ -6,26 +6,25 @@ Single-codebase, offline research assistant: document RAG + multi-agent orchestr
 
 ---
 
-## What it does (Day-1 target)
+## What it does
 
 - Notebooks group documents + chat history (one notebook = one conversation). Summary stored on notebook (internal, context-window compression).
 - Uploads parsed (Docling), chunked, embedded (BGE-M3), stored in Postgres+pgvector.
-- Chat goes through `POST /v1/runs` + SSE (`run_started→plan→delta→summary→run_completed`) with reasoning agent + `rag.query`. Runs persist to Postgres; survive page refresh; full SSE replay on reconnect.
-- Phase 2 (deferred): coding/vision agents, `plot.chart`, `doc.generate`, `code.sandbox`, `image.generate`, Redis, Langfuse container.
+- Chat goes through `POST /v1/runs` + SSE (`run_started→plan→step_started→delta→step_completed→summary→run_completed`) with reasoning, coding, vision agents + `rag.query`, `plot.chart`, `doc.generate`, `code.sandbox`, `image.generate`. Runs persist to Postgres; survive page refresh; full SSE replay on reconnect.
 
 Pre-merge prototype (VectorRAG notebook Q&A) works; merge replaces `/api/prompt[/stream]` with `/v1/runs`.
 
 ---
 
-## Tech stack (target)
+## Tech stack
 
 | Role | Choice |
 |---|---|
-| Backend | FastAPI 3.11+, LangGraph DAG, `backend/app/` root |
-| Retrieval | `VectorRAG`: pgvector cosine + full-text RRF + BGE rerank |
+| Backend | Python 3.11+, FastAPI, LangGraph (ordered steps with dependencies), `backend/app/` root |
+| Retrieval | `VectorRAG`: vector similarity + full-text rank fusion + BGE rerank |
 | LLM | Ollama `qwen2.5:14b` (`OLLAMA_BASE_URL`) |
-| DB | Postgres+pgvector (`notebooks/files/embeddings/conversations/messages`) |
-| Frontend | React 19 + Vite, Tailwind + MUI v7, `useState+EventSource` (no store lib Day-1) |
+| DB | Postgres+pgvector (`notebooks/files/embeddings/messages/runs/run_events`) |
+| Frontend | React 19 + Vite, Tailwind + MUI v7, `useState+EventSource` (no store lib) |
 
 ---
 
@@ -43,7 +42,7 @@ docs/          MERGE_PLAN.md (master), AGENT.md, SETUP.md, ADR.md, SESSION_LOG.m
 ## Quickstart
 
 1. `docs/SETUP.md` (env, DB, Ollama, compose).
-2. `docker compose up postgres backend frontend` — Day-1 boot.
+2. `docker compose up postgres backend frontend`.
 3. Frontend dev: `cd frontend && npm install && npm run dev`.
 
 Backend: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`.
@@ -54,13 +53,13 @@ Backend: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 | Document | Purpose |
 |---|---|
-| `docs/MERGE_PLAN.md` | **Master spec** — goal, decisions Q1–Q16, contracts, order, logs |
+| `docs/MERGE_PLAN.md` | **Master spec** — goal, decisions, contracts, order, logs |
 | `docs/SETUP.md` | Runnable env/DB/compose/smoke test |
 | `docs/AGENT.md` | Session rules + target map + ritual |
-| `docs/ADR.md` | History + merge ADRs 008–013 |
+| `docs/ADR.md` | History + merge ADRs |
 | `docs/SESSION_LOG.md` | Append-only session history |
 
-Deleted as merge-dead: `ARCHITECTURE.md` (salvaged to MERGE Appendix A), `PLAN.md` (open items → MERGE Phase 2), `GITHUB_MIGRATION.md` (ops one-off).
+Deleted as merge-dead: `ARCHITECTURE.md` (salvaged to MERGE Appendix A), `PLAN.md` (open items → MERGE roadmap), `GITHUB_MIGRATION.md` (ops one-off).
 
 ---
 

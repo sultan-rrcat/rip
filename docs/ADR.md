@@ -28,7 +28,7 @@ Each entry records a decision with status, context, the decision, and consequenc
 - **Status:** Accepted
 - **Context:** Physics documents (equations, tables, sectioned papers) need parsing that preserves structure and meaningful boundaries.
 - **Decision:** Parse with **Docling** to Markdown, then chunk on Markdown headers (`#/##/###` → H1/H2/H3) via `MarkdownHeaderTextSplitter`. Semantic chunking exists in code but is disabled.
-- **Consequences:** Section-aware metadata on chunks (`source`, H1/H2/H3) that feeds retrieval and source display. Complex equations/tables are only as good as Docling's output; see MERGE_PLAN Appendix A / Phase 2.
+- **Consequences:** Section-aware metadata on chunks (`source`, H1/H2/H3) that feeds retrieval and source display. Complex equations/tables are only as good as Docling's output; see MERGE_PLAN Appendix A.
 
 ## ADR-005: Background-task ingestion pipeline
 - **Status:** Accepted
@@ -54,7 +54,7 @@ Each entry records a decision with status, context, the decision, and consequenc
 
 - **Status:** Accepted
 - **Context:** Runs must survive page refreshes and notebook switches. Only the stop button can terminate a run. The original design specified in-memory-only runs, but a page refresh kills the SSE connection and the run becomes orphaned.
-- **Decision:** Persist run state and events to Postgres (`runs` + `run_events` tables). The SSE endpoint replays all events for a run on reconnect (full replay, frontend deduplicates by event type + step_id). This adds 2 SQL tables but no new infrastructure (Postgres is already in the stack). Redis was considered but deferred to Phase 2 to avoid adding Day-1 infra risk.
+- **Decision:** Persist run state and events to Postgres (`runs` + `run_events` tables). The SSE endpoint replays all events for a run on reconnect (full replay, frontend deduplicates by event type + step_id). This adds 2 SQL tables but no new infrastructure (Postgres is already in the stack). Redis stays optional for queue/cache.
 - **Consequences:** Runs survive page refreshes. Frontend can reconnect and see the full run history. The stop button sends `POST /v1/runs/{id}/cancel` which sets `status=cancelled`; the worker checks this before each step.
 
 ## ADR-015: Remove conversations table

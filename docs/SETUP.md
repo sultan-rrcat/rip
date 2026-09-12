@@ -1,4 +1,4 @@
-# Setup Guide: RIP Merge (Day-1 Target)
+# Setup Guide: RIP Merge
 
 > Authoritative spec: `docs/MERGE_PLAN.md`. This file is the runnable subset (env, DB, compose, smoke test).
 
@@ -27,15 +27,16 @@ Model paths (Pydantic `backend/app/core/config.py`):
 copy .env.example .env
 ```
 
-Day-1 keys (see MERGE_PLAN §Config):
+Keys (see MERGE_PLAN §Config):
 
 | Key | Value |
 |---|---|
-| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; local override allowed |
+| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; local override allowed; ⚠️ breaking rename from `db`/`prototype_rip`/`trainee` — `docker compose down` before migrating |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` in compose, `http://localhost:11434` local |
 | `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` |
+| `OLLAMA_CONTEXT_WINDOW` | `32768` (budget = `*0.7` ≈ 22900 tokens, `len//4` estimator) |
 | `PORT` | `8000` |
-| `CORS_ORIGINS` | `["*"]` dev |
+| `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
 | `UPLOAD_DIR` | `./backend/uploads` |
 
 No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
@@ -46,13 +47,13 @@ No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
 ```
 
-Creates `notebooks` (with summary fields), `files`, `messages`, `embeddings`, `runs`, `run_events`, HNSW + GIN indexes.
+Creates `notebooks` (with summary fields), `files`, `messages`, `embeddings`, `runs`, `run_events`, vector + text-search indexes.
 
-## 4. Run (Day-1: Postgres + Ollama only)
+## 4. Run (Required: Postgres + Ollama. Optional: Redis, Langfuse)
 
 ```powershell
 docker compose up postgres backend frontend
-# Redis / Langfuse are Phase 2 (commented in compose)
+# Redis / Langfuse are optional (commented in compose)
 ```
 
 Local alternative:
@@ -65,8 +66,9 @@ npm install; npm run dev
 ```
 
 Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (alias `GET /health`).
+Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see MERGE_PLAN §Frontend); prod `nginx.conf` must proxy both.
 
-## 5. Smoke test (Day-1 done)
+## 5. Smoke test
 
 1. Create notebook, upload PDF → `ready`.
 2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.

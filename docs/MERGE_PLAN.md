@@ -5,15 +5,16 @@
 - **Status:** RATIFIED v1.0 (grill rounds Q1–Q16) | **Last-verified:** 2026-09-11 vs `athena/backend/app/` + `rip/backend/`.
 - **Precedence:** this file wins over any other doc on conflicts. `ARCHITECTURE.md`, `PLAN.md` are deleted; `ADR.md`/`SETUP.md`/`AGENT.md` defer to this file for merge work.
 - **Change rule:** append to Decision Log only, never silently rewrite Decisions/Inavariants. Revisit requires new ADR entry.
-- **Session starter (copy-paste):** "Read MERGE_PLAN §0→API fully. Implement exactly one unchecked Day-1 box in Implementation Order. No new endpoints/config/deps. Run pytest+ruff. Append SESSION_LOG on exit."
-- **Day-1 invariants:** `POST /v1/runs→202`, SSE `run_started/plan/step_started/delta/step_completed/summary/run_completed/artifacts/error`, `routes/llm.py` deleted (no shim), `/api/health` alias kept, port `8000`, `CORS *`, `rag.query(notebook_id,query,top_k=8)` direct import, single `messages` table (notebook_id only, no conversation_id), runs persist to Postgres (survive refresh, full SSE replay), summary by context window (~70% of model context), one notebook = one conversation.
-- **Day-1 forbidden:** `8010`, `zustand`/`react-query`, Redis-required, dual messages tables, Gemini/`LLM_URL`, approval gate return, flat `backend/app.py`, full `admin.py` console.
+- **Session starter (copy-paste):** "Read MERGE_PLAN §0→API fully. Implement exactly one unchecked box in Implementation Order. No new endpoints/config/deps. Run pytest+ruff. Append SESSION_LOG on exit."
+- **Invariants:** `POST /v1/runs→202`, SSE `run_started/plan/step_started/delta/step_completed/summary/run_completed/artifacts/error`, `routes/llm.py` deleted (no shim), `/api/health` alias kept, port `8000`, `CORS *`, `rag.query(notebook_id,query,top_k=8)` direct import, single `messages` table (notebook_id only, no conversation_id), runs persist to Postgres (survive refresh, full SSE replay), summary by context window (~70% of model context), one notebook = one conversation.
+- **Locked Q1–Q7 (2026-09-12, agreed):** (1) `POST /v1/runs` body is exactly `{notebook_id: UUID, message: str}` → `202 {run_id: UUID}`; no auth/quota/tenant; no BFF envelope on `/v1/*` (bare JSON); BFF `{data,error}` applies only to `/api/*` if used. (2) Message ownership = frontend only: `POST user msg` before `POST /v1/runs`, `POST assistant msg` once on `run_completed/summary`; `runs/manager.py` + orchestrator never touch `messages`. (3) SSE via `EventSource` (no auth headers needed); `GET /v1/runs/{id}/events` replays all `run_events ORDER BY seq` with `id:<seq>`; frontend dedupes by `seq`; no `?last_event_id=` in v1. (4) Move map: `from routes.X→from app.routes.X`, `from core.X→from app.core.X`, `from services.X→from app.services.X`, `from rag.X→from app.rag.X`; run from `rip/backend/` as `uvicorn app.main:app`; empty `__init__.py` per package. (5) Env mapping frozen — see §Config table; `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` kept as aliases; `cors_origins` is `str="*"` (not `list[str]`); `LLM_URL`/`NEO4J_*`/`DATABASE_URL` forbidden. (6) `rag.query` is sync `def rag_query(notebook_id: str, query: str, top_k: int = 8) -> list[dict]` calling `VectorRAG().retrieve_context(notebook_id, query, top_k=top_k)`; `notebook_id` injected by orchestrator from `Run.notebook_id`, never LLM-generated. (7) Frontend: `config.ts` keeps `export const API = VITE_API_URL`; `vite.config.ts` proxies `/api/` + `/v1/` → `http://localhost:8000`; `useMessages.ts` renders `plan` as `<details>` collapsible, `delta/summary` as tokens, `artifacts` as download links, cancel button → `POST /v1/runs/{id}/cancel`.
+- **Forbidden:** `8010`, `zustand`/`react-query`, Redis-required, dual messages tables, Gemini/`LLM_URL`, approval gate return, flat `backend/app.py`, full `admin.py` console.
 
 ## Goal
 
 Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based notebook app to create a single unified platform. The result is **RIP (Research Intelligence Platform)** — a fully offline-capable, single-codebase research assistant with document RAG, multi-agent orchestration, and tool execution.
 
-**Agreed scope (grill rounds Q1–Q16): Day-1 = reasoning agent + `rag.query` over `POST /v1/runs + SSE` only.** Coding/vision agents, `plot.chart`, `doc.generate`, `code.sandbox`, `image.generate` are Phase 2. Single import root `backend/app/` (Athena style).
+**Scope: reasoning, coding, vision agents + `rag.query`, `plot.chart`, `doc.generate`, `code.sandbox`, `image.generate` over `POST /v1/runs + SSE`.** Single import root `backend/app/` (Athena style).
 
 ## Design Decisions
 
@@ -62,7 +63,7 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 │                           │ Provider: Ollama (direct)      │  │
 │                           └───────────────────────────────┘  │
 │                                                              │
-│  API: /v1/runs, /v1/runs/{id}/events, /v1/conversations,   │
+│  API: /v1/runs, /v1/runs/{id}/events,              │
 │       /api/notebooks, /api/files, /api/health (+ /health alias) │
 └──────────────────────────┬──────────────────────────────────┘
          ┌─────────────────┼─────────────────┐
@@ -95,27 +96,27 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 |-----------|--------|------------|
 | Ollama Provider | `app/providers/ollama.py` | Keep; re-point all `gemini_model_*` refs (planner, aggregator, memory, agents) to `ollama_default_model` |
 | Agent base + registry | `app/agents/base.py`, `app/agents/registry.py` | Keep |
-| Reasoning agent | `app/agents/reasoning.py` | Day-1: keep, `ollama_default_model` |
-| Coding agent | `app/agents/coding.py` | Phase 2 |
-| Vision agent | `app/agents/vision.py` | Phase 2 |
+| Reasoning agent | `app/agents/reasoning.py` | Keep, `ollama_default_model` |
+| Coding agent | `app/agents/coding.py` | Keep, `ollama_default_model` |
+| Vision agent | `app/agents/vision.py` | Keep, `ollama_default_model` |
 | Tool base + registry + executor | `app/tools/base.py`, `app/tools/registry.py`, `app/tools/executor.py` | Remove approval gate |
-| rag.query tool | `app/tools/rag_query.py` | **Rewrite**: `rag.query(notebook_id: UUID, query: str, top_k=8)` direct `from app.rag.vector_rag import VectorRAG`, filter by `notebook_id` |
-| plot.chart tool | `app/tools/plot_chart.py` | Phase 2 |
-| doc.generate tool | `app/tools/doc_generate.py` | Phase 2 |
-| code.sandbox tool | `app/tools/code_sandbox.py` | Phase 2 (needs `sandbox_image` pull) |
-| image.generate tool | `app/tools/image_generate.py` | Phase 2, adapt for Ollama |
+| rag.query tool | `app/tools/rag_query.py` | **Rewrite (Q6 locked)**: `def rag_query(notebook_id: str, query: str, top_k: int = 8) -> list[dict]: return VectorRAG().retrieve_context(notebook_id, query, top_k=top_k)["results"]` with `from app.rag.vector_rag import VectorRAG` (sync; `VectorRAG.retrieve_context` is sync, default `top_k=5` overridden to `8`); orchestrator injects `notebook_id` from `Run.notebook_id` |
+| plot.chart tool | `app/tools/plot_chart.py` | Keep |
+| doc.generate tool | `app/tools/doc_generate.py` | Keep |
+| code.sandbox tool | `app/tools/code_sandbox.py` | Keep (needs `sandbox_image` pull) |
+| image.generate tool | `app/tools/image_generate.py` | Keep, adapt for Ollama |
 | Planner | `app/orchestration/planner.py` | Keep; `gemini_model_*` → Ollama |
 | PlanValidator | `app/orchestration/validator.py` | Keep as-is (generic, no SQL refs) |
 | Aggregator | `app/orchestration/aggregator.py` | **Simplify**: deterministic only, no LLM |
 | Outer graph (LangGraph) | `app/orchestration/engine.py` | **Remove reflection edge** |
 | Inner graph (LangGraph) | `app/orchestration/plan_graph.py` | **Remove approval gate** |
-| Orchestrator facade | `app/orchestration/orchestrator.py` | Remove multi-tenancy (`tenant="dev"` → `notebook_id`) |
-| Memory | `app/orchestration/memory.py` | **Keep rolling summary** on Ollama (window-10 + 512-tok summary when >10 turns) |
+| Orchestrator facade | `app/orchestration/orchestrator.py` | Remove multi-tenancy (`tenant="dev"` → `notebook_id`). Q28 locked signature: `def run(self, request_text: str, notebook_id: str, on_event=None, context: str|None = None, cancel_event=None) -> OrchestrationResult`; `notebook_id` passed to every tool call (esp. `rag.query`); `context` = `MemoryContext.as_prompt()` text; remove `ApprovalStore`/`max_reflection_cycles`/`quotas`/`tenancy` params |
+| Memory | `app/orchestration/memory.py` | **Keep context-window summary** on Ollama (~70% of model context, stored on `notebooks`). Q28 locked port: `WINDOW_SIZE=10`, `estimate_tokens=len//4`, `MAX=sum(int(ollama_context_window*summary_threshold_pct))`, `_SUMMARY_MAX_TOKENS=512`, `provider.generate(model=ollama_default_model, ...)` (never `gemini_model_*`), `folded_count ↔ notebooks.summary_message_count` |
 | Plan + results models | `app/orchestration/plan.py`, `app/orchestration/results.py` | Keep |
-| Store | `app/store/conversations.py` | **Delete**: notebook = conversation, no separate conversations table. Summary moves to `notebooks` table. — Q1/Q15 |
-| Run lifecycle | `app/api/runs.py` + `app/runs/manager.py` + `app/store/runs.py` | **Postgres-backed**: persist runs + events to survive refresh; full SSE replay on reconnect; only stop button terminates — Q19 |
-| Conversations API | `app/api/conversations.py` | **Delete**: notebook = conversation, no separate endpoint needed |
-| BFF envelope | `app/bff/envelope.py` | Keep |
+| Store | `app/store/conversations.py` | **Do not copy**: notebook = conversation, no separate conversations table. Summary moves to `notebooks` table. |
+| Run lifecycle | `app/api/runs.py` + `app/runs/manager.py` + `app/store/runs.py` | **Postgres-backed**: persist runs + events to survive refresh; full SSE replay on reconnect; only stop button terminates |
+| Conversations API | `app/api/conversations.py` | **Do not copy**: notebook = conversation, no separate endpoint needed |
+| BFF envelope | `app/bff/envelope.py` | Keep — standard wrapper {data, error} around API responses |
 | Admin endpoints | `app/api/admin.py` | Minimal only (health + plugins + reload); drop full console |
 
 ## What's Kept from RIP (Untouched)
@@ -137,52 +138,61 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 
 ## Backend Directory Structure (single root `backend/app/`)
 
+> Q4 locked move (vibe-tool: run from `rip/backend/`; `uvicorn app.main:app --port 8000`):
+> `from routes.X → from app.routes.X`, `from core.X → from app.core.X`, `from services.X → from app.services.X`, `from rag.X → from app.rag.X`. Empty `__init__.py` per new package. `backend/Dockerfile` CMD becomes `app.main:app`.
+
 ```
 backend/
-├── schema.sql                  # EXTEND — add conversations table + messages.conversation_id
+├── schema.sql                  # VERIFY — already has notebooks.summary, messages by notebook_id only, runs + run_events (no rewrite unless drift)
 ├── Dockerfile
 └── app/                        # ALL core logic (Athena style, single `from app.*` root)
     ├── main.py                 # REWRITE — merge RIP lifespan (VectorRAG) + Athena /v1 mounts
-    ├── core/                   # RIP moved + config rewritten
+    ├── core/                   # MOVE from RIP backend/core/ + REWRITE config
     │   ├── config.py           # REWRITE — merged Pydantic Settings (port 8000)
-    │   ├── db.py               # KEEP (from RIP)
-    │   ├── dependencies.py     # KEEP
-    │   └── logging.py          # KEEP
+    │   ├── db.py               # MOVE (from RIP, keep)
+    │   ├── dependencies.py     # MOVE (keep)
+    │   └── logging.py          # MOVE (keep)
     │
-    ├── rag/                    # KEEP (from RIP, untouched)
+    ├── rag/                    # MOVE (from RIP, keep)
     │   ├── pipeline.py
     │   └── vector_rag.py
     │
-    ├── routes/                 # KEEP (from RIP, moved)
+    ├── routes/                 # MOVE (from RIP)
     │   ├── notebooks.py
     │   ├── files.py
-    │   └── messages.py         # EXTEND — add conversation_id FK
+    │   └── messages.py         # KEEP — notebook_id only, no conversation_id
     │                           # DELETE llm.py (POST /api/prompt[/stream] removed, no shim)
     │
-    ├── services/               # KEEP (from RIP, untouched)
+    ├── services/               # MOVE (from RIP, keep)
     │   ├── chat.py
     │   ├── file_processor.py
     │   └── rewritter.py
     │
-    ├── providers/              # NEW (from Athena) Day-1
+    ├── providers/              # COPY from athena/backend/app/providers/ (base.py, ollama.py; drop gemini, llama_server, tracing)
     │   ├── __init__.py
     │   ├── base.py
     │   └── ollama.py
     │
-    ├── agents/                 # NEW Day-1: base + registry + reasoning only; coding/vision Phase 2
+    ├── agents/                 # COPY from athena/backend/app/agents/ (base + registry + reasoning + coding + vision)
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
-    │   └── reasoning.py
+    │   ├── reasoning.py
+    │   ├── coding.py
+    │   └── vision.py
     │
-    ├── tools/                  # NEW Day-1: base + registry + executor + rag_query only; rest Phase 2
+    ├── tools/                  # COPY from athena/backend/app/tools/
     │   ├── __init__.py
     │   ├── base.py
     │   ├── registry.py
     │   ├── executor.py         # simplified, no approval gate
-    │   └── rag_query.py        # REWRITTEN: rag.query(notebook_id, query, top_k) direct VectorRAG
+    │   ├── rag_query.py        # REWRITE: rag.query(notebook_id, query, top_k) direct VectorRAG
+    │   ├── plot_chart.py       # KEEP
+    │   ├── doc_generate.py     # KEEP
+    │   ├── code_sandbox.py     # KEEP (needs sandbox_image pull)
+    │   └── image_generate.py   # KEEP, adapt for Ollama
     │
-    ├── orchestration/          # NEW (from Athena)
+    ├── orchestration/          # COPY (from Athena)
     │   ├── __init__.py
     │   ├── plan.py
     │   ├── planner.py          # gemini_model_* → ollama_default_model
@@ -191,25 +201,24 @@ backend/
     │   ├── engine.py           # SIMPLIFIED — no reflection
     │   ├── plan_graph.py       # SIMPLIFIED — no approval gate
     │   ├── orchestrator.py     # SIMPLIFIED — notebook_id, no tenant
-    │   ├── memory.py           # window-10 + rolling Ollama summary (kept per Q16)
+    │   ├── memory.py           # context-window summary (~70% via Ollama) stored on notebooks
     │   └── results.py
     │
-    ├── store/                  # NEW (Postgres-backed)
+    ├── store/                  # COPY runs.py from athena/backend/app/store/runs.py (Postgres); DO NOT copy conversations.py (notebook = conversation)
     │   ├── __init__.py
     │   └── runs.py             # Run + RunEvent CRUD (Postgres)
     │
-    ├── runs/                   # NEW (from Athena, Postgres-backed)
+    ├── runs/                   # COPY (from Athena, Postgres-backed)
     │   ├── __init__.py
     │   └── manager.py          # Postgres-backed RunManager + store/runs.py
     │
-    ├── bff/                    # NEW
+    ├── bff/                    # COPY — standard wrapper {data, error} around API responses
     │   ├── __init__.py
     │   └── envelope.py
     │
-    ├── api/                    # NEW (minimal)
+    ├── api/                    # COPY minimal
     │   ├── __init__.py
     │   ├── runs.py             # POST /v1/runs, GET /v1/runs/{id}/events (+ cancel/detail)
-    │   ├── conversations.py    # notebook-scoped CRUD
     │   ├── admin.py            # minimal: health + plugins + reload only
     │   └── health.py           # GET /health + GET /api/health alias
     │
@@ -219,6 +228,25 @@ backend/
 ---
 
 ## API Surface
+
+### Run creation contract (Q1 locked — vibe-tool must copy verbatim)
+
+```python
+# app/api/runs.py — replaces Athena RequestEnvelope + auth/quota/tenancy
+from uuid import UUID
+from pydantic import BaseModel
+
+class CreateRunRequest(BaseModel):
+    notebook_id: UUID
+    message: str  # min_length=1, strip whitespace; 422 on empty
+
+class CreateRunResponse(BaseModel):
+    run_id: UUID  # bare JSON, NO BFF envelope on /v1/*
+```
+
+- `POST /v1/runs` body: `{notebook_id, message}` only. No `conversation_id`, `model`, `trace_id`, no API key.
+- Response: `202 {run_id}` bare. BFF `{data, error}` wrapper applies to `/api/*` only, never `/v1/*`.
+- Errors: `404` unknown `notebook_id`, `422` empty message.
 
 ### New Endpoints (from Athena)
 
@@ -268,7 +296,15 @@ data: {"type":"sources","sources":[...]}
 data: [DONE]
 ```
 
-### New Athena Protocol
+### New Athena Protocol (Q3 locked: EventSource + full replay)
+
+```python
+# app/api/runs.py — SSE sketch
+# GET /v1/runs/{id}/events: SELECT * FROM run_events WHERE run_id=%s ORDER BY seq;
+# for each row: yield f"id: {seq}\ndata: {json.dumps(payload)}\n\n"
+# Frontend: new EventSource(`${API}/v1/runs/${runId}/events`); dedupe by seq.
+# No ?last_event_id= in v1. No auth headers. proxy_buffering off, 600s timeout.
+```
 
 ```
 id: <seq>
@@ -320,12 +356,25 @@ runs.notebook_id → notebooks
 
 - **Notebook** = document collection + chat history + summary (one notebook = one conversation)
 - **Runs** = async orchestration units persisted to Postgres (events streamed via SSE; full replay on reconnect; only stop button terminates)
+- **Messages** = written by frontend only (Q2): user row before `POST /v1/runs`, assistant row once on `run_completed`; backend never writes `messages` (avoids duplicates).
 
 ---
 
 ## Config
 
-### Merged `app/core/config.py` (Pydantic Settings, Day-1 values per Q9)
+### Merged `app/core/config.py` (TARGET Pydantic Settings — replace file wholesale)
+
+> Q5 locked env mapping (vibe-tool: implement exactly; keep aliases or local boot breaks):
+> | .env / compose key | Settings field | Notes |
+> |---|---|---|
+> | `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `db_host/db_port/db_name/db_user/db_password` | compose `DB_HOST=postgres`; local `localhost` |
+> | `OLLAMA_BASE_URL/OLLAMA_DEFAULT_MODEL/OLLAMA_TIMEOUT_MS` | `ollama_base_url/ollama_default_model/ollama_timeout_ms` | replaces `LLM_URL` (forbidden) |
+> | `BGE_M3_MODEL_PATH` \|\| alias `BGE_MODEL_DIR` | `bge_m3_model_path` | must read both (see SESSION_LOG 2026-09-11) |
+> | `BGE_RERANKER_V2_M3` \|\| alias `RERANKER_MODEL_DIR` | `bge_reranker_v2_m3` | must read both |
+> | `PORT` | `port = 8000` | |
+> | `CORS_ORIGINS="*"` | `cors_origins: str = "*"` | do NOT use `list[str]` — env `["*"]` fails to parse |
+> | `UPLOAD_DIR` | `upload_dir` | artifacts scoped to `{upload_dir}/{notebook_id}/` |
+> | Forbidden | `LLM_URL`, `NEO4J_*`, `DATABASE_URL` | fail closed if present |
 
 ```python
 from pydantic_settings import BaseSettings
@@ -342,7 +391,8 @@ class Settings(BaseSettings):
     model_provider: str = "ollama"
     ollama_base_url: str = "http://host.docker.internal:11434"  # localhost outside docker
     ollama_default_model: str = "qwen2.5:14b"
-    ollama_timeout_ms: int = 120000
+    ollama_timeout_ms: int = 120000  # Q28: Athena used 180000; locked 120000. httpx trust_env=False (proxy trap).
+    ollama_image_model: str = ""  # empty = image.generate fails honest (Athena ADR-024)
 
     # Embedding models (local paths)
     bge_m3_model_path: str = "./backend/models/bge-m3"
@@ -350,7 +400,7 @@ class Settings(BaseSettings):
 
     # Server (keep 8000 to avoid nginx/frontend churn; was 8010 in draft)
     port: int = 8000
-    cors_origins: list[str] = ["*"]  # dev; tighten in prod
+    cors_origins: str = "*"  # Q5 locked: plain str, split on ","; NOT list[str]
     log_level: str = "INFO"
 
     # Upload
@@ -371,10 +421,16 @@ class Settings(BaseSettings):
     # Orchestration
     default_max_plan_steps: int = 10
 
-    # Conversation memory
-    # Conversation memory (context-window-based)
-    memory_window_size: int = 10  # advisory; real constraint is token budget
-    summary_threshold_pct: float = 0.7  # trigger summary at ~70% of model context window
+    # Chat memory (context-window-based, Q28 locked — port of athena memory.py)
+    # estimator: len(text)//4 (no tiktoken); budget = int(ollama_context_window * summary_threshold_pct)
+    ollama_context_window: int = 32768  # qwen2.5:14b native window; override per model
+    memory_window_size: int = 10  # advisory verbatim window (WINDOW_SIZE); real constraint is budget
+    summary_threshold_pct: float = 0.7
+    summary_max_tokens: int = 512  # _SUMMARY_MAX_TOKENS; summary LLM call cap
+    # build_memory_context(provider, stored_summary, messages[{role,content}] oldest-first,
+    #   window_size, folded_count) -> (MemoryContext, new_summary, new_count);
+    # fold only newly-aged-out turns (folded_count dedup → notebooks.summary_message_count);
+    # summarize via ollama_default_model (never gemini_model_*); trim newest-first to budget.
 
     # Observability (optional)
     langfuse_enabled: bool = False
@@ -408,10 +464,13 @@ OLLAMA_TIMEOUT_MS=120000
 # Embedding models (local paths)
 BGE_M3_MODEL_PATH=./backend/models/bge-m3
 BGE_RERANKER_V2_M3=./backend/models/reranker/bge_reranker_v2_m3
+# Aliases honored by config (do not delete — local boot needs them):
+# BGE_MODEL_DIR=./backend/models/bge-m3
+# RERANKER_MODEL_DIR=./backend/models/reranker/bge_reranker_v2_m3
 
 # Server
 PORT=8000
-CORS_ORIGINS=["*"]
+CORS_ORIGINS=*
 LOG_LEVEL=INFO
 
 # Upload
@@ -435,11 +494,16 @@ LANGFUSE_SECRET_KEY=
 
 ---
 
-## Infrastructure (Day-1 boot = Postgres + Ollama only; Redis/Langfuse/sandbox Phase 2)
+## Infrastructure (Required: Postgres + Ollama. Optional: Redis, Langfuse, sandbox)
 
-### `docker-compose.yml`
+### `docker-compose.yml` (Q29 locked — breaking rename `db` → `postgres`)
 
 ```yaml
+# MIGRATION WARNING (vibe-tool: do NOT auto-migrate data): current compose uses
+# service `db` + DB prototype_rip/trainee + volume postgres_data. Target uses
+# `postgres` + rip/rip + volume pgdata. Steps: `docker compose down`,
+# `copy .env.example .env` (update OLLAMA_BASE_URL + BGE paths), then
+# `docker compose up --build postgres`. Old volume orphaned by design.
 services:
   backend:
     build: ./backend
@@ -448,7 +512,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      # redis: optional (Phase 2, not needed for Day-1 — runs are Postgres-backed)
+      # redis: optional (runs are Postgres-backed, Redis only for queue/cache if needed)
     env_file: ./.env
     environment:
       DB_HOST: postgres
@@ -481,7 +545,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # redis: Phase 2 only
+  # redis: optional
   #   image: redis:7-alpine
   #   ports:
   #     - "6379:6379"
@@ -490,7 +554,7 @@ volumes:
   pgdata:
 ```
 
-### Python Dependencies (`pyproject.toml`)
+### Python Dependencies (`pyproject.toml` — Q29 locked, replace wholesale)
 
 ```toml
 [project]
@@ -507,57 +571,62 @@ dependencies = [
     # Database
     "psycopg2-binary>=2.9.12",
     "pgvector>=0.4.2",
-    # RAG pipeline
+    # RAG pipeline (kept from RIP)
     "docling>=2.81.0",
     "sentence-transformers>=5.2.3",
-    # Orchestration
+    # Orchestration (from Athena requirements.txt)
     "langgraph>=1.1.6",
-    # HTTP
+    "langfuse>=4.14.5",  # optional at runtime (langfuse_enabled=false = no-op), required for import
+    # HTTP (Ollama provider needs trust_env=False; see ollama.py)
     "httpx>=0.28.1",
     # Config
     "pyyaml>=6.0",
-    # Tools
+    # Tools (doc.generate pipeline, Athena ADR-026)
     "python-docx>=1.1.0",
     "reportlab>=4.0",
 ]
+# Dropped: google-genai (Gemini removed), neo4j (graph removed).
+# Dev: ruff, pytest (backend/tests/). No mypy gate for vibe sessions (ruff + pytest only).
 ```
 
 ### Frontend Dependencies
 
-Day-1: no new deps — `useState + EventSource` is enough. Defer `zustand`, `@tanstack/react-query` until multi-conversation cache needed (Phase 2).
+No new deps — `useState + EventSource` is enough. No `zustand`, no `@tanstack/react-query`.
 
-## Frontend Changes (Day-1: chat via runs only, plan as collapsible)
+## Frontend Changes (chat via runs only, plan as collapsible)
 
 ### New Files
 
 | File | Purpose |
 |------|---------|
-| `services/runs.ts` | `createRun(notebookId, message)`, `subscribeToRunEvents(runId, onEvent)` |
-| `types/runs.ts` | `RunEvent` discriminated union type |
+| `services/runs.ts` | `createRun(notebookId, message)` → `POST /v1/runs {notebook_id, message}`, `subscribeToRunEvents(runId, onEvent)` via `EventSource`, `cancelRun(runId)` → `POST /v1/runs/{id}/cancel` |
+| `types/runs.ts` | `RunEvent` discriminated union type (copy from §Frontend verbatim; includes `seq: number` on every event for dedupe) |
 
 ### Modified Files
 
 | File | Changes |
 |------|---------|
-| `hooks/notebooks/useMessages.ts` | Replace `sendMessageStream` with run lifecycle: POST `/v1/runs`, subscribe to SSE, `useState` accumulation, render `plan/steps` collapsible, `delta/summary` as tokens |
-| `config.ts` | Keep `VITE_API_URL` (dev `http://localhost:8000`); no hardcoded `8010` |
-| `vite.config.ts` | Add proxy for `/v1/` → backend (`/api/` stays direct) |
-| `package.json` | No change Day-1 (defer `zustand`, `@tanstack/react-query`) |
+| `hooks/notebooks/useMessages.ts` | Replace `sendMessageStream` with run lifecycle (Q2+Q7 locked): `createMessageAPI(user)` → `createRun()` → `EventSource` subscribe → `useState` accumulation → `plan` in `<details>` collapsible, `delta/summary` as tokens, `artifacts` as download links, cancel button → `cancelRun()`; on `run_completed` single `createMessageAPI(assistant, text, sources)`; on refresh re-subscribe + dedupe by `seq`; DELETE `services/llm.ts` import |
+| `config.ts` | Keep `export const API = import.meta.env.VITE_API_URL` (dev `http://localhost:8000`); no hardcoded host |
+| `vite.config.ts` | Add `server.proxy: {'/api/': 'http://localhost:8000', '/v1/': 'http://localhost:8000'}`; dev port stays `5178` (compose maps `5173:80` via nginx) |
+| `nginx.conf` | Add `location /v1/` block identical to `/api/` (proxy_pass `http://backend:8000`, buffering off, 600s) — current file only has `/api/` |
+| `backend/Dockerfile` | `WORKDIR /app/backend` + `CMD ["uvicorn", "app.main:app", ...]` (current `app:app` breaks after move); `COPY` unchanged |
+| `package.json` | No change (no `zustand`, no `@tanstack/react-query`); lint is `oxlint` |
 
 ### New Types
 
 ```typescript
-// types/runs.ts
+// types/runs.ts — copy verbatim (Q7 locked)
 export type RunEvent =
-  | { type: 'run_started'; run_id: string }
-  | { type: 'plan'; goal: string; steps: PlanStep[] }
-  | { type: 'step_started'; step_id: string; agent_id?: string; tool_id?: string }
-  | { type: 'delta'; step_id: string; content: string }
-  | { type: 'step_completed'; step_id: string; status: string; output?: string }
-  | { type: 'summary'; content: string }
-  | { type: 'run_completed'; status: string }
-  | { type: 'artifacts'; artifacts: Artifact[] }
-  | { type: 'error'; error: string }
+  | { type: 'run_started'; run_id: string; seq: number }
+  | { type: 'plan'; goal: string; steps: PlanStep[]; seq: number }
+  | { type: 'step_started'; step_id: string; agent_id?: string; tool_id?: string; seq: number }
+  | { type: 'delta'; step_id: string; content: string; seq: number }
+  | { type: 'step_completed'; step_id: string; status: string; output?: string; seq: number }
+  | { type: 'summary'; content: string; seq: number }
+  | { type: 'run_completed'; status: string; seq: number }
+  | { type: 'artifacts'; artifacts: Artifact[]; seq: number }
+  | { type: 'error'; error: string; seq: number }
 ```
 
 ### Updated Streaming Flow
@@ -578,30 +647,29 @@ Frontend accumulates tokens into assistant message (same optimistic UI pattern)
 
 ---
 
-## Implementation Order (Day-1 slice first, rest Phase 2)
+## Implementation Order
 
-| Step | What | Scope |
-|------|------|-------|
-| 1 | Create `backend/app/` root, move RIP `core/rag/routes/services/` under it | Structure |
-| 2 | Copy + adapt provider: `app/providers/base.py`, `app/providers/ollama.py` (all `gemini_*` → Ollama) | ~450 lines |
-| 3 | Copy agents Day-1: `app/agents/base.py`, `registry.py`, `reasoning.py`; defer `coding.py`, `vision.py` | ~200 lines |
-| 4 | Copy tools Day-1: `app/tools/base.py`, `registry.py`, `executor.py` (no gate), `rag_query.py` (rewrite direct VectorRAG); defer `plot/doc/sandbox/image` | ~350 lines |
-| 5 | Copy orchestration: `plan.py`, `planner.py`, `validator.py` (as-is), `aggregator.py` (deterministic), `engine.py` (no reflection), `plan_graph.py` (no approval), `orchestrator.py` (notebook_id), `memory.py` (context-window-based summary ~70% + recent messages), `results.py` | ~900 lines |
-| 6 | Delete `app/store/conversations.py`; create `app/store/runs.py` (Postgres CRUD for runs + run_events) | ~120 lines |
-| 7 | Copy API minimal: `bff/envelope.py`, `app/api/runs.py` (+ `runs/manager.py`), `app/api/admin.py` (3 endpoints), `app/api/health.py` (+ `/api/health` alias) | ~350 lines |
-| 8 | Rewrite `app/core/config.py` — merged Pydantic settings (port 8000) | ~80 lines |
-| 9 | Rewrite `app/main.py` — merge RIP lifespan + Athena mounts, no plugins | ~100 lines |
-| 10 | Rewrite `schema.sql` — fresh DDL (notebooks with summary, messages without conversation_id, runs + run_events) | ~140 lines |
-| 11 | Update `pyproject.toml` — merged deps | — |
-| 12 | Create `docker-compose.yml` — Postgres + backend + frontend (Redis commented) | ~50 lines |
-| 13 | Create `.env.example` — merged | ~25 lines |
-| 14 | Frontend: add `services/runs.ts` | ~80 lines |
-| 15 | Frontend: update `hooks/notebooks/useMessages.ts` — run lifecycle, no new deps | ~60 lines |
-| 16 | Frontend: add `types/runs.ts` | ~30 lines |
-| 17 | Frontend: update `config.ts`, `vite.config.ts` (`/v1/` proxy) | ~5 lines |
-| 18 | Delete `routes/llm.py` (`/api/prompt[/stream]` removed, no shim) | ~5 lines |
-| 19 | Integration testing (Day-1: `POST /v1/runs` rag.query e2e) | Tests |
-| 20 | Phase 2: coding/vision agents, plot/doc/sandbox/image tools, Redis, Langfuse container, zustand/query | Follow-up |
+| Step | What | Files: source → dest + edits | Check | Done when |
+|------|------|------------------------------|-------|-----------|
+| 1 | Create `backend/app/` root, move RIP `core/rag/routes/services/` under it | MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`; fix imports to `from app.*` | `ruff check backend/app` | Imports resolve, `uvicorn app.main:app` collects |
+| 2 | Copy + adapt provider: `base.py`, `ollama.py` | COPY `athena/backend/app/providers/base.py`, `ollama.py` → `app/providers/`; replace all `gemini_model_*` with `ollama_default_model`; drop `gemini.py`, `llama_server.py`, `tracing.py` | `pytest backend/app/tests/test_providers.py -q` | Ollama chat call succeeds |
+| 3 | Copy agents: base, registry, reasoning, coding, vision | COPY `athena/backend/app/agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `app/agents/`; point models to Ollama | `ruff`; import registry | All 3 agents listed in registry |
+| 4 | Copy tools: base, registry, executor, rag_query, plot, doc, sandbox, image | COPY `athena/backend/app/tools/base.py`, `registry.py`, `executor.py` (delete approval gate) → `app/tools/`; REWRITE `rag_query.py` as `rag.query(notebook_id, query, top_k=8)` with `from app.rag.vector_rag import VectorRAG`; COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py` | `pytest backend/app/tests/test_tools.py -q` | `rag.query` returns chunks for test notebook |
+| 5 | Copy orchestration | COPY `plan.py`, `planner.py` (`gemini_model_*`→`ollama_default_model`, keep `trust_env=False` pattern), `validator.py` as-is, `aggregator.py` (deterministic only), `engine.py` (no reflection edge), `plan_graph.py` (no approval gate), `orchestrator.py` (`run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore), `memory.py` (Q28: `WINDOW_SIZE=10`, `len//4` estimator, budget=`int(ollama_context_window*0.7)`, `_SUMMARY_MAX_TOKENS=512`, `folded_count↔summary_message_count`), `results.py` | `pytest backend/app/tests/test_orchestration.py -q` | Planner→Engine→Aggregator e2e passes |
+| 6 | Runs store (Postgres) | COPY `athena/backend/app/store/runs.py` → `app/store/runs.py` (Run + RunEvent CRUD); DO NOT copy `store/conversations.py` | `psql -f backend/schema.sql` + `pytest test_runs_store -q` | Runs + events persist + replay |
+| 7 | Copy API minimal | COPY `bff/envelope.py`, `app/api/runs.py` (+ `runs/manager.py`), `app/api/admin.py` (health + plugins + reload only), `app/api/health.py` (+ `/api/health` alias) | `curl POST /v1/runs → 202` | `POST /v1/runs`, `GET /events`, `/cancel` work |
+| 8 | Rewrite `app/core/config.py` | TARGET block in §Config — replace file wholesale (port 8000) | `python -c "from app.core.config import Settings; Settings()"` | Boots without `LLM_URL` |
+| 9 | Rewrite `app/main.py` | Merge RIP lifespan (VectorRAG) + Athena /v1 mounts, no plugins | `uvicorn app.main:app --port 8000` + `GET /api/health → ok` | Both `/api/*` + `/v1/*` serve |
+| 10 | Verify `schema.sql` | VERIFY — already has notebooks.summary, messages by notebook_id only, runs + run_events; no rewrite unless drift | `psql -f backend/schema.sql` re-runnable | All 6 tables exist |
+| 11 | Update `pyproject.toml` | TARGET block in §Infrastructure — replace deps wholesale | `pip install -e .` | Install clean |
+| 12 | Replace `docker-compose.yml` | TARGET block — Postgres + backend + frontend (Redis commented as optional) | `docker compose config` | Config valid |
+| 13 | Replace `.env.example` | TARGET block — merged keys | `copy .env.example .env` | Backend boots |
+| 14 | Frontend: add `services/runs.ts` | CREATE `frontend/src/services/runs.ts` (`createRun`, `subscribeToRunEvents`) | `npm run lint` | No lint errors |
+| 15 | Frontend: update `hooks/notebooks/useMessages.ts` | EDIT to run lifecycle: POST `/v1/runs`, SSE subscribe, `useState` accumulation, `plan/steps` collapsible | Manual chat test | Tokens stream, plan collapsible |
+| 16 | Frontend: add `types/runs.ts` | CREATE discriminated union `RunEvent` (see §Frontend) | `npx tsc -b` | Typecheck passes |
+| 17 | Frontend: update `config.ts`, `vite.config.ts` | EDIT: keep `VITE_API_URL=http://localhost:8000`; proxy `/v1/` → backend | `npm run dev` | No hardcoded `8010` |
+| 18 | Delete `routes/llm.py` | DELETE `app/routes/llm.py` (`/api/prompt[/stream]` removed, no shim) | `rg "/api/prompt" backend frontend` → 0 hits | Old endpoints gone |
+| 19 | Integration testing | `POST /v1/runs` e2e: upload PDF → ready → runs → SSE `run_started→plan→step_started→delta*→step_completed→summary→run_completed` → Ollama answer + `rag.query` chunks | `pytest` | Green |
 
 ---
 
@@ -609,26 +677,27 @@ Frontend accumulates tokens into assistant message (same optimistic UI pattern)
 
 | Metric | Value |
 |--------|-------|
-| New backend code Day-1 | ~2,000 lines (reasoning + rag.query only) |
-| Phase 2 deferred | ~1,300 lines (coding/vision + 4 tools) |
-| Frontend changes | ~170 lines, no new deps Day-1 |
+| New backend code | ~3,300 lines (reasoning + coding + vision + 5 tools) |
+| Frontend changes | ~170 lines, no new deps |
 | LLM calls per request | 2 (planner + step), +1 Ollama summary when context window ~70% full |
 | Lines removed from Athena | ~2,689 (recomputed) |
-| Components kept from RIP | RAG pipeline, notebook CRUD, file management, message persistence (extended) |
+| Components kept from RIP | RAG pipeline, notebook CRUD, file management, message persistence |
 
 ---
 
 ## Appendix A — Salvaged pre-merge notes (from deleted ARCHITECTURE.md)
 
-Kept because still true for Day-1 RAG behavior; all else deleted with that file.
+Kept because still true for RAG behavior; all else deleted with that file.
 
-- **Chunking:** Docling → Markdown, split on headers (`#/##/###` → H1/H2/H3 metadata). Semantic chunker stays disabled.
-- **Retrieval (`VectorRAG`):** pgvector cosine + Postgres full-text (`websearch_to_tsquery`) → Reciprocal Rank Fusion → BGE rerank, keep above threshold (top-3 fallback). `vector(1024)`, HNSW `vector_cosine_ops`, GIN `text_search`.
+- **Chunking:** Docling turns PDFs into Markdown, then split on headers (`#/##/###` → H1/H2/H3 metadata). Semantic chunker stays disabled.
+- **Retrieval (`VectorRAG`):** single retrieval path: pgvector similarity + Postgres full-text (`websearch_to_tsquery`) combined by rank fusion → BGE rerank, keep above threshold (top-3 fallback). `vector(1024)`, HNSW index, GIN index on text search.
 - **Ingestion:** `POST /api/files/{id}/process` → background `run_rag_pipeline` (load → chunk → embed → store → `ready`/`error`). No retry/progress (known limit).
-- **Chat format:** numbered `[i (source)]` blocks, `extract_sources` deduped. Query rewrite uses recent context (last 6 pre-merge; context-window-based post-merge).
-- **Open roadmap items (moved from deleted PLAN.md Phase 3):** robust source citation/highlighting, drag-drop upload + per-file progress, local retrieval eval harness → Phase 2 candidates, not Day-1.
+- **Chat format:** numbered `[i (source)]` blocks, `extract_sources` deduped. Query rewrite uses recent context (context-window-based).
+- **Open roadmap items (moved from deleted PLAN.md):** robust source citation/highlighting, drag-drop upload + per-file progress, local retrieval eval harness.
 
-## Decision Log (Q1–Q20, 2026-09-11)
+## Decision Log (Q1–Q20, 2026-09-11; Q21–Q29, 2026-09-12)
 
-- Q1 Day-1 = reasoning + rag.query over runs/SSE; rest Phase 2. Q2 Ollama-only, rewrite 5 Gemini-coupled files. Q3 no approval gate (local only, scoped tools). Q4 single messages table, no conversation_id. Q5 break SSE, no shim, keep `/api/health`. Q6 cuts bundle accepted (always orchestrate, honest failure, deterministic agg). Q7 keep LangGraph. Q8 `backend/app/` root. Q9 port 8000, CORS *, Pydantic settings. Q10/Q15/Q16 summary kept (Ollama, context-window-based), single messages + notebook_id.
+- Q1 Full scope = reasoning + coding + vision + 5 tools over runs/SSE. Q2 Ollama-only, rewrite 5 Gemini-coupled files. Q3 no approval gate (local only, scoped tools). Q4 single messages table, no conversation_id. Q5 break SSE, no shim, keep `/api/health`. Q6 cuts bundle accepted (always orchestrate, honest failure, deterministic agg). Q7 keep LangGraph. Q8 `backend/app/` root. Q9 port 8000, CORS *, Pydantic settings. Q10/Q15/Q16 summary kept (Ollama, context-window-based), single messages + notebook_id.
 - Q17 One notebook = one conversation; remove conversations table; summary on notebooks (internal, not user-visible). Q18 Drop `messages.conversation_id` column. Q19 Runs persist to Postgres (`runs` + `run_events` tables); survive page refresh; full SSE replay on reconnect; only stop button terminates. Q20 Summary triggered by context window (~70% of model context), not turn count.
+- Q21–Q27 (2026-09-12, agreed): Q21 run contract `{notebook_id,message}→{run_id}`, no envelope on `/v1/*`. Q22 frontend owns `messages` writes. Q23 SSE via EventSource, full replay, dedupe by `seq`. Q24 import map + `backend/` workdir + `app.main:app`. Q25 env alias table + `cors_origins: str`. Q26 sync `rag_query` with orchestrator-injected `notebook_id`. Q27 frontend render spec (collapsible plan, artifacts links, cancel, `/v1/` proxy in vite + nginx, Dockerfile CMD fix).
+- Q28–Q29 (2026-09-12, Round 2): Q28 memory port — `WINDOW_SIZE=10`, `len//4` estimator (no tiktoken), budget `int(ollama_context_window=32768 * 0.7)`, `_SUMMARY_MAX_TOKENS=512` via `ollama_default_model`; orchestrator `run(request_text, notebook_id, on_event, context, cancel_event)`; Ollama `trust_env=False` + `120000ms` timeout + empty `ollama_image_model` honest-fail. Q29 deps frozen (`langfuse` kept for import, `google-genai`/`neo4j` dropped, no mypy gate); compose breaking rename `db→postgres` + `prototype_rip/trainee→rip/rip` requires `down` + fresh `.env`; `CORS_ORIGINS=*` (not JSON list); `conftest.py` must migrate to `app.core.config` + `app.main:app` + Ollama `/api/tags` probe.

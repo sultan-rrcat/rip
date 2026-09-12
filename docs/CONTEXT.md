@@ -1,0 +1,145 @@
+# RIP — Research Intelligence Platform
+
+RIP is an offline-capable, single-codebase research assistant that combines document RAG with multi-agent orchestration. Users upload documents into notebooks, then query them through a chat interface backed by local LLMs.
+
+> **Implementation constraints** (endpoint signatures, schema DDL, config keys, forbidden patterns) live in `MERGE_PLAN.md` §0. This file is the domain glossary and data-flow reference only.
+
+## Language
+
+### Core Entities
+
+**Notebook**:
+A document collection with an attached chat history. One notebook = one conversation. The primary unit of organization; users create notebooks to scope their research.
+_Avoid_: Conversation, project, workspace
+
+**Run**:
+An async task persisted to Postgres. Created when a user sends a message; survives page refresh; events streamed via SSE; only the stop button terminates it. Valid states: `pending`, `running`, `completed`, `failed`, `cancelled`.
+_Avoid_: Orchestration unit, task, job, request
+
+**SSE event**:
+A single message in the Server-Sent Events stream for a run. Types: `run_started`, `plan`, `step_started`, `delta`, `step_completed`, `summary`, `run_completed`, `artifacts`, `error`. Saved to `run_events` for replay on reconnect.
+_Avoid_: EventEnvelope, frame
+
+**Message**:
+A single chat turn (user or assistant) within a notebook. Linked to notebooks via `notebook_id` only.
+_Avoid_: Chat entry, turn, response
+
+**Goal**:
+The Planner's structured restatement of the user's intent. Derived from the user's message by the Planner LLM. The plan is built around a goal, not the raw message.
+_Avoid_: Intent, objective, task
+
+### Retrieval
+
+**VectorRAG**:
+The single retrieval path: vector similarity + Postgres full-text search combined by rank fusion, then reranked by BGE. Returns chunk-level context with source metadata.
+_Avoid_: GraphRAG, AgenticRAG, retrieval pipeline
+
+**rag.query**:
+The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=8)` with direct import from `app.rag.vector_rag`.
+_Avoid_: Search, retrieve, lookup
+
+**Chunk**:
+A segment of a parsed document, split on Markdown headers (`#/##/###`). Each chunk carries metadata (source file, H1/H2/H3 heading) and a vector.
+_Avoid_: Passage, segment, slice
+
+### Orchestration
+
+**Planner**:
+LLM-driven component that decomposes a user message into a goal and a plan — an ordered list of steps with dependencies (some run in parallel), each with an agent and tool assignment.
+_Avoid_: Router, dispatcher, coordinator
+
+**Step**:
+A single unit of work in the plan. Each step has an agent (or tool) assignment and may depend on other steps. Steps without dependencies run at the same time.
+_Avoid_: PlanStep, task, unit
+
+**Agent**:
+A named capability (reasoning, coding, vision). Agents execute steps that require LLM reasoning. Each agent uses Ollama.
+_Avoid_: AgentPlugin, model, brain
+
+**Tool**:
+A named function that performs a specific action: `rag.query` (search documents), `plot.chart` (make charts), `doc.generate` (make documents), `code.sandbox` (run code), `image.generate` (make images). Tools receive structured input and return structured output.
+_Avoid_: ToolPlugin, function, capability
+
+**Plan DAG**:
+Ordered list of steps with dependencies the engine executes. Produced by the Planner, checked by the Validator, run by the Engine. Technical name for the dependency graph.
+_Avoid_: Execution graph, workflow
+
+**Validator**:
+Deterministic check that agents/tools exist, dependencies have no cycles, and step budget is respected before execution. No approval gate — tools run directly.
+_Avoid_: Checker, pre-validator
+
+**Aggregator**:
+Component that assembles step outputs into a coherent final answer. Deterministic only — no LLM synthesis step.
+_Avoid_: Synthesizer, combiner
+
+**Engine**:
+Executor (built on LangGraph) that runs the plan steps in dependency order. No retry loop — failures are returned honestly.
+_Avoid_: Executor, runner
+
+**Orchestrator**:
+Coordinator for the full run lifecycle: Planner → Engine → Aggregator → Memory. Manages state transitions and passes `notebook_id` through to tools.
+_Avoid_: Coordinator, conductor, manager
+
+**Artifact**:
+A file produced by a tool that persists beyond the chat response (chart image, generated document, code output). Stored under `{UPLOAD_DIR}/{notebook_id}/`, surfaced via SSE `artifacts` event as download links. Distinct from `File` (user upload).
+_Avoid_: Output, result, file
+
+**File**:
+A user-uploaded document in a notebook (`files` table, status `uploading/processing/ready/error`). Never confused with `Artifact` (tool output).
+_Avoid_: Document, upload
+
+**Source**:
+A citation derived from a `Chunk`: `{source (file name), section (H1>H2>H3 path)}`. Rendered by frontend from SSE `summary` + persisted `messages.sources`. `Chunk` is storage; `Source` is display.
+_Avoid_: Reference, citation
+
+### Memory
+
+**Summary**:
+Context-window-based compression of older messages, generated by Ollama when accumulated tokens reach ~70% of the model context window. Stored on the `notebooks` table as internal state; not user-visible; backend injects it as system context, frontend never renders it directly (frontend sees only SSE `summary` event content = final answer text).
+_Avoid_: Rolling summary, conversation summary, compressed history
+
+**Memory window**:
+The set of recent messages kept verbatim alongside the summary. Advisory cap (`memory_window_size=10`); real constraint is the token budget (`int(ollama_context_window=32768 * 0.7)` via `len//4` estimator, `summary_max_tokens=512`).
+_Avoid_: Context window, message buffer
+
+### Infrastructure
+
+**Ollama**:
+The sole LLM provider. Fully offline; no cloud dependencies. Default model: `qwen2.5:14b`.
+_Avoid_: LLM provider, model backend
+
+**VectorRAG embedding**:
+Local models that turn document chunks into searchable vectors: BGE-M3 at `./backend/models/bge-m3`, reranker at `./backend/models/reranker/bge_reranker_v2_m3`.
+_Avoid_: Embedding model, vector model
+
+**Docling**:
+Document parser that converts PDFs to Markdown before chunking.
+_Avoid_: Parser, document converter
+
+**Redis**:
+Optional queue/cache. Runs are stored in Postgres, so Redis is not required to run.
+_Avoid_: Queue, cache
+
+### Observability
+
+**Langfuse**:
+External service that shows LLM/agent traces. Optional; not required to run.
+_Avoid_: Tracing, monitoring, analytics
+
+## Data Flow
+
+### Message → Run → Response
+
+1. User sends a **message** via the chat interface
+2. Backend creates a **Run** (state: `pending`) with the notebook_id
+3. Run transitions to `running`; **Planner** generates a **goal** and plan (ordered steps with dependencies)
+4. **Engine** executes **steps** in dependency order; independent steps run at the same time
+5. Each step invokes an **Agent** (LLM reasoning) or **Tool** (external data)
+6. `rag.query` tool receives `notebook_id` from the Run (not from the Planner)
+7. **Aggregator** assembles step outputs into a final answer (deterministic)
+8. Run transitions to `completed` (or `failed` / `cancelled`)
+9. **SSE events** streamed throughout; persisted to `run_events` for replay
+
+### Summary Generation
+
+The **Summary** is owned by the memory component (`memory.py`), triggered by the Orchestrator after assembling the response. It checks if accumulated message tokens exceed ~70% of the model context window; if so, it calls Ollama to compress older messages into a summary stored on the `notebooks` table. The summary is internal state, not user-visible.
