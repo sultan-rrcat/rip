@@ -33,7 +33,10 @@ services:
       POSTGRES_USER: ${DB_USER:-rip}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-rippass}
     ports:
-      - "5432:5432"
+      # Host port parameterized (default = TARGET 5432). Local override via
+      # HOST_PG_PORT in .env when host 5432 is taken (e.g. local Postgres).
+      # Container port stays 5432 — backend uses DB_HOST=postgres:5432.
+      - "${HOST_PG_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
