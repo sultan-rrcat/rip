@@ -11,10 +11,10 @@ test works inside an isolated notebook that is deleted afterwards.
 
 import os
 
-from app import app
+from app.main import app
 from conftest import needs_llm, wait_for_file_status
 
-import config
+from app.core import config
 from fastapi.testclient import TestClient
 
 client = TestClient(app)

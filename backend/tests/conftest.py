@@ -9,7 +9,7 @@ These tests run against the REAL stack — no mocks, no fakes:
 - Real ML models: the app lifespan loads the actual ``VectorRAG``
   (BGE-M3 embeddings + BGE reranker) once per test session.
 - Real HTTP APIs via ``TestClient``.
-- Real LLM endpoint for the prompt tests (skipped if unreachable).
+- Real Ollama endpoint for the prompt tests (skipped if unreachable).
 """
 
 import os
@@ -23,12 +23,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Make `backend/` importable when pytest runs from the repo root.
+# After Phase 1.1 the import root is `backend/app/` (run from `backend/`
+# as `uvicorn app.main:app`), so BACKEND_DIR must be on sys.path for
+# `from app.*` imports to resolve.
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-import config  # noqa: E402
-from core.db import pg_connection  # noqa: E402
+from app.core import config  # noqa: E402
+from app.core.config import Settings  # noqa: E402
+from app.core.db import pg_connection  # noqa: E402
 
 
 def _apply_schema():
@@ -45,7 +49,7 @@ def _apply_schema():
 def client():
     """TestClient with lifespan executed: real VectorRAG models loaded once."""
     _apply_schema()
-    from app import app
+    from app.main import app
 
     with TestClient(app) as test_client:
         yield test_client
@@ -83,19 +87,22 @@ def test_notebook(client):
 
 
 def llm_available() -> bool:
-    """Probe the real LLM endpoint; prompt tests skip when it is down."""
-    url = (config.LLM_URL or "").rstrip("/")
-    if not url:
+    """Probe the real Ollama endpoint; prompt tests skip when it is down."""
+    try:
+        base_url = Settings().ollama_base_url.rstrip("/")
+    except Exception:
+        return False
+    if not base_url:
         return False
     try:
-        response = httpx.get(f"{url}/v1/models", timeout=10, trust_env=False)
+        response = httpx.get(f"{base_url}/api/tags", timeout=10, trust_env=False)
         return response.status_code < 500
     except Exception:
         return False
 
 
 needs_llm = pytest.mark.skipif(
-    not llm_available(), reason="LLM endpoint unavailable"
+    not llm_available(), reason="Ollama endpoint unavailable"
 )
 
 
