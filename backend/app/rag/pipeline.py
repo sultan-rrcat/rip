@@ -15,7 +15,7 @@ import json
 from app.core.logging import setup_logging
 from app.core.db import pg_connection
 
-from app.core import config
+from app.core.config import settings
 
 logger = setup_logging()
 
@@ -23,9 +23,9 @@ logger = setup_logging()
 class RagPipeline:
     def __init__(self):
         self.embedding_model = HuggingFaceEmbeddings(
-            model_name=config.BGE_M3_MODEL_PATH
+            model_name=settings.bge_m3_model_path
         )
-        self.reranker_model = CrossEncoder(config.BGE_RERANKER_V2_M3)
+        self.reranker_model = CrossEncoder(settings.bge_reranker_v2_m3)
 
     # =========================
     # 📄 DOCUMENT LOADER

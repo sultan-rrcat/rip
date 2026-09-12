@@ -19,7 +19,7 @@ from app.services.file_processor import run_rag_pipeline
 from app.rag.pipeline import RagPipeline
 from uuid import uuid4
 import os
-from app.core import config
+from app.core.config import settings
 
 router = APIRouter()
 logger = setup_logging()
@@ -138,7 +138,7 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
     file_id = str(uuid4())
 
     # Create dedicated notebook folder
-    notebook_path = os.path.join(config.UPLOAD_DIR, notebook_id)
+    notebook_path = os.path.join(settings.upload_dir, notebook_id)
     os.makedirs(notebook_path, exist_ok=True)
 
     # Save file with file id, preserving the uploaded extension

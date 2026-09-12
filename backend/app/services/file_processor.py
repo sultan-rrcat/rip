@@ -5,7 +5,7 @@ import asyncio
 from app.core.logging import setup_logging
 from app.core.db import pg_connection
 from app.rag.vector_rag import VectorRAG
-from app.core import config
+from app.core.config import settings
 
 logger = setup_logging()
 
@@ -26,7 +26,7 @@ async def run_rag_pipeline(file_id: str, rag: VectorRAG):
         notebook_id = str(result[0])
         file_name = result[1]
         ext = os.path.splitext(file_name or "")[1] or ".pdf"
-        file_path = os.path.join(config.UPLOAD_DIR, notebook_id, f"{file_id}{ext}")
+        file_path = os.path.join(settings.upload_dir, notebook_id, f"{file_id}{ext}")
 
         logger.info(f"Starting pipeline: {file_name}")
 
