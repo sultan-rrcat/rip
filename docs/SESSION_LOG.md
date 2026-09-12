@@ -128,3 +128,15 @@
   - `pytest --collect-only`: ERROR — `test_app.py` module-level `from app.main import app` pulls `sentence_transformers` → broken `torchvision::nms` in `ml_env` (environmental, pre-dates move; prior `agent_env` no longer exists). Full green needs working torch + Postgres + Ollama.
 - **Status:** Completed with noted deviations (llm.router exclusion, interim hybrid config, pytest blocked by env).
 - **Commits (multi-stage, AGENT.md §4b):** `485ee75` refactor(backend) app move + import map; `2bec1c5` test(backend) conftest migration; `3724e24` chore(docker) CMD; docs commit follows (this file + checkbox + §4b workflow).
+
+---
+
+## [2026-09-12] - PHASE 1.2 - verify schema.sql (no drift, read-only)
+- **Task:** IMPLEMENTATION_PLAN Phase 1.2 — verify `backend/schema.sql` has `conversation_summary` + `summary_message_count`, `messages` by `notebook_id` only, `runs` + `run_events`; prove re-runnable.
+- **Actions Taken:**
+  - Static grep: 6x `CREATE TABLE IF NOT EXISTS` (notebooks/files/embeddings/messages/runs/run_events); `conversation_summary` + `summary_message_count` on notebooks (Q38 rename already in place); messages columns `message_id/notebook_id/role/text/sources/created_at` — no `conversation_id`; no `conversations` table, no `LLM_URL`/`NEO4J`; all indexes `IF NOT EXISTS`, embeddings FK via `DO` guard → re-runnable by construction. No drift → file untouched (read-only).
+  - Live full apply: BLOCKED — no `psql` binary, Docker daemon down, local Postgres 17.4 has no pgvector (`CREATE EXTENSION vector` fails; scratch db created/dropped clean, 0 tables).
+  - Live stripped apply (vector ext/col/index removed, scratch `rip_phase12_partial`): APPLY-1 ok, APPLY-2 ok, 6 tables listed, notebooks/messages columns as required; scratch db dropped.
+- **Verification:** static full pass; live stripped 2x ok; full pgvector apply deferred to compose postgres (`pgvector/pgvector:pg16`, Phase 1.5).
+- **Status:** Completed with env caveat (full live apply needs compose postgres).
+- **Commits (multi-stage, AGENT.md §4b):** docs-only stage follows (this file + checkbox).

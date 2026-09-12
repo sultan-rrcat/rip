@@ -20,7 +20,7 @@
   - Test: `ruff check backend/app` (from `rip/`)
   - Done: imports resolve, no `flat backend/app.py` refs remain, rewritter/llm gone, conftest migrated
 
-- [ ] **1.2 Verify `schema.sql`**
+- [x] **1.2 Verify `schema.sql`** (2026-09-12: no drift, read-only kept — 6 tables IF NOT EXISTS, conversation_summary+summary_message_count, messages notebook_id-only, runs+run_events; static grep full pass; live stripped apply 2x ok + 6 tables proven in scratch db; full pgvector apply needs compose postgres — see SESSION_LOG)
   - Files: `rip/backend/schema.sql` (read-only unless drift)
   - Edits: must have `notebooks.conversation_summary` + `summary_message_count`, `messages` by `notebook_id` only, `runs` + `run_events` (Q38)
   - Test: `psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql` twice (must be re-runnable)
