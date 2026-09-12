@@ -94,27 +94,29 @@ Merge Athena's multi-agent orchestration capabilities into RIP's RAG-based noteb
 
 | Component | Source | Adaptation |
 |-----------|--------|------------|
-| Ollama Provider | `app/providers/ollama.py` | Keep; re-point all `gemini_model_*` refs (planner, aggregator, memory, agents) to `ollama_default_model` |
-| Agent base + registry | `app/agents/base.py`, `app/agents/registry.py` | Keep |
-| Reasoning agent | `app/agents/reasoning.py` | Keep, `ollama_default_model` |
-| Coding agent | `app/agents/coding.py` | Keep, `ollama_default_model` |
-| Vision agent | `app/agents/vision.py` | Keep, `ollama_default_model` |
-| Tool base + registry + executor | `app/tools/base.py`, `app/tools/registry.py`, `app/tools/executor.py` | Remove approval gate |
-| rag.query tool | `app/tools/rag_query.py` | **Rewrite (Q6 locked)**: `def rag_query(notebook_id: str, query: str, top_k: int = 8) -> list[dict]: return VectorRAG().retrieve_context(notebook_id, query, top_k=top_k)["results"]` with `from app.rag.vector_rag import VectorRAG` (sync; `VectorRAG.retrieve_context` is sync, default `top_k=5` overridden to `8`); orchestrator injects `notebook_id` from `Run.notebook_id` |
-| plot.chart tool | `app/tools/plot_chart.py` | Keep |
-| doc.generate tool | `app/tools/doc_generate.py` | Keep |
-| code.sandbox tool | `app/tools/code_sandbox.py` | Keep (needs `sandbox_image` pull) |
-| image.generate tool | `app/tools/image_generate.py` | Keep, adapt for Ollama |
+| Ollama Provider | `app/providers/ollama.py`, `streaming.py` | Keep; re-point all `gemini_model_*` refs (planner, aggregator, memory, agents) to `ollama_default_model`; drop `ProviderPlugin` and `app.plugins.api` (inherit directly from `ModelProvider`); copy `streaming.py` (`ThinkFilter`, `strip_think`) |
+| Agent base + registry | `app/agents/base.py`, `app/agents/registry.py` | Keep; drop `AgentPlugin` (inherit directly from `Agent`); export default registry factory `get_default_agent_registry(provider)` |
+| Reasoning agent | `app/agents/reasoning.py` | Keep, `ollama_default_model`; inherit from `Agent`; depends on `core/constants.py` |
+| Coding agent | `app/agents/coding.py` | Keep, `ollama_default_model`; inherit from `Agent`; depends on `core/constants.py` |
+| Vision agent | `app/agents/vision.py` | Keep, `ollama_default_model`; inherit from `Agent` |
+| Tool base + registry + executor | `app/tools/base.py`, `app/tools/registry.py`, `app/tools/executor.py` | Drop `ToolPlugin` (inherit directly from `Tool`); remove approval gate; `base.py` depends on `core/classutils.py` |
+| rag.query tool | `app/tools/rag_query.py` | **Rewrite (Q6/Q30 locked)**: `def rag_query(notebook_id: str, query: str, top_k: int = 8) -> list[dict]: return get_rag().retrieve_context(notebook_id, query, top_k=top_k)["results"]` reusing the `VectorRAG` singleton from lifespan/dependency (never re-instantiate `VectorRAG()` on query, which reloads heavy PyTorch weights); orchestrator injects `notebook_id` from `Run.notebook_id` |
+| plot.chart tool | `app/tools/plot_chart.py` | Keep; inherit from `Tool` |
+| doc.generate tool | `app/tools/doc_generate.py` | Keep; inherit from `Tool` |
+| code.sandbox tool | `app/tools/code_sandbox.py` | Keep (needs `sandbox_image` pull); inherit from `Tool` |
+| image.generate tool | `app/tools/image_generate.py` | Keep, adapt for Ollama; inherit from `Tool` |
 | Planner | `app/orchestration/planner.py` | Keep; `gemini_model_*` → Ollama |
 | PlanValidator | `app/orchestration/validator.py` | Keep as-is (generic, no SQL refs) |
 | Aggregator | `app/orchestration/aggregator.py` | **Simplify**: deterministic only, no LLM |
 | Outer graph (LangGraph) | `app/orchestration/engine.py` | **Remove reflection edge** |
-| Inner graph (LangGraph) | `app/orchestration/plan_graph.py` | **Remove approval gate** |
+| Inner graph (LangGraph) | `app/orchestration/plan_graph.py` | **Remove approval gate**; capture `notebook_id` in node closures and inject into tool inputs |
 | Orchestrator facade | `app/orchestration/orchestrator.py` | Remove multi-tenancy (`tenant="dev"` → `notebook_id`). Q28 locked signature: `def run(self, request_text: str, notebook_id: str, on_event=None, context: str|None = None, cancel_event=None) -> OrchestrationResult`; `notebook_id` passed to every tool call (esp. `rag.query`); `context` = `MemoryContext.as_prompt()` text; remove `ApprovalStore`/`max_reflection_cycles`/`quotas`/`tenancy` params |
 | Memory | `app/orchestration/memory.py` | **Keep context-window summary** on Ollama (~70% of model context, stored on `notebooks`). Q28 locked port: `WINDOW_SIZE=10`, `estimate_tokens=len//4`, `MAX=sum(int(ollama_context_window*summary_threshold_pct))`, `_SUMMARY_MAX_TOKENS=512`, `provider.generate(model=ollama_default_model, ...)` (never `gemini_model_*`), `folded_count ↔ notebooks.summary_message_count` |
 | Plan + results models | `app/orchestration/plan.py`, `app/orchestration/results.py` | Keep |
 | Store | `app/store/conversations.py` | **Do not copy**: notebook = conversation, no separate conversations table. Summary moves to `notebooks` table. |
-| Run lifecycle | `app/api/runs.py` + `app/runs/manager.py` + `app/store/runs.py` | **Postgres-backed**: persist runs + events to survive refresh; full SSE replay on reconnect; only stop button terminates |
+| Run lifecycle | `app/api/runs.py` + `app/runs/manager.py` + `app/store/runs.py` | **Postgres-backed**: native `psycopg2` CRUD over `runs` + `run_events` in `store/runs.py` (not Athena SQLite); survive refresh; full SSE replay on reconnect; only stop button terminates |
+| Artifacts | `app/artifacts.py` | Keep & adapt from Athena: save generated files to `{upload_dir}/{notebook_id}/`, surface download links via SSE `artifacts` event |
+| Core utilities | `app/core/classutils.py`, `constants.py` | Copy from Athena: `classutils.py` for abstract checks in tools/agents; `constants.py` for confidence constants |
 | Conversations API | `app/api/conversations.py` | **Do not copy**: notebook = conversation, no separate endpoint needed |
 | BFF envelope | `app/bff/envelope.py` | Keep — standard wrapper {data, error} around API responses |
 | Admin endpoints | `app/api/admin.py` | Minimal only (health + plugins + reload); drop full console |
@@ -147,8 +149,11 @@ backend/
 ├── Dockerfile
 └── app/                        # ALL core logic (Athena style, single `from app.*` root)
     ├── main.py                 # REWRITE — merge RIP lifespan (VectorRAG) + Athena /v1 mounts
-    ├── core/                   # MOVE from RIP backend/core/ + REWRITE config
+    ├── artifacts.py            # COPY & ADAPT from Athena: deliver artifacts under {upload_dir}/{notebook_id}/
+    ├── core/                   # MOVE from RIP backend/core/ + COPY classutils.py, constants.py from Athena + REWRITE config
     │   ├── config.py           # REWRITE — merged Pydantic Settings (port 8000)
+    │   ├── classutils.py       # COPY (from Athena, needed by tools/agents)
+    │   ├── constants.py        # COPY (from Athena, needed by agents)
     │   ├── db.py               # MOVE (from RIP, keep)
     │   ├── dependencies.py     # MOVE (keep)
     │   └── logging.py          # MOVE (keep)
@@ -168,29 +173,30 @@ backend/
     │   ├── file_processor.py
     │   └── rewritter.py
     │
-    ├── providers/              # COPY from athena/backend/app/providers/ (base.py, ollama.py; drop gemini, llama_server, tracing)
+    ├── providers/              # COPY from athena/backend/app/providers/ (base.py, ollama.py, streaming.py; drop gemini, llama_server, tracing)
     │   ├── __init__.py
     │   ├── base.py
-    │   └── ollama.py
+    │   ├── ollama.py           # inherit ModelProvider directly (no plugins)
+    │   └── streaming.py        # ThinkFilter + strip_think
     │
     ├── agents/                 # COPY from athena/backend/app/agents/ (base + registry + reasoning + coding + vision)
     │   ├── __init__.py
     │   ├── base.py
-    │   ├── registry.py
-    │   ├── reasoning.py
-    │   ├── coding.py
-    │   └── vision.py
+    │   ├── registry.py         # get_default_agent_registry factory
+    │   ├── reasoning.py        # inherit Agent directly
+    │   ├── coding.py           # inherit Agent directly
+    │   └── vision.py           # inherit Agent directly
     │
     ├── tools/                  # COPY from athena/backend/app/tools/
     │   ├── __init__.py
-    │   ├── base.py
-    │   ├── registry.py
+    │   ├── base.py             # inherit Tool directly
+    │   ├── registry.py         # get_default_tool_registry factory
     │   ├── executor.py         # simplified, no approval gate
-    │   ├── rag_query.py        # REWRITE: rag.query(notebook_id, query, top_k) direct VectorRAG
-    │   ├── plot_chart.py       # KEEP
-    │   ├── doc_generate.py     # KEEP
-    │   ├── code_sandbox.py     # KEEP (needs sandbox_image pull)
-    │   └── image_generate.py   # KEEP, adapt for Ollama
+    │   ├── rag_query.py        # REWRITE: rag.query(notebook_id, query, top_k) reuses VectorRAG singleton
+    │   ├── plot_chart.py       # KEEP, inherit Tool
+    │   ├── doc_generate.py     # KEEP, inherit Tool
+    │   ├── code_sandbox.py     # KEEP (needs sandbox_image pull), inherit Tool
+    │   └── image_generate.py   # KEEP, adapt for Ollama, inherit Tool
     │
     ├── orchestration/          # COPY (from Athena)
     │   ├── __init__.py
@@ -199,14 +205,14 @@ backend/
     │   ├── validator.py        # keep as-is (no SQL refs)
     │   ├── aggregator.py       # SIMPLIFIED — deterministic only
     │   ├── engine.py           # SIMPLIFIED — no reflection
-    │   ├── plan_graph.py       # SIMPLIFIED — no approval gate
+    │   ├── plan_graph.py       # SIMPLIFIED — no approval gate; notebook_id injected in closures
     │   ├── orchestrator.py     # SIMPLIFIED — notebook_id, no tenant
     │   ├── memory.py           # context-window summary (~70% via Ollama) stored on notebooks
     │   └── results.py
     │
-    ├── store/                  # COPY runs.py from athena/backend/app/store/runs.py (Postgres); DO NOT copy conversations.py (notebook = conversation)
+    ├── store/                  # WRITE runs.py for Postgres (schema.sql); DO NOT copy conversations.py (notebook = conversation)
     │   ├── __init__.py
-    │   └── runs.py             # Run + RunEvent CRUD (Postgres)
+    │   └── runs.py             # Run + RunEvent CRUD (Postgres via psycopg2)
     │
     ├── runs/                   # COPY (from Athena, Postgres-backed)
     │   ├── __init__.py
@@ -651,13 +657,13 @@ Frontend accumulates tokens into assistant message (same optimistic UI pattern)
 
 | Step | What | Files: source → dest + edits | Check | Done when |
 |------|------|------------------------------|-------|-----------|
-| 1 | Create `backend/app/` root, move RIP `core/rag/routes/services/` under it | MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`; fix imports to `from app.*` | `ruff check backend/app` | Imports resolve, `uvicorn app.main:app` collects |
-| 2 | Copy + adapt provider: `base.py`, `ollama.py` | COPY `athena/backend/app/providers/base.py`, `ollama.py` → `app/providers/`; replace all `gemini_model_*` with `ollama_default_model`; drop `gemini.py`, `llama_server.py`, `tracing.py` | `pytest backend/app/tests/test_providers.py -q` | Ollama chat call succeeds |
-| 3 | Copy agents: base, registry, reasoning, coding, vision | COPY `athena/backend/app/agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `app/agents/`; point models to Ollama | `ruff`; import registry | All 3 agents listed in registry |
-| 4 | Copy tools: base, registry, executor, rag_query, plot, doc, sandbox, image | COPY `athena/backend/app/tools/base.py`, `registry.py`, `executor.py` (delete approval gate) → `app/tools/`; REWRITE `rag_query.py` as `rag.query(notebook_id, query, top_k=8)` with `from app.rag.vector_rag import VectorRAG`; COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py` | `pytest backend/app/tests/test_tools.py -q` | `rag.query` returns chunks for test notebook |
-| 5 | Copy orchestration | COPY `plan.py`, `planner.py` (`gemini_model_*`→`ollama_default_model`, keep `trust_env=False` pattern), `validator.py` as-is, `aggregator.py` (deterministic only), `engine.py` (no reflection edge), `plan_graph.py` (no approval gate), `orchestrator.py` (`run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore), `memory.py` (Q28: `WINDOW_SIZE=10`, `len//4` estimator, budget=`int(ollama_context_window*0.7)`, `_SUMMARY_MAX_TOKENS=512`, `folded_count↔summary_message_count`), `results.py` | `pytest backend/app/tests/test_orchestration.py -q` | Planner→Engine→Aggregator e2e passes |
-| 6 | Runs store (Postgres) | COPY `athena/backend/app/store/runs.py` → `app/store/runs.py` (Run + RunEvent CRUD); DO NOT copy `store/conversations.py` | `psql -f backend/schema.sql` + `pytest test_runs_store -q` | Runs + events persist + replay |
-| 7 | Copy API minimal | COPY `bff/envelope.py`, `app/api/runs.py` (+ `runs/manager.py`), `app/api/admin.py` (health + plugins + reload only), `app/api/health.py` (+ `/api/health` alias) | `curl POST /v1/runs → 202` | `POST /v1/runs`, `GET /events`, `/cancel` work |
+| 1 | Create `backend/app/` root, move RIP `core/rag/routes/services/` under it | MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`; COPY `athena/backend/app/core/classutils.py`, `constants.py` → `app/core/`; fix imports to `from app.*` | `ruff check backend/app` | Imports resolve, `uvicorn app.main:app` collects |
+| 2 | Copy + adapt provider: `base.py`, `ollama.py`, `streaming.py` | COPY `athena/backend/app/providers/base.py`, `ollama.py`, `streaming.py` → `app/providers/`; replace all `gemini_model_*` with `ollama_default_model`; drop `ProviderPlugin` and `app.plugins.api` (inherit `ModelProvider` directly); drop `gemini.py`, `llama_server.py`, `tracing.py` | `pytest backend/app/tests/test_providers.py -q` | Ollama chat call succeeds, ThinkFilter strips `<think>` tags |
+| 3 | Copy agents: base, registry, reasoning, coding, vision | COPY `athena/backend/app/agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `app/agents/`; drop `AgentPlugin` (inherit `Agent` directly); export `get_default_agent_registry(provider)` factory; point models to Ollama | `ruff`; import registry | All 3 agents listed in registry |
+| 4 | Copy tools: base, registry, executor, rag_query, plot, doc, sandbox, image | COPY `athena/backend/app/tools/base.py`, `registry.py`, `executor.py` (delete approval gate) → `app/tools/`; drop `ToolPlugin` (inherit `Tool` directly); export `get_default_tool_registry()` factory; REWRITE `rag_query.py` as `rag.query(notebook_id, query, top_k=8)` reusing `VectorRAG` singleton (via `app.core.dependencies.get_rag` or module getter, do NOT re-instantiate `VectorRAG()` on query); COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py` | `pytest backend/app/tests/test_tools.py -q` | `rag.query` returns chunks for test notebook |
+| 5 | Copy orchestration | COPY `plan.py`, `planner.py` (`gemini_model_*`→`ollama_default_model`, keep `trust_env=False` pattern), `validator.py` as-is, `aggregator.py` (deterministic only), `engine.py` (no reflection edge), `plan_graph.py` (no approval gate, capture `notebook_id` in node closure and inject into tool inputs), `orchestrator.py` (`run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore), `memory.py` (Q28: `WINDOW_SIZE=10`, `len//4` estimator, budget=`int(ollama_context_window*0.7)`, `_SUMMARY_MAX_TOKENS=512`, `folded_count↔summary_message_count`), `results.py` | `pytest backend/app/tests/test_orchestration.py -q` | Planner→Engine→Aggregator e2e passes |
+| 6 | Runs store (Postgres) | WRITE `app/store/runs.py` for PostgreSQL (`runs` + `run_events` via `core.db.pg_connection`); DO NOT copy Athena's SQLite store or `store/conversations.py` | `psql -f backend/schema.sql` + `pytest test_runs_store -q` | Runs + events persist + replay in order |
+| 7 | Copy API minimal + artifacts | COPY `bff/envelope.py`, `app/artifacts.py` (adapt to save under `{upload_dir}/{notebook_id}/`), `app/api/runs.py` (+ `runs/manager.py`), `app/api/admin.py` (health + plugins + reload only), `app/api/health.py` (+ `/api/health` alias) | `curl POST /v1/runs → 202` | `POST /v1/runs`, `GET /events`, `/cancel` work |
 | 8 | Rewrite `app/core/config.py` | TARGET block in §Config — replace file wholesale (port 8000) | `python -c "from app.core.config import Settings; Settings()"` | Boots without `LLM_URL` |
 | 9 | Rewrite `app/main.py` | Merge RIP lifespan (VectorRAG) + Athena /v1 mounts, no plugins | `uvicorn app.main:app --port 8000` + `GET /api/health → ok` | Both `/api/*` + `/v1/*` serve |
 | 10 | Verify `schema.sql` | VERIFY — already has notebooks.summary, messages by notebook_id only, runs + run_events; no rewrite unless drift | `psql -f backend/schema.sql` re-runnable | All 6 tables exist |
@@ -665,7 +671,7 @@ Frontend accumulates tokens into assistant message (same optimistic UI pattern)
 | 12 | Replace `docker-compose.yml` | TARGET block — Postgres + backend + frontend (Redis commented as optional) | `docker compose config` | Config valid |
 | 13 | Replace `.env.example` | TARGET block — merged keys | `copy .env.example .env` | Backend boots |
 | 14 | Frontend: add `services/runs.ts` | CREATE `frontend/src/services/runs.ts` (`createRun`, `subscribeToRunEvents`) | `npm run lint` | No lint errors |
-| 15 | Frontend: update `hooks/notebooks/useMessages.ts` | EDIT to run lifecycle: POST `/v1/runs`, SSE subscribe, `useState` accumulation, `plan/steps` collapsible | Manual chat test | Tokens stream, plan collapsible |
+| 15 | Frontend: update `hooks/notebooks/useMessages.ts` + UI | EDIT to run lifecycle: POST `/v1/runs`, SSE subscribe, `useState` accumulation, `plan/steps` collapsible, cancel button hookup in `ChatArea.tsx`/`Footer.tsx` | Manual chat test | Tokens stream, plan collapsible, cancel works |
 | 16 | Frontend: add `types/runs.ts` | CREATE discriminated union `RunEvent` (see §Frontend) | `npx tsc -b` | Typecheck passes |
 | 17 | Frontend: update `config.ts`, `vite.config.ts` | EDIT: keep `VITE_API_URL=http://localhost:8000`; proxy `/v1/` → backend | `npm run dev` | No hardcoded `8010` |
 | 18 | Delete `routes/llm.py` | DELETE `app/routes/llm.py` (`/api/prompt[/stream]` removed, no shim) | `rg "/api/prompt" backend frontend` → 0 hits | Old endpoints gone |
@@ -695,9 +701,10 @@ Kept because still true for RAG behavior; all else deleted with that file.
 - **Chat format:** numbered `[i (source)]` blocks, `extract_sources` deduped. Query rewrite uses recent context (context-window-based).
 - **Open roadmap items (moved from deleted PLAN.md):** robust source citation/highlighting, drag-drop upload + per-file progress, local retrieval eval harness.
 
-## Decision Log (Q1–Q20, 2026-09-11; Q21–Q29, 2026-09-12)
+## Decision Log (Q1–Q20, 2026-09-11; Q21–Q29, 2026-09-12; Q30, 2026-09-12)
 
 - Q1 Full scope = reasoning + coding + vision + 5 tools over runs/SSE. Q2 Ollama-only, rewrite 5 Gemini-coupled files. Q3 no approval gate (local only, scoped tools). Q4 single messages table, no conversation_id. Q5 break SSE, no shim, keep `/api/health`. Q6 cuts bundle accepted (always orchestrate, honest failure, deterministic agg). Q7 keep LangGraph. Q8 `backend/app/` root. Q9 port 8000, CORS *, Pydantic settings. Q10/Q15/Q16 summary kept (Ollama, context-window-based), single messages + notebook_id.
 - Q17 One notebook = one conversation; remove conversations table; summary on notebooks (internal, not user-visible). Q18 Drop `messages.conversation_id` column. Q19 Runs persist to Postgres (`runs` + `run_events` tables); survive page refresh; full SSE replay on reconnect; only stop button terminates. Q20 Summary triggered by context window (~70% of model context), not turn count.
 - Q21–Q27 (2026-09-12, agreed): Q21 run contract `{notebook_id,message}→{run_id}`, no envelope on `/v1/*`. Q22 frontend owns `messages` writes. Q23 SSE via EventSource, full replay, dedupe by `seq`. Q24 import map + `backend/` workdir + `app.main:app`. Q25 env alias table + `cors_origins: str`. Q26 sync `rag_query` with orchestrator-injected `notebook_id`. Q27 frontend render spec (collapsible plan, artifacts links, cancel, `/v1/` proxy in vite + nginx, Dockerfile CMD fix).
 - Q28–Q29 (2026-09-12, Round 2): Q28 memory port — `WINDOW_SIZE=10`, `len//4` estimator (no tiktoken), budget `int(ollama_context_window=32768 * 0.7)`, `_SUMMARY_MAX_TOKENS=512` via `ollama_default_model`; orchestrator `run(request_text, notebook_id, on_event, context, cancel_event)`; Ollama `trust_env=False` + `120000ms` timeout + empty `ollama_image_model` honest-fail. Q29 deps frozen (`langfuse` kept for import, `google-genai`/`neo4j` dropped, no mypy gate); compose breaking rename `db→postgres` + `prototype_rip/trainee→rip/rip` requires `down` + fresh `.env`; `CORS_ORIGINS=*` (not JSON list); `conftest.py` must migrate to `app.core.config` + `app.main:app` + Ollama `/api/tags` probe.
+- Q30 (2026-09-12, Review & missing dependencies audit): (1) Providers: copy `streaming.py` (`ThinkFilter`); drop `ProviderPlugin` from `ollama.py` → inherit `ModelProvider`. (2) Agents & Tools: drop `AgentPlugin`/`ToolPlugin` → inherit directly from `Agent`/`Tool`; copy `classutils.py` and `constants.py` from Athena core to RIP core; export `get_default_agent_registry`/`get_default_tool_registry` factories in `registry.py`. (3) `rag.query`: reuse `VectorRAG` singleton from lifespan (`get_rag`) rather than reloading PyTorch models per query. (4) `plan_graph.py`: capture `notebook_id` in node closure and inject into tool inputs (`resolved_input["notebook_id"] = notebook_id`). (5) Artifacts: include `app/artifacts.py` (saved to `{upload_dir}/{notebook_id}/`, surfaced via SSE). (6) `store/runs.py`: write Postgres implementation using `psycopg2` / `core.db.pg_connection` matching `schema.sql`, not Athena's SQLite. (7) Frontend: include `ChatArea.tsx`/`Footer.tsx` for cancel button & run status.

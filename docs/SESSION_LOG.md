@@ -84,3 +84,14 @@
 - **Template for next sessions:**
   `## [date] - MERGE Box #N - prompt/commit/status`
 - **Status:** Completed (uncommitted working tree).
+
+---
+
+## [2026-09-12] - Merge Docs Review & Hardening Audit
+
+- **Task:** Review and harden the merge plan across all docs (`MERGE_PLAN.md`, `IMPLEMENTATION_PLAN.md`, `ADR.md`) based on code inspection of `/rip` and `/athena`.
+- **Actions Taken:**
+  - `IMPLEMENTATION_PLAN.md`: Updated Phase 1 through Phase 5 checklists with missing files (`classutils.py`, `constants.py`, `streaming.py`, `artifacts.py`); explicitly decoupled providers, agents, and tools from `app.plugins.api` (`ProviderPlugin`/`AgentPlugin`/`ToolPlugin`); clarified `rag_query.py` reuse of the `VectorRAG` singleton (preventing PyTorch model reloading spikes); noted PostgreSQL implementation for `store/runs.py`; and added UI hooks for cancel button in `ChatArea.tsx`/`Footer.tsx`.
+  - `MERGE_PLAN.md`: Updated What's Kept from Athena table, Backend Directory Structure, and Implementation Order; appended Decision Log Q30.
+  - `ADR.md`: Added ADR-017 documenting direct capability inheritance, tool decoupling, and `VectorRAG` singleton reuse.
+- **Status:** Completed.

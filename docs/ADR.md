@@ -84,3 +84,17 @@ Each entry records a decision with status, context, the decision, and consequenc
 - **ADR-014 Postgres-backed runs:** Accepted. Runs persist to Postgres (`runs` + `run_events`); survive page refresh; full SSE replay on reconnect; only stop button terminates.
 - **ADR-015 Remove conversations table:** Accepted. One notebook = one conversation. Summary stored on `notebooks` table. Messages linked by `notebook_id` only; `conversation_id` column dropped.
 - **ADR-016 Context-window-based summary:** Accepted. Summary triggered at ~70% of model context window, not turn count. More accurate, model-aware.
+- **ADR-017 Direct capability inheritance & VectorRAG singleton:** Accepted. Providers/agents/tools inherit directly from base classes (dropping plugin scaffolding); `rag.query` reuses application lifespan `VectorRAG` singleton.
+
+---
+
+## ADR-017: Direct capability inheritance and VectorRAG singleton
+
+- **Status:** Accepted
+- **Context:** Athena's agent, tool, and provider classes inherited from dynamic plugin wrappers (`ProviderPlugin`, `AgentPlugin`, `ToolPlugin` in `app.plugins.api`). With the plugin system removed, dynamic discovery is replaced by static composition. Additionally, re-instantiating `VectorRAG()` on every `rag.query` tool call would repeatedly reload heavy PyTorch model weights (BGE-M3 and reranker).
+- **Decision:**
+  1. Inherit directly from `ModelProvider`, `Agent`, and `Tool` base classes; drop `app.plugins.api` imports and wrappers.
+  2. Provide explicit factory functions (`get_default_agent_registry`, `get_default_tool_registry`) in registries.
+  3. In `rag_query.py`, reuse the existing `VectorRAG` singleton instantiated at application lifespan (`app.state.rag` via `get_rag()`).
+  4. Port core utilities (`classutils.py`, `constants.py`), provider streaming helper (`streaming.py`), and artifact delivery (`artifacts.py`).
+- **Consequences:** Eliminates plugin scaffolding, avoids PyTorch model reloading spikes per query, and ensures all imports resolve cleanly without dynamic discovery.

@@ -14,10 +14,10 @@
 ## Phase 1 — Skeleton + config (backend boots, no orchestration yet)
 
 - [ ] **1.1 Create `backend/app/` root**
-  - Files: MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`
+  - Files: MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`; COPY `athena/backend/app/core/classutils.py`, `constants.py` → `rip/backend/app/core/`
   - Edits: apply import map `routes.→app.routes.`, `core.→app.core.`, `services.→app.services.`, `rag.→app.rag.`; empty `__init__.py` per package; workdir `rip/backend/`; `backend/Dockerfile` CMD → `app.main:app`
   - Test: `ruff check backend/app` (from `rip/`)
-  - Done: imports resolve, no `flat backend/app.py` refs remain
+  - Done: imports resolve, no `flat backend/app.py` refs remain, `classutils.py` and `constants.py` present
 
 - [ ] **1.2 Verify `schema.sql`**
   - Files: `rip/backend/schema.sql` (read-only unless drift)
@@ -49,17 +49,17 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
 
 ## Phase 2 — Providers + agents
 
-- [ ] **2.1 Providers (`base.py`, `ollama.py`)**
-  - Files: COPY `athena/backend/app/providers/base.py`, `ollama.py` → `rip/backend/app/providers/`
-  - Edits: replace all `gemini_model_*` with `ollama_default_model`; DO NOT copy `gemini.py`, `llama_server.py`, `tracing.py`
+- [ ] **2.1 Providers (`base.py`, `ollama.py`, `streaming.py`)**
+  - Files: COPY `athena/backend/app/providers/base.py`, `ollama.py`, `streaming.py` → `rip/backend/app/providers/`
+  - Edits: replace all `gemini_model_*` with `ollama_default_model`; drop `from app.plugins.api import ...` and `ProviderPlugin` inheritance in `ollama.py` (inherit directly from `ModelProvider`); DO NOT copy `gemini.py`, `llama_server.py`, `tracing.py`
   - Test: `pytest backend/tests/test_providers.py -q` (create if missing: Ollama chat round-trip, mock allowed only if Ollama down)
-  - Done: Ollama `qwen2.5:14b` chat call succeeds
+  - Done: Ollama `qwen2.5:14b` chat call succeeds, ThinkFilter incrementally strips `<think>` tags
 
 - [ ] **2.2 Agents (reasoning + coding + vision)**
   - Files: COPY `athena/backend/app/agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `rip/backend/app/agents/`
-  - Edits: point models to `ollama_default_model`
-  - Test: `python -c "from app.agents.registry import list_agents; print(list_agents())"` contains all 3
-  - Done: registry lists reasoning, coding, vision
+  - Edits: point models to `ollama_default_model`; drop `from app.plugins.api import AgentPlugin` (inherit directly from `Agent` in `base.py`); export `get_default_agent_registry(provider)` factory in `registry.py`
+  - Test: `python -c "from app.agents.registry import get_default_agent_registry; print(get_default_agent_registry)"`
+  - Done: registry instantiates and lists reasoning, coding, vision without plugin system dependencies
 
 ---
 
@@ -67,29 +67,29 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
 
 - [ ] **3.1 Tools (all 5)**
   - Files: COPY `base.py`, `registry.py`, `executor.py` → `app/tools/`; REWRITE `rag_query.py`; COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py`
-  - Edits: delete approval gate in `executor.py`; `rag_query.py` sync `def rag_query(notebook_id: str, query: str, top_k: int = 8)` → `VectorRAG().retrieve_context(... )["results"]` with `from app.rag.vector_rag import VectorRAG`; `notebook_id` from `Run`, never LLM
+  - Edits: drop `from app.plugins.api import ToolPlugin` (inherit directly from `Tool` in `base.py`); delete approval gate in `executor.py`; export `get_default_tool_registry()` factory in `registry.py`; `rag_query.py` reuse existing `VectorRAG` singleton (via `app.core.dependencies.get_rag` or module-level singleton, do NOT re-instantiate `VectorRAG()` to avoid reloading PyTorch models); `notebook_id` from `Run`, never LLM
   - Test: `pytest backend/tests/test_tools.py -q` — `rag.query` returns chunks for a test notebook with files
-  - Done: all 5 tools import, `rag.query` e2e works
+  - Done: all 5 tools import and inherit from `Tool`, `rag.query` e2e works without model reload
 
 - [ ] **3.2 Orchestration**
   - Files: COPY `plan.py`, `planner.py`, `validator.py`, `aggregator.py`, `engine.py`, `plan_graph.py`, `orchestrator.py`, `memory.py`, `results.py` → `app/orchestration/`
-  - Edits: `planner.py` gemini→Ollama; `aggregator.py` deterministic only; `engine.py` remove reflection edge; `plan_graph.py` remove approval gate; `orchestrator.py` `run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore; `memory.py` Q28: `WINDOW_SIZE=10`, `len//4`, budget `int(ollama_context_window=32768*0.7)`, `_SUMMARY_MAX_TOKENS=512` via `ollama_default_model`, `folded_count↔notebooks.summary_message_count`
+  - Edits: `planner.py` gemini→Ollama; `aggregator.py` deterministic only; `engine.py` remove reflection edge; `plan_graph.py` remove approval gate, capture `notebook_id` in node closure and inject into tool inputs (`resolved_input["notebook_id"] = notebook_id`); `orchestrator.py` `run(request_text, notebook_id, on_event, context, cancel_event)`, no tenant/quota/ApprovalStore; `memory.py` Q28: `WINDOW_SIZE=10`, `len//4`, budget `int(ollama_context_window=32768*0.7)`, `_SUMMARY_MAX_TOKENS=512` via `ollama_default_model`, `folded_count↔notebooks.summary_message_count`
   - Test: `pytest backend/tests/test_orchestration.py -q`
-  - Done: Planner → Engine → Aggregator passes on a `rag.query` plan
+  - Done: Planner → Engine → Aggregator passes on a `rag.query` plan with `notebook_id` injected
 
 - [ ] **3.3 Runs store (Postgres)**
-  - Files: COPY `athena/backend/app/store/runs.py` → `app/store/runs.py`; DO NOT copy `store/conversations.py`
-  - Edits: Run + RunEvent CRUD on Postgres
+  - Files: WRITE `rip/backend/app/store/runs.py` (Postgres CRUD using `core.db.pg_connection` and `schema.sql` `runs` + `run_events` tables; DO NOT copy Athena's SQLite store); DO NOT copy `store/conversations.py`
+  - Edits: Run + RunEvent CRUD on Postgres (`%s` placeholders, jsonb serialization, monotonic seq)
   - Test: `pytest backend/tests/test_runs_store.py -q` — create run, append events, replay by `seq`
-  - Done: runs survive restart, replay in order
+  - Done: runs survive restart, replay in order from PostgreSQL
 
 ---
 
 ## Phase 4 — API + main + cleanup
 
-- [ ] **4.1 Runs + admin + health API**
-  - Files: COPY `athena/backend/app/bff/envelope.py` → `app/bff/` (for `/api/*` only); `api/runs.py` + `runs/manager.py`, `api/admin.py` (health + plugins + reload only), `api/health.py` → `app/api/`
-  - Edits: `CreateRunRequest{notebook_id: UUID, message: str}` → `POST /v1/runs → 202 {run_id}` bare (no envelope/auth); `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events` (full replay `ORDER BY seq`, `id:<seq>`), `POST /v1/runs/{id}/cancel`, `GET /health` + `GET /api/health` alias; backend never writes `messages`
+- [ ] **4.1 Runs + admin + health API + artifacts**
+  - Files: COPY `athena/backend/app/bff/envelope.py` → `app/bff/` (for `/api/*` only); COPY `athena/backend/app/artifacts.py` → `app/artifacts.py` (adapted to save files under `{upload_dir}/{notebook_id}/`); `api/runs.py` + `runs/manager.py`, `api/admin.py` (health + plugins + reload only), `api/health.py` → `app/api/`
+  - Edits: `CreateRunRequest{notebook_id: UUID, message: str}` → `POST /v1/runs → 202 {run_id}` bare (no envelope/auth); `GET /v1/runs/{id}`, `GET /v1/runs/{id}/events` (full replay `ORDER BY seq`, `id:<seq>`), `POST /v1/runs/{id}/cancel`, `GET /health` + `GET /api/health` alias; backend never writes `messages`; artifacts emitted as download links
   - Test: `curl -X POST localhost:8000/v1/runs -H "Content-Type: application/json" -d '{"notebook_id":"<uuid>","message":"hello"}'` → `202`
   - Done: runs lifecycle + SSE replay + cancel work
 
@@ -123,11 +123,11 @@ Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api
   - Test: `npm run lint` in `frontend/`
   - Done: no lint errors
 
-- [ ] **5.3 `hooks/notebooks/useMessages.ts`**
-  - Files: EDIT `frontend/src/hooks/notebooks/useMessages.ts`; DELETE `services/llm.ts` import
-  - Edits: `createMessageAPI(user)` → `createRun()` → `EventSource`; `useState` accumulation; `plan` in `<details>` collapsible; `delta/summary` as tokens; `artifacts` as download links; cancel button; dedupe SSE by `seq`; single `createMessageAPI(assistant)` on `run_completed`
-  - Test: manual chat — send message, see `plan` collapse, tokens stream
-  - Done: tokens stream, refresh mid-run replays via SSE
+- [ ] **5.3 `hooks/notebooks/useMessages.ts` + UI components**
+  - Files: EDIT `frontend/src/hooks/notebooks/useMessages.ts`, `frontend/src/components/notebook/ChatArea.tsx` (and/or `Footer.tsx`); DELETE `services/llm.ts` import
+  - Edits: `createMessageAPI(user)` → `createRun()` → `EventSource`; `useState` accumulation; `plan` in `<details>` collapsible; `delta/summary` as tokens; `artifacts` as download links; cancel button connected to `cancelRun()`; dedupe SSE by `seq`; single `createMessageAPI(assistant)` on `run_completed`
+  - Test: manual chat — send message, see `plan` collapse, tokens stream, cancel button works
+  - Done: tokens stream, refresh mid-run replays via SSE, cancel stops run
 
 - [ ] **5.4 `config.ts` + `vite.config.ts` + `nginx.conf` + `Dockerfile`**
   - Files: EDIT `frontend/src/config.ts`, `frontend/vite.config.ts`, `frontend/nginx.conf`, `backend/Dockerfile`
