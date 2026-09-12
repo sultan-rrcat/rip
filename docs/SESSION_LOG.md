@@ -192,3 +192,21 @@
 - **Status:** Completed except literal `up` bind (proven equivalent via harness).
 - **Follow-up [2026-09-12] — user-directed host-port override:** host 5432 stays taken (no admin to stop local postgres), so per user instruction: compose `ports` → `"${HOST_PG_PORT:-5432}:5432"` (TARGET default preserved; container port untouched, backend still uses `postgres:5432`), live `.env` (gitignored) gains `HOST_PG_PORT=5433`. `docker compose up -d postgres` → `rip-postgres-1` **healthy in 5s** on host 5433, fresh `rip_pgdata` init applied schema.sql: 6 tables + `vector` ext confirmed live. Phase 1.5 Done fully met.
 - **Commits (multi-stage, AGENT.md §4b):** chore (compose file) → docs (this file + checkbox).
+- **Follow-up commits:** `f173059` chore (HOST_PG_PORT) + `9663d4a` docs.
+
+---
+
+## [2026-09-12] - PHASE 2.1 - providers (base/ollama/streaming, minicpm5 round-trip)
+- **Task:** IMPLEMENTATION_PLAN Phase 2.1 — COPY Athena `providers/base.py`, `ollama.py`, `streaming.py` → `rip/backend/app/providers/`; drop plugin system (ModelProvider direct); gemini_model_* → ollama_default_model; DO NOT copy gemini/llama_server/tracing; pytest test_providers.py; Ollama chat + ThinkFilter incremental strip.
+- **Actions Taken:**
+  - `base.py`: verbatim copy (no plugin imports, no gemini identifiers — only prose).
+  - `ollama.py`: dropped `app.plugins.api` import; `OllamaProvider(ModelProvider)`; removed `plugin_id`/`version`/`init()`/`health()` (plugin lifecycle); gemini prose neutralized (docstring multi-model note, served_model comment); `generate_structured` schema name `athena`→`rip`; `get_logger`→stdlib `logging.getLogger` (RIP logging.py has only setup_logging).
+  - `streaming.py`: logic verbatim; `get_logger`→stdlib; docstring `(ollama, llama-server)`→`(ollama)` (llama-server not copied per box).
+  - New `backend/tests/test_providers.py`: 7 ThinkFilter/strip_think unit tests + 5 live tests (provider isinstance, model resolution foreign→default/local→verbatim, listing, generate + stream round-trip) vs `openbmb/minicpm5-2b:latest` (override `RIP_TEST_MODEL`).
+- **Verification:** `pytest backend/tests/test_providers.py -q --noconftest` → **12 passed** (16s); live generate+stream both returned `hello rip`, no `<think>` leak, usage recorded; ruff E/F: 6x E501, all Athena-verbatim lines (inherited style debt, per 1.1/1.3 precedent).
+- **Deviations / notes:**
+  - Per user instruction: testing on `openbmb/minicpm5-2b:latest`, NOT qwen2.5:14b — started pull job killed before completion. Box Done `qwen2.5:14b chat succeeds` therefore NOT proven; default-model path only proven via foreign→default *resolution* (serves qwen name, never executed). Live qwen proof needs the 9GB pull — defer to Phase 6 smoke (or pull when needed).
+  - `--noconftest` required: shared conftest imports app.main → torch-stack rot (standing blocker); full-suite green awaits Phase 6. Also `PYTHONPATH=backend` + `OLLAMA_BASE_URL=localhost` needed in this shell (TARGET config default is host.docker.internal for compose; bare Settings from backend/ CWD misses rip/.env — main.py's load_dotenv covers real runs).
+  - Minicpm5 quirk found (model, not provider): ≤32-token budget can end inside `<think>` → honest empty string after strip; 256 budget returns clean text.
+- **Status:** Completed with noted deviation (qwen live proof deferred).
+- **Commits (multi-stage, AGENT.md §4b):** feat (providers) → test (test_providers.py) → docs (this file + checkbox).

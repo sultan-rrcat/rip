@@ -50,7 +50,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
 
 ## Phase 2 — Providers + agents
 
-- [ ] **2.1 Providers (`base.py`, `ollama.py`, `streaming.py`)**
+- [x] **2.1 Providers (`base.py`, `ollama.py`, `streaming.py`)** (2026-09-12: copied from Athena; base verbatim; ollama de-pluginned → ModelProvider, init/health/plugin attrs dropped, gemini prose neutralized, schema name rip, get_logger→stdlib; streaming get_logger→stdlib; `test_providers.py` 12 passed vs minicpm5 — generate+stream round-trip, resolution, ThinkFilter units; qwen2.5:14b pull skipped per user, default-model live proof pending — see SESSION_LOG)**
   - Files: COPY `athena/backend/app/providers/base.py`, `ollama.py`, `streaming.py` → `rip/backend/app/providers/`
   - Edits: replace all `gemini_model_*` with `ollama_default_model`; drop `from app.plugins.api import ...` and `ProviderPlugin` inheritance in `ollama.py` (inherit directly from `ModelProvider`); DO NOT copy `gemini.py`, `llama_server.py`, `tracing.py`
   - Test: `pytest backend/tests/test_providers.py -q` (create if missing: Ollama chat round-trip, mock allowed only if Ollama down)
