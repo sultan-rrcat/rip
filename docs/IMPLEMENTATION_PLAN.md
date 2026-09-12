@@ -32,7 +32,7 @@
   - Test: `python -c "from app.core.config import Settings; print(Settings().port)"` → `8000`
   - Done: boots without `LLM_URL`
 
-- [ ] **1.4 Update `pyproject.toml` + `.env.example`**
+- [x] **1.4 Update `pyproject.toml` + `.env.example`** (2026-09-12: [project] TARGET wholesale — rip 1.0.0, langgraph+langfuse kept, google-genai/neo4j dropped; .env.example TARGET verbatim CORS_ORIGINS=* + BGE aliases; .env copied + BGE→D:/models local override; no requirements.txt, no neo4j/DATABASE_URL/LLM_URL live refs; all 15 TARGET deps installed ≥pins; Settings boots from new .env port 8000; pip install -e . N/A by layout + app boot blocked by torch env — see SESSION_LOG)**
   - Files: REPLACE `rip/pyproject.toml` deps + `rip/.env.example` keys with TARGET blocks (Q29: keep `langfuse`, drop `google-genai`/`neo4j`; `.env` uses `CORS_ORIGINS=*`, keeps `BGE_MODEL_DIR` aliases)
   - Edits: no `requirements.txt`, no `neo4j`, no `DATABASE_URL`
   - Test: `pip install -e .` (from `rip/`) + `copy .env.example .env`

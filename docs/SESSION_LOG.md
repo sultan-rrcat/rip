@@ -155,3 +155,22 @@
   - Light imports resolve; `ruff --select E,F`: 7 new E501s, all TARGET-verbatim comment lines (repo baseline already 19x E501 — style debt, not logic).
 - **Status:** Completed with noted deltas (aliases/extra-ignore/singleton; extra-ignore drops when 1.4 cleans `.env`).
 - **Commits (multi-stage, AGENT.md §4b):** `refactor` (app config + usages) → `test` (conftest/test_app) → `docs` (this file + checkbox).
+
+---
+
+## [2026-09-12] - PHASE 1.4 - pyproject.toml + .env.example (TARGET deps/env)
+- **Task:** IMPLEMENTATION_PLAN Phase 1.4 — REPLACE `pyproject.toml [project]` + `.env.example` with MERGE_PLAN TARGET blocks (Q29: keep langfuse, drop google-genai/neo4j; CORS_ORIGINS=*, BGE aliases; no requirements.txt/neo4j/DATABASE_URL).
+- **Actions Taken:**
+  - `pyproject.toml [project]` replaced wholesale: `rip 1.0.0`, full TARGET dep list (uvicorn[standard], langgraph, langfuse, pyyaml, python-docx, reportlab added; Dropped google-genai/neo4j comments kept verbatim). `[build-system]` + `[tool.ruff]`/`[tool.pytest]` sections kept — tooling, not deps.
+  - `.env.example` written TARGET-verbatim (DB rip/rip, Ollama localhost:11434/qwen2.5:14b, PORT 8000, CORS_ORIGINS=*, BGE primaries + commented aliases, sandbox, langfuse-optional).
+  - Box test `copy .env.example .env` executed; live `.env` (gitignored, local-only) BGE primaries → `D:/models/...` machine-local override (TARGET `./backend/models/...` placeholders don't exist on this box). DB keys kept as TARGET (compose alignment is Phase 1.5).
+  - Installed missing TARGET deps into ml_env: `python-docx 1.2.0`, `reportlab 5.0.1`, `pgvector 0.5.0`, `docling 2.126.0` (all ≥ pins; full set of 15 verified via pip list).
+- **Verification:**
+  - Forbidden grep: no live `neo4j`/`DATABASE_URL`/`google-genai`/`LLM_URL` refs (only TARGET's own Dropped comments); no `requirements*.txt` anywhere.
+  - All non-torch TARGET deps import ok (fastapi … reportlab + docling 2.126.0).
+  - Settings boots from new `.env`: port 8000, ollama localhost:11434/qwen2.5:14b, bge `D:/models/bge-m3`, cors `'*'`, db localhost/5432/rip/rip.
+- **Deviations / blockers:**
+  - Box test `pip install -e .` NOT APPLICABLE: setuptools finds `backend/`+`frontend/` as flat-layout packages and refuses discovery; repo has no root-level importable package (backend runs from `backend/` workdir by design). Deps installed directly instead — same environment outcome. Do NOT "fix" by restructuring in this phase.
+  - `GET /api/health` boot still blocked (env, pre-existing): torch-stack rot now surfaces at `torchaudio/libtorchaudio.pyd` load (`torchaudio 2.5.1+cu121` vs `torch 2.14.0`); docling pulled torchvision 0.20.1→0.29.0 as a side effect. Import chain `app.main→routes.files→dependencies→vector_rag→pipeline→sentence_transformers→transformers→torchaudio` fails on the native lib, not repo code. Fix = torch reinstall / fresh venv in Phase 6 (install from pyproject pins, not `-e`).
+- **Status:** Completed with noted deviations (local .env BGE override; -e install N/A; health boot deferred to Phase 6 env repair).
+- **Commits (multi-stage, AGENT.md §4b):** chore (pyproject + .env.example) → docs (this file + checkbox).
