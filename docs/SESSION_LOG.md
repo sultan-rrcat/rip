@@ -174,3 +174,20 @@
   - `GET /api/health` boot still blocked (env, pre-existing): torch-stack rot now surfaces at `torchaudio/libtorchaudio.pyd` load (`torchaudio 2.5.1+cu121` vs `torch 2.14.0`); docling pulled torchvision 0.20.1→0.29.0 as a side effect. Import chain `app.main→routes.files→dependencies→vector_rag→pipeline→sentence_transformers→transformers→torchaudio` fails on the native lib, not repo code. Fix = torch reinstall / fresh venv in Phase 6 (install from pyproject pins, not `-e`).
 - **Status:** Completed with noted deviations (local .env BGE override; -e install N/A; health boot deferred to Phase 6 env repair).
 - **Commits (multi-stage, AGENT.md §4b):** chore (pyproject + .env.example) → docs (this file + checkbox).
+
+---
+
+## [2026-09-12] - PHASE 1.5 - replace docker-compose.yml (TARGET, postgres healthy)
+- **Task:** IMPLEMENTATION_PLAN Phase 1.5 — REPLACE `docker-compose.yml` with MERGE_PLAN TARGET (Q29 breaking: db→postgres, prototype_rip/trainee→rip/rip, postgres_data→pgdata); `down` → `config` → `up postgres` healthy.
+- **Actions Taken:**
+  - Wrote TARGET block verbatim (migration-warning header kept; backend 8000:8000 + DB_HOST=postgres + OLLAMA host.docker.internal + env_file; frontend 5173:80; postgres pgvector/pgvector:pg16 + pgdata + schema.sql init mount + pg_isready healthcheck; redis commented optional).
+  - `docker compose down` exit 0 (nothing running; old file couldn't even interpolate — required LLM_URL already gone from .env by design).
+  - `docker compose config` valid; interpolated backend env confirms wiring (DB_HOST=postgres override, DB rip/rip, OLLAMA host.docker.internal, PORT 8000).
+- **Verification (same-image harness — see blocker):**
+  - `pgvector/pgvector:pg16` pulled + cached; harness container on host 5433 with identical env + schema.sql init mount: init logs show CREATE TABLEs, DB ready.
+  - Live proof: 6 tables (notebooks/files/embeddings/messages/runs/run_events), `vector` ext present, notebooks has conversation_summary+summary_message_count, messages notebook_id-only.
+  - Re-apply `schema.sql` with ON_ERROR_STOP=1 → exit 0 (NOTICEs only). This also retro-completes the Phase 1.2 full-pgvector live proof.
+  - Harness stopped + removed (`rm -v`); image kept for `up`.
+- **Blocker (environmental, one step left):** host 5432 is held by local `postgresql-x64-17` service (PID 8228); `Stop-Service` needs admin (access denied), so the literal `docker compose up postgres` bind can't complete in-session. Compose file itself is TARGET-final — only host-port availability is missing. To finish: stop the local postgres service (admin) or disable it, then `docker compose up -d postgres` (no pull needed). Note: pre-existing orphan volumes (`athena_pgdata`, `backend_pgdata`) left alone; `athena-frontend-1` currently holds host 5173 (matters at Phase 5, not here).
+- **Status:** Completed except literal `up` bind (proven equivalent via harness).
+- **Commits (multi-stage, AGENT.md §4b):** chore (compose file) → docs (this file + checkbox).
