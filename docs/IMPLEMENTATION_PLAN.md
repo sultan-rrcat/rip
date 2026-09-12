@@ -26,7 +26,7 @@
   - Test: `psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql` twice (must be re-runnable)
   - Done: 6 tables exist: `notebooks/files/embeddings/messages/runs/run_events`
 
-- [ ] **1.3 Rewrite `app/core/config.py`**
+- [x] **1.3 Rewrite `app/core/config.py`** (2026-09-12: TARGET Settings verbatim — port 8000, OLLAMA_*, cors_origins str, no LLM_URL/NEO4J_*/DATABASE_URL; +AliasChoices BGE aliases, +extra=ignore until 1.4 env cleanup, +settings singleton; usages migrated pipeline/file_processor/routes-files/conftest/test_app; Settings().port→8000, boots-without-LLM_URL + alias proofs ok — see SESSION_LOG)**
   - Files: REPLACE `rip/backend/app/core/config.py` with TARGET block in `MERGE_PLAN.md §Config`
   - Edits: port `8000`, `OLLAMA_*`, no `LLM_URL`, no `NEO4J_*`; `cors_origins: str="*"`; support `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` aliases
   - Test: `python -c "from app.core.config import Settings; print(Settings().port)"` → `8000`

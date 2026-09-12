@@ -140,3 +140,18 @@
 - **Verification:** static full pass; live stripped 2x ok; full pgvector apply deferred to compose postgres (`pgvector/pgvector:pg16`, Phase 1.5).
 - **Status:** Completed with env caveat (full live apply needs compose postgres).
 - **Commits (multi-stage, AGENT.md §4b):** docs-only stage follows (this file + checkbox).
+
+---
+
+## [2026-09-12] - PHASE 1.3 - rewrite app/core/config.py (TARGET Settings)
+- **Task:** IMPLEMENTATION_PLAN Phase 1.3 — REPLACE `app/core/config.py` with MERGE_PLAN §Config TARGET (port 8000, OLLAMA_*, no LLM_URL/NEO4J_*, `cors_origins: str`, BGE alias support).
+- **Actions Taken:**
+  - Wrote TARGET block verbatim (all fields incl. Q28 memory comments, sandbox, langfuse, `api_keys_json: dict`).
+  - 3 forced deltas (pre-1.4 env): `AliasChoices` for `bge_m3_model_path`/`bge_reranker_v2_m3` (Q5 — current `.env` only sets `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR`); `extra="ignore"` (current `.env` still has forbidden `LLM_URL`; settings default forbid would crash boot until 1.4 rewrites env); `settings = Settings()` singleton for call sites.
+  - Migrated all legacy module-constant users to `settings.*`: `rag/pipeline.py` (bge paths), `services/file_processor.py` + `routes/files.py` (upload_dir), `tests/conftest.py` + `tests/test_app.py` (upload_dir). Zero `config.UPLOAD_DIR|BGE_*|LLM_URL` refs remain.
+- **Verification:**
+  - Plan test: `Settings().port` → `8000` ✓.
+  - Proof script: boots with legacy keys absent (no `llm_url`/`neo4j*`/`database_url` fields); `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` aliases honored; primary names honored; `cors_origins` is `str="*"`; singleton ok.
+  - Light imports resolve; `ruff --select E,F`: 7 new E501s, all TARGET-verbatim comment lines (repo baseline already 19x E501 — style debt, not logic).
+- **Status:** Completed with noted deltas (aliases/extra-ignore/singleton; extra-ignore drops when 1.4 cleans `.env`).
+- **Commits (multi-stage, AGENT.md §4b):** `refactor` (app config + usages) → `test` (conftest/test_app) → `docs` (this file + checkbox).
