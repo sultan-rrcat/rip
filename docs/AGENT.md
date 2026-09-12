@@ -48,6 +48,17 @@ frontend/src/
 Start: read MERGE_PLAN §0→API, pick one box.
 End: `pytest` + `ruff`, check box with commit SHA, append `SESSION_LOG.md` (`## [date] - MERGE Box #N - prompt/commit/status`).
 
+### 4b. Multi-stage commits (after each phase box)
+
+Commit the box in reviewable stages, smallest scope first. Never one giant commit. Order:
+
+1. `refactor(backend): Phase X.Y <structural change>` — moves/copies/deletes + import fixes only.
+2. `test(backend|frontend): Phase X.Y <test migration>` — conftest/tests, no source changes.
+3. `chore(docker|config): Phase X.Y <infra change>` — Dockerfile/compose/env, if any.
+4. `docs(merge): Phase X.Y <log + checkbox>` — SESSION_LOG entry + IMPLEMENTATION_PLAN checkbox (+ workflow doc updates, if any).
+
+Rules: inspect `git status` + `git diff --stat` before each stage; stage only intended paths (`git add <paths>`, never `git add -A` across scopes); one concern per commit; each message ends with the phase ref (e.g. `Phase 1.1`); push only when explicitly requested.
+
 ## 5. Commands
 
 | Task | Command | Where |

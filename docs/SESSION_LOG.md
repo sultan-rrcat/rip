@@ -108,3 +108,23 @@
   - `CONTEXT.md`, `AGENT.md`, `SETUP.md`: terminology and traps.
   - `backend/schema.sql`: `notebooks.summary` → `conversation_summary`.
 - **Status:** Completed.
+
+---
+
+## [2026-09-12] - PHASE 1.1 - backend/app/ root (move + import map + conftest)
+- **Task:** IMPLEMENTATION_PLAN Phase 1.1 — create `backend/app/` root, move `core/rag/routes/services/` under it, copy `classutils.py`/`constants.py`, apply `app.*` import map, delete `services/rewritter.py` + `services/llm.py` (Q33), migrate `tests/conftest.py` (Q38), Dockerfile CMD → `app.main:app`.
+- **Actions Taken:**
+  - MOVED `backend/core/` → `backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`, `backend/app.py` → `backend/app/main.py`, `backend/config.py` → `backend/app/core/config.py` (interim hybrid: legacy constants + minimal `Settings`; Phase 1.3 replaces wholesale).
+  - COPIED `athena/backend/app/core/classutils.py`, `constants.py` → `rip/backend/app/core/`; added empty `app/__init__.py`, `app/routes/__init__.py`.
+  - Import map applied (`core./rag./routes./services.→app.*`, `import config→from app.core import config`); DELETED `app/services/rewritter.py` + `llm.py`.
+  - `app/main.py`: dropped `llm.router` (orphaned `app/routes/llm.py` kept on disk, not imported, pending Phase 4.3 deletion — otherwise boot breaks on deleted `services/llm` imports).
+  - `app/core/config.py`: fixed `BASE_DIR` to backend dir (two levels up); added minimal `Settings` (`port=8000`, `ollama_*`, `cors_origins: str`).
+  - `backend/tests/conftest.py`: `from app.main import app`, `from app.core import config` + `from app.core.config import Settings`, Ollama probe `OLLAMA_BASE_URL/api/tags`; `test_app.py` imports updated.
+  - `backend/Dockerfile` CMD → `app.main:app`.
+- **Verification:**
+  - Flat-import grep over `backend/app` + `backend/tests` → 0 hits.
+  - Light imports resolve (`Settings(port=8000)`, `db`, `routes.notebooks/messages`, `chat`, `classutils`/`constants`) — EXIT 0.
+  - `ruff check backend/app` (ml_env ruff 0.16.6): 26 E/F hits, all pre-existing style (E501/F541/F401/F841/E722) — no new import errors (no F821).
+  - `pytest --collect-only`: ERROR — `test_app.py` module-level `from app.main import app` pulls `sentence_transformers` → broken `torchvision::nms` in `ml_env` (environmental, pre-dates move; prior `agent_env` no longer exists). Full green needs working torch + Postgres + Ollama.
+- **Status:** Completed with noted deviations (llm.router exclusion, interim hybrid config, pytest blocked by env).
+- **Commits (multi-stage, AGENT.md §4b):** `485ee75` refactor(backend) app move + import map; `2bec1c5` test(backend) conftest migration; `3724e24` chore(docker) CMD; docs commit follows (this file + checkbox + §4b workflow).

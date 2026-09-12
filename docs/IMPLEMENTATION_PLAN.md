@@ -8,12 +8,13 @@
 1. Work top to bottom. Do not skip phases.
 2. Each task has Files, Edits, Test, Done. Do all four before checking the box.
 3. End of session: `pytest` + `ruff`, append `SESSION_LOG.md` as `## [date] - PHASE x.y - prompt/commit/status`.
+4. Commit multi-stage per `AGENT.md` §4b (refactor → test → chore → docs), one concern per commit.
 
 ---
 
 ## Phase 1 — Skeleton + config (backend boots, no orchestration yet)
 
-- [ ] **1.1 Create `backend/app/` root**
+- [x] **1.1 Create `backend/app/` root** (2026-09-12: moved core/rag/routes/services under app/, app.py→app/main.py, config.py→app/core/config.py interim hybrid + Settings; import map applied; rewritter/llm deleted; conftest→app.main/Ollama /api/tags; Dockerfile CMD app.main:app; llm.router excluded pending 4.3; flat-grep 0 hits, light imports ok, ruff pre-existing only, pytest blocked by torch env — see SESSION_LOG)
   - Files: MOVE `rip/backend/core/` → `rip/backend/app/core/`, `rag/` → `app/rag/`, `routes/` → `app/routes/`, `services/` → `app/services/`; COPY `athena/backend/app/core/classutils.py`, `constants.py` → `rip/backend/app/core/`
   - Edits: apply import map `routes.→app.routes.`, `core.→app.core.`, `services.→app.services.`, `rag.→app.rag.`; empty `__init__.py` per package; workdir `rip/backend/`; `backend/Dockerfile` CMD → `app.main:app`; DELETE `services/rewritter.py` + `services/llm.py` (Q33); migrate `backend/tests/conftest.py` → `from app.core.config import Settings`, `from app.main import app`, Ollama probe `OLLAMA_BASE_URL/api/tags` (Q38)
   - Test: `ruff check backend/app` (from `rip/`)
