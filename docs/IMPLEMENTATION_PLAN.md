@@ -38,7 +38,7 @@
   - Test: `pip install -e .` (from `rip/`) + `copy .env.example .env`
   - Done: install clean, backend boots to `GET /api/health`
 
-- [x] **1.5 Replace `docker-compose.yml`** (2026-09-12: TARGET verbatim — postgres/rip/rip/pgdata, 8000:8000, DB_HOST=postgres, OLLAMA host.docker.internal, redis optional-commented; down ok, config valid; postgres proven via same-image harness on 5433 — 6 tables + vector ext + Q38 cols + re-apply exit 0; literal up on 5432 awaits free host port — see SESSION_LOG)**
+- [x] **1.5 Replace `docker-compose.yml`** (2026-09-12: TARGET verbatim — postgres/rip/rip/pgdata, 8000:8000, DB_HOST=postgres, OLLAMA host.docker.internal, redis optional-commented; down ok, config valid; postgres proven via same-image harness on 5433 — 6 tables + vector ext + Q38 cols + re-apply exit 0; literal up on 5432 awaits free host port — see SESSION_LOG; follow-up 2026-09-12: user-directed HOST_PG_PORT override, `up postgres` healthy on host 5433, 6 tables + vector live)**
   - Files: REPLACE `rip/docker-compose.yml` with TARGET block (Q29 breaking: `db→postgres`, `prototype_rip/trainee→rip/rip`, `postgres_data→pgdata`)
   - Edits: services `postgres/backend/frontend`, `8000:8000`, `DB_HOST=postgres`, `OLLAMA_BASE_URL=http://host.docker.internal:11434`, Redis commented as optional; run `docker compose down` before `up --build postgres`
   - Test: `docker compose config`
