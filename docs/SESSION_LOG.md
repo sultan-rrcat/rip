@@ -393,4 +393,11 @@
 - **Verification:** `import sentence_transformers`, `import app.main`, `import app.routes.files` all ok; full collection WITH the real conftest: 116 tests (incl. previously uncollectable `test_app.py` 12); `test_runs_store.py` 15 passed post-repair.
 - **Still blocked (model weights, not env):** `backend/models/` holds 16MB of tokenizers only — no bge-m3/reranker weights; `.env` points at absent `D:/models`. Real `VectorRAG()` boot (test_app.py, 6.2 smoke, `uvicorn`) needs ~3.5GB of weights via `snapshot_download`. Decision pending: download or defer.
 - **Commits:** fix (pyproject pin) → docs (this file + AGENT trap).
+
+---
+
+## [2026-09-13] - MODEL PROVISIONING - bge-m3 + reranker downloaded, .env repointed
+- **Actions Taken (per user):** deleted stale `backend/models/` contents (empty bge-m3 dir, misnamed `reranker/bge-m3-reranker` + tokenizer scraps); `snapshot_download` of `BAAI/bge-m3` → `backend/models/bge-m3` (2.17GB safetensors, ~27min) and `BAAI/bge-reranker-v2-m3` → `backend/models/reranker/bge_reranker_v2_m3` (~38min); `.env` repointed from absent `D:/models` to `./backend/models/...` (matches config defaults; `.env` + weights gitignored, nothing to commit).
+- **Verification:** `HuggingFaceEmbeddings` loads (embed dim 1024), `CrossEncoder` scores (0.987 on probe pair), and full `RagPipeline()` boots through `settings` — `PIPELINE BOOT OK`. Resolves the "weights" blocker in the ENV REPAIR entry: `test_app.py` / `uvicorn` / 6.2 smoke are now unblocked on models (remaining needs: qwen2.5:14b Ollama pull for default-model proofs).
+- **Status:** Completed (provisioning; no commit — ignored files only).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
