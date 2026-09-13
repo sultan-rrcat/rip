@@ -10,6 +10,7 @@ dependencies = [
     # Core
     "fastapi>=0.135.1",
     "uvicorn[standard]>=0.41.0",
+    "python-multipart>=0.0.18",  # routes/files.py Form/File upload (backend crash-loop without it)
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
     "python-dotenv>=1.2.2",
