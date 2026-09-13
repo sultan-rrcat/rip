@@ -118,7 +118,7 @@ Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api
   - Test: `npx tsc -b` in `frontend/`
   - Done: typecheck passes
 
-- [ ] **5.2 `services/runs.ts`**
+- [x] **5.2 `services/runs.ts`** (2026-09-13: createRun/subscribeToRunEvents(EventSource)/cancelRun via API from @/config, no hardcoded host; `npm run lint` exit 0 + `tsc -b` clean — see SESSION_LOG)**
   - Files: CREATE `frontend/src/services/runs.ts` (`createRun(notebookId, message)`, `subscribeToRunEvents(runId, onEvent)` via `EventSource`, `cancelRun(runId)`)
   - Edits: use `VITE_API_URL` via `API` from `@/config`, `EventSource`, no hardcoded host
   - Test: `npm run lint` in `frontend/`

@@ -334,4 +334,14 @@
 - **Verification:** `.\node_modules\.bin\tsc -b` exit 0, no errors.
 - **Status:** Completed.
 - **Commits:** feat (types/runs.ts) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 5.2 - services/runs.ts (run lifecycle client)
+- **Task:** IMPLEMENTATION_PLAN Phase 5.2 — CREATE `frontend/src/services/runs.ts` (`createRun`, `subscribeToRunEvents` via EventSource, `cancelRun`); VITE_API_URL via `API` from `@/config`, no hardcoded host; `npm run lint` clean.
+- **Actions Taken:**
+  - New `frontend/src/services/runs.ts`: `createRun(notebookId, message)` → `POST /v1/runs` → `run_id`; `subscribeToRunEvents(runId, onEvent)` → EventSource with JSON frame parsing (parse errors logged, stream continues) returning an unsubscribe closer; `cancelRun(runId)` → `POST /v1/runs/{id}/cancel`. No auto-reconnect on error (stream close is terminal for the subscription; deliberate re-subscribe for refresh-replay lives in 5.3 per Q35).
+- **Verification:** `npm run lint` exit 0 (only pre-existing warnings in Card.tsx/LeftSidebar.tsx, none in runs.ts); `tsc -b` exit 0.
+- **Status:** Completed.
+- **Commits:** feat (services/runs.ts) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
