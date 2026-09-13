@@ -410,25 +410,31 @@ class RunManager:
             logger.exception("run %s: memory persist failed", record.run_id)
 
 
-_manager: RunManager | None = None
-
-
 def get_run_manager() -> RunManager:
-    """Process-wide singleton — runs must be addressable across requests."""
-    global _manager
-    if _manager is None:
-        from app.api.deps import get_model_provider, get_orchestrator
+    """Process-wide singleton — runs must be addressable across requests.
 
-        _manager = RunManager(
-            provider=get_model_provider(), orchestrator=get_orchestrator()
-        )
-    return _manager
+    Canonical home is `app.api.deps` (routes resolve the manager through it,
+    so FastAPI `dependency_overrides` work); this delegates there so the two
+    never diverge into separate instances.
+    """
+    from app.api.deps import get_run_manager as _deps_manager
+
+    manager = _deps_manager()
+    assert isinstance(manager, RunManager)
+    return manager
 
 
-def set_run_manager(manager: RunManager | None) -> None:
-    """Install/replace the process manager (main.py lifespan; tests)."""
-    global _manager
-    _manager = manager
+def set_run_manager(manager: RunManager) -> None:
+    """Install the process manager (main.py lifespan; tests).
+
+    There is no uninstall-single-field path by design — teardown uses
+    `app.api.deps.reset()`. Passing None raises (use `deps.reset()`).
+    """
+    if manager is None:
+        raise ValueError("use app.api.deps.reset() to clear the runtime")
+    from app.api import deps as _deps
+
+    _deps.configure(run_manager=manager)
 
 
 __all__ = ["RunManager", "RunRecord", "get_run_manager", "set_run_manager"]
