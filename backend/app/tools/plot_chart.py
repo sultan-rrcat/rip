@@ -13,6 +13,7 @@ RIP port: no plugin system — direct Tool subclass (ADR-017).
 from __future__ import annotations
 
 from html import escape
+from typing import ClassVar
 
 from app.tools.base import Tool, ToolRequest, ToolResponse
 
@@ -88,7 +89,7 @@ class PlotChartTool(Tool):
     tool_id = "plot.chart"
     name = "Plot Chart"
     description = "Render a bar or line chart as inline SVG from labels + numeric values."
-    input_schema = {
+    input_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "chart_type": {"type": "string", "enum": ["bar", "line"]},
@@ -98,7 +99,7 @@ class PlotChartTool(Tool):
         },
         "required": ["chart_type", "labels", "values"],
     }
-    output_schema = {
+    output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "svg": {"type": "string"},

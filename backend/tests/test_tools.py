@@ -15,7 +15,6 @@ import shutil
 import subprocess
 
 import pytest
-
 from app.tools.base import Tool, ToolRequest, ToolResponse
 from app.tools.executor import execute_tool
 from app.tools.rag_query import RagQueryTool, bind_rag_singleton, rag_query
@@ -31,7 +30,8 @@ def _docker_up() -> bool:
         return False
     try:
         proc = subprocess.run(
-            ["docker", "info"], capture_output=True, text=True, timeout=10.0
+            ["docker", "info"], capture_output=True, text=True, timeout=10.0,
+            check=False,  # returncode is the probe result
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

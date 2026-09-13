@@ -27,7 +27,7 @@ Event types (locked SSE vocabulary):
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel
@@ -64,13 +64,13 @@ class EventEnvelope(BaseModel):
     @classmethod
     def build(
         cls, seq: int | str, run_id: str, type: EventType, data: dict
-    ) -> "EventEnvelope":
+    ) -> EventEnvelope:
         return cls(
             seq=seq,
             run_id=run_id,
             type=type,
             data=data,
-            ts=datetime.now(timezone.utc).isoformat(),
+            ts=datetime.now(UTC).isoformat(),
         )
 
     def to_sse(self) -> str:

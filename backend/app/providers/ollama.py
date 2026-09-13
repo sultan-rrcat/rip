@@ -394,7 +394,7 @@ class OllamaProvider(ModelProvider):
             raise RuntimeError("Malformed Ollama image response: empty b64_json")
         try:
             return "image/png", base64.b64decode(b64)
-        except Exception as e:  # noqa: BLE001 - base64 shape errors are tool failures
+        except Exception as e:
             raise RuntimeError(f"Malformed Ollama image payload: {e}") from e
 
     def list_available_models(self) -> list[dict]:

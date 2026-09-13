@@ -62,8 +62,8 @@ class Tool(ABC):
     tool_id: str
     name: str
     description: str
-    input_schema: dict = {}
-    output_schema: dict = {}
+    input_schema: ClassVar[dict] = {}
+    output_schema: ClassVar[dict] = {}
     effect_class: ToolEffect = EFFECT_READ_ONLY  # type: ignore[assignment]
     requires_approval: bool = False
     cost_class: str = "low"

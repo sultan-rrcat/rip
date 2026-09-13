@@ -39,7 +39,7 @@ def execute_tool(
     )
     try:
         response = tool.execute(request)
-    except Exception as e:  # noqa: BLE001 - fail-honest boundary, agent parity
+    except Exception as e:
         logger.exception("tool %s failed step=%s", tool_id, step_id)
         return ToolResponse(tool_id=tool_id, ok=False, output=None, error=str(e))
     if response.tool_id != tool_id:

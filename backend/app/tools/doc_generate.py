@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import base64
 import io
-from typing import Any
+from typing import Any, ClassVar
 
 from app.tools.base import Tool, ToolRequest, ToolResponse
 
@@ -30,7 +30,9 @@ def _need_modules() -> tuple[Any, Any]:
         raise RuntimeError(f"python-docx is not installed: {e}") from e
     try:
         from reportlab.lib.pagesizes import letter  # type: ignore[import-not-found]
-        from reportlab.lib.styles import getSampleStyleSheet  # type: ignore[import-not-found]
+        from reportlab.lib.styles import (
+            getSampleStyleSheet,  # type: ignore[import-not-found]
+        )
         from reportlab.platypus import (  # type: ignore[import-not-found]
             Paragraph,
             SimpleDocTemplate,
@@ -171,7 +173,7 @@ class DocGenerateTool(Tool):
         "tables: optional array of {headers:[string], rows:[[any]]}. "
         'Example: {"title":"Docker Overview","sections":[{"heading":"Intro","body":"..."}],"tables":[]}'
     )
-    input_schema = {
+    input_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "title": {"type": "string"},
@@ -190,7 +192,7 @@ class DocGenerateTool(Tool):
         },
         "required": ["title", "sections"],
     }
-    output_schema = {
+    output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "markdown": {"type": "string"},

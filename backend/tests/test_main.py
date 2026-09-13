@@ -23,7 +23,7 @@ try:
     import httpx
 
     _IMPORT_ERROR = None
-except Exception as e:  # pragma: no cover - import-time guard
+except Exception as e:  # noqa: BLE001 - import probe; pragma: no cover
     httpx = None  # type: ignore[assignment]
     _IMPORT_ERROR = e
 
@@ -56,12 +56,11 @@ def _stub_heavy_rag():
 _stub_heavy_rag()
 
 try:
-    from fastapi.testclient import TestClient
-
     import app.main as main_module
     from app.api import deps
     from app.tools.rag_query import get_rag_singleton
-except Exception as e:  # pragma: no cover - import-time guard
+    from fastapi.testclient import TestClient
+except Exception as e:  # noqa: BLE001 - import probe; pragma: no cover
     TestClient = None  # type: ignore[assignment]
     main_module = None  # type: ignore[assignment]
     deps = None  # type: ignore[assignment]
@@ -78,7 +77,7 @@ def _ollama_up() -> bool:
 
         r = httpx.get(f"{settings.ollama_base_url}/api/tags", timeout=5)
         return r.status_code == 200
-    except Exception:
+    except Exception:  # noqa: BLE001 - any probe failure means "down"
         return False
 
 

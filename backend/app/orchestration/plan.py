@@ -46,7 +46,7 @@ class Plan(BaseModel):
         return len(self.steps) == 0
 
     @classmethod
-    def from_model(cls, plan_id: str, goal: str, raw_steps: list[dict]) -> "Plan":
+    def from_model(cls, plan_id: str, goal: str, raw_steps: list[dict]) -> Plan:
         """Build a Plan from the Planner's raw JSON, deterministically fixing
         three common LLM slips:
           - duplicate step_ids: first occurrence keeps its id, later ones get

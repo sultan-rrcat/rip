@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import ClassVar
 
 from app.agents.base import Agent, DelegationRequest, DelegationResponse, StepStatus
 from app.core import constants
@@ -27,7 +28,7 @@ class CodingAgent(Agent):
     description = (
         "Write, explain, review, and debug code across languages and frameworks."
     )
-    input_schema = {"message": "str", "language": "optional str"}
+    input_schema: ClassVar[dict] = {"message": "str", "language": "optional str"}
     requires_permission = False
     side_effecting = False
     cost_class = "medium"
@@ -104,7 +105,7 @@ class CodingAgent(Agent):
                 status=StepStatus.FAILURE,
                 output=None,
                 confidence=constants.CONFIDENCE_LOW,
-                error=f"Execution failed: {str(e)}",
+                error=f"Execution failed: {e!s}",
             )
         duration_ms = (time.perf_counter() - start) * 1000
         logger.info(

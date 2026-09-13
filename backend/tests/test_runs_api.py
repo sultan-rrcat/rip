@@ -22,9 +22,6 @@ import uuid
 import pytest
 
 try:
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
     from app.agents.base import StepStatus
     from app.agents.registry import AgentRegistry
     from app.api import deps as api_deps
@@ -40,9 +37,11 @@ try:
     from app.runs.manager import RunManager
     from app.store import runs as store
     from app.tools.registry import ToolRegistry
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
     _IMPORT_ERROR = None
-except Exception as e:  # pragma: no cover - import-time guard
+except Exception as e:  # noqa: BLE001 - import probe; pragma: no cover
     _IMPORT_ERROR = e
 
 
@@ -53,7 +52,7 @@ def _db_up() -> bool:
         with pg_connection():
             pass
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - any connect failure means "down"
         return False
 
 
@@ -151,18 +150,16 @@ class BoomOrchestrator:
 
 @pytest.fixture()
 def notebook_id():
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO notebooks (notebook_name) VALUES (%s) "
-                "RETURNING notebook_id",
-                ("runs-api-test",),
-            )
-            nb = str(cur.fetchone()[0])
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO notebooks (notebook_name) VALUES (%s) "
+            "RETURNING notebook_id",
+            ("runs-api-test",),
+        )
+        nb = str(cur.fetchone()[0])
     yield nb
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM notebooks WHERE notebook_id = %s", (nb,))
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM notebooks WHERE notebook_id = %s", (nb,))
 
 
 @pytest.fixture()
@@ -348,27 +345,25 @@ class TestArtifacts:
 @needs_db
 class TestMemory:
     def test_long_history_folds_summary(self, client, notebook_id, manager):
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                for i in range(12):
-                    role = "user" if i % 2 == 0 else "assistant"
-                    cur.execute(
-                        "INSERT INTO messages (notebook_id, role, text) "
-                        "VALUES (%s, %s, %s)",
-                        (notebook_id, role, f"turn {i} " + "x" * 40),
-                    )
+        with pg_connection() as conn, conn.cursor() as cur:
+            for i in range(12):
+                role = "user" if i % 2 == 0 else "assistant"
+                cur.execute(
+                    "INSERT INTO messages (notebook_id, role, text) "
+                    "VALUES (%s, %s, %s)",
+                    (notebook_id, role, f"turn {i} " + "x" * 40),
+                )
         run_id = client.post(
             "/v1/runs", json={"notebook_id": notebook_id, "message": "hello"}
         ).json()["run_id"]
         _wait_done(run_id)
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT conversation_summary, summary_message_count "
-                    "FROM notebooks WHERE notebook_id = %s",
-                    (notebook_id,),
-                )
-                summary, count = cur.fetchone()
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT conversation_summary, summary_message_count "
+                "FROM notebooks WHERE notebook_id = %s",
+                (notebook_id,),
+            )
+            summary, count = cur.fetchone()
         assert summary == "folded summary (fake)"
         assert count == 2  # 12 turns, window 10 → oldest 2 folded
 
@@ -377,13 +372,12 @@ class TestMemory:
             "/v1/runs", json={"notebook_id": notebook_id, "message": "hello"}
         ).json()["run_id"]
         _wait_done(run_id)
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT count(*) FROM messages WHERE notebook_id = %s",
-                    (notebook_id,),
-                )
-                assert cur.fetchone()[0] == 0  # Q22: frontend owns messages
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM messages WHERE notebook_id = %s",
+                (notebook_id,),
+            )
+            assert cur.fetchone()[0] == 0  # Q22: frontend owns messages
 
 
 @needs_db

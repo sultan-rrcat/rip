@@ -18,6 +18,7 @@ import logging
 import shutil
 import subprocess
 from dataclasses import dataclass
+from typing import ClassVar
 
 from app.core.config import settings
 from app.tools.base import Tool, ToolRequest, ToolResponse
@@ -62,6 +63,7 @@ def run_python(code: str, *, timeout_ms: int | None = None) -> SandboxResult:
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            check=False,  # exit code is read manually into SandboxResult
         )
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or "") if isinstance(e.stdout, str) else ""
@@ -85,12 +87,12 @@ class CodeSandboxTool(Tool):
         "Execute a Python snippet in a fresh Docker container "
         "(no network, memory/pids limits, timeout) and return its output."
     )
-    input_schema = {
+    input_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {"code": {"type": "string"}},
         "required": ["code"],
     }
-    output_schema = {
+    output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "stdout": {"type": "string"},

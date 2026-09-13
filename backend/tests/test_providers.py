@@ -11,7 +11,6 @@ import os
 
 import httpx
 import pytest
-
 from app.core.config import settings
 from app.providers.base import ModelProvider
 from app.providers.ollama import OllamaProvider

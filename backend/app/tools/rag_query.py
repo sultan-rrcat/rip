@@ -18,7 +18,7 @@ Effect class: read-only.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 from app.services.chat import extract_sources, format_context_for_llm
 from app.tools.base import Tool, ToolRequest, ToolResponse
@@ -77,7 +77,7 @@ def rag_query(
     context = resolved.retrieve_context(notebook_id, query, top_k=top_k)
     results = context.get("results", [])
     if not isinstance(results, list):
-        raise RuntimeError("VectorRAG returned a malformed context (no results list)")
+        raise TypeError("VectorRAG returned a malformed context (no results list)")
     return results
 
 
@@ -88,7 +88,7 @@ class RagQueryTool(Tool):
         "Search the notebook's documents (vector + full-text, BGE reranked) "
         "and return grounded chunks with source metadata."
     )
-    input_schema = {
+    input_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "notebook_id": {"type": "string"},
@@ -97,7 +97,7 @@ class RagQueryTool(Tool):
         },
         "required": ["notebook_id", "query"],
     }
-    output_schema = {
+    output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "results": {"type": "array"},
@@ -153,7 +153,7 @@ class RagQueryTool(Tool):
             return ToolResponse(
                 tool_id=self.tool_id, ok=False, output=None, error=str(e)
             )
-        except Exception as e:  # noqa: BLE001 - retrieval failure is a tool failure
+        except Exception as e:
             logger.exception("rag.query retrieval failed")
             return ToolResponse(
                 tool_id=self.tool_id,

@@ -71,7 +71,10 @@ def _frame(seq: Any, type: str, run_id: str, data: dict) -> str:
 
 
 @router.post("/v1/runs", response_model=CreateRunResponse, status_code=202)
-def create_run(body: CreateRunRequest, manager=Depends(get_run_manager)):
+def create_run(
+    body: CreateRunRequest,
+    manager=Depends(get_run_manager),  # noqa: B008 - FastAPI Depends-in-default is canonical
+):
     try:
         record = manager.create_run(str(body.notebook_id), body.message)
     except LookupError as e:
@@ -91,7 +94,9 @@ def get_run(run_id: str):
 
 
 @router.post("/v1/runs/{run_id}/cancel", response_model=CancelRunResponse)
-def cancel_run(run_id: str, manager=Depends(get_run_manager)):
+def cancel_run(
+    run_id: str, manager=Depends(get_run_manager)  # noqa: B008 - FastAPI Depends-in-default is canonical
+):
     handled, already_done = manager.cancel_run(run_id)
     if not handled:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -101,7 +106,9 @@ def cancel_run(run_id: str, manager=Depends(get_run_manager)):
 
 
 @router.get("/v1/runs/{run_id}/events")
-def run_events(run_id: str, manager=Depends(get_run_manager)):
+def run_events(
+    run_id: str, manager=Depends(get_run_manager)  # noqa: B008 - FastAPI Depends-in-default is canonical
+):
     try:
         events, live, _done = manager.subscribe(run_id)
     except LookupError:

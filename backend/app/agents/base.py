@@ -55,7 +55,7 @@ class Agent(ABC):
     agent_id: str
     name: str
     description: str
-    input_schema: dict = {}
+    input_schema: ClassVar[dict] = {}
     requires_permission: bool = False
     side_effecting: bool = False
     cost_class: str = "low"
@@ -81,4 +81,3 @@ class Agent(ABC):
     @abstractmethod
     def execute(self, request: DelegationRequest) -> DelegationResponse:
         """Execute the agent's core logic for a delegation request."""
-        pass

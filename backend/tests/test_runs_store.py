@@ -14,13 +14,12 @@ import pytest
 
 try:
     import psycopg2
-    from psycopg2 import errors as _pg_errors
-
     from app.core.db import pg_connection
     from app.store import runs as store
+    from psycopg2 import errors as _pg_errors
 
     _IMPORT_ERROR = None
-except Exception as e:  # pragma: no cover - import-time guard
+except Exception as e:  # noqa: BLE001 - import probe; pragma: no cover
     psycopg2 = None  # type: ignore[assignment]
     _pg_errors = None  # type: ignore[assignment]
     pg_connection = None  # type: ignore[assignment]
@@ -35,7 +34,7 @@ def _db_up() -> bool:
         with pg_connection():
             pass
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 - any connect failure means "down"
         return False
 
 
@@ -47,19 +46,17 @@ needs_db = pytest.mark.skipif(
 
 @pytest.fixture()
 def notebook_id():
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO notebooks (notebook_name) VALUES (%s) "
-                "RETURNING notebook_id",
-                ("store-test",),
-            )
-            nb = str(cur.fetchone()[0])
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO notebooks (notebook_name) VALUES (%s) "
+            "RETURNING notebook_id",
+            ("store-test",),
+        )
+        nb = str(cur.fetchone()[0])
     yield nb
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            # CASCADE wipes this notebook's files/messages/runs/run_events.
-            cur.execute("DELETE FROM notebooks WHERE notebook_id = %s", (nb,))
+    with pg_connection() as conn, conn.cursor() as cur:
+        # CASCADE wipes this notebook's files/messages/runs/run_events.
+        cur.execute("DELETE FROM notebooks WHERE notebook_id = %s", (nb,))
 
 
 @needs_db
@@ -123,22 +120,20 @@ class TestRuns:
         second = store.create_run(notebook_id)
         ids = [r.id for r in store.list_runs(notebook_id)]
         assert ids == [first.id, second.id]
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO notebooks (notebook_name) VALUES (%s) "
-                    "RETURNING notebook_id",
-                    ("store-other",),
-                )
-                other = str(cur.fetchone()[0])
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO notebooks (notebook_name) VALUES (%s) "
+                "RETURNING notebook_id",
+                ("store-other",),
+            )
+            other = str(cur.fetchone()[0])
         try:
             assert [r.id for r in store.list_runs(other)] == []
         finally:
-            with pg_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "DELETE FROM notebooks WHERE notebook_id = %s", (other,)
-                    )
+            with pg_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM notebooks WHERE notebook_id = %s", (other,)
+                )
 
 
 @needs_db

@@ -319,7 +319,7 @@ class RunManager:
             self._persist_memory(record, summary_update)
             self._publish(record, "run_completed",
                            {"status": result.status, "run_id": record.run_id})
-        except Exception as e:  # noqa: BLE001 - fail-honest terminal event
+        except Exception as e:
             logger.exception("run %s crashed", record.run_id)
             self._finish_failed(record, str(e))
         finally:
@@ -328,32 +328,31 @@ class RunManager:
     def _finish_failed(self, record: RunRecord, message: str) -> None:
         try:
             run_store.update_run(record.run_id, status="failed")
-        except Exception:  # noqa: BLE001 - terminal event matters more
+        except Exception:
             logger.exception("run %s: failed-state persist failed", record.run_id)
         try:
             self._publish(record, "error", {"message": message})
-        except Exception:  # noqa: BLE001 - closing still matters
+        except Exception:
             logger.exception("run %s: error event persist failed", record.run_id)
 
     def _finish_cancelled(self, record: RunRecord, reason: str) -> None:
         try:
             run_store.cancel_run(record.run_id)
-        except Exception:  # noqa: BLE001 - terminal event matters more
+        except Exception:
             logger.exception("run %s: cancelled-state persist failed", record.run_id)
         try:
             self._publish(record, "cancelled", {"reason": reason})
-        except Exception:  # noqa: BLE001 - closing still matters
+        except Exception:
             logger.exception("run %s: cancelled event persist failed", record.run_id)
 
     # -- memory (Q31 steps 3-4) --------------------------------------------
 
     def _notebook_exists(self, notebook_id: str) -> bool:
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM notebooks WHERE notebook_id = %s", (notebook_id,)
-                )
-                return cur.fetchone() is not None
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM notebooks WHERE notebook_id = %s", (notebook_id,)
+            )
+            return cur.fetchone() is not None
 
     def _load_memory(self, record: RunRecord) -> tuple[str | None, tuple | None]:
         """Read summary + messages; return (prompt context, persist update).
@@ -364,20 +363,21 @@ class RunManager:
         it before creating the run, and re-adding it would double-count on
         the race where that POST already landed.
         """
-        with pg_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(
-                    "SELECT conversation_summary, summary_message_count "
-                    "FROM notebooks WHERE notebook_id = %s",
-                    (record.notebook_id,),
-                )
-                nb = cur.fetchone()
-                cur.execute(
-                    "SELECT role, text FROM messages WHERE notebook_id = %s "
-                    "ORDER BY created_at, message_id",
-                    (record.notebook_id,),
-                )
-                rows = cur.fetchall()
+        with pg_connection() as conn, conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+            cur.execute(
+                "SELECT conversation_summary, summary_message_count "
+                "FROM notebooks WHERE notebook_id = %s",
+                (record.notebook_id,),
+            )
+            nb = cur.fetchone()
+            cur.execute(
+                "SELECT role, text FROM messages WHERE notebook_id = %s "
+                "ORDER BY created_at, message_id",
+                (record.notebook_id,),
+            )
+            rows = cur.fetchall()
         stored = nb["conversation_summary"] if nb else None
         folded = int(nb["summary_message_count"] or 0) if nb else 0
         messages = [{"role": r["role"], "content": r["text"]} for r in rows]
@@ -385,7 +385,7 @@ class RunManager:
             memory, new_summary, new_count = build_memory_context(
                 self._provider, stored, messages, folded_count=folded
             )
-        except Exception:  # noqa: BLE001 - memory must never kill a run
+        except Exception:
             logger.exception("run %s: memory fold failed, continuing bare", record.run_id)
             return None, None
         prompt = memory.as_prompt() or None
@@ -399,14 +399,13 @@ class RunManager:
             return
         new_summary, new_count = update
         try:
-            with pg_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE notebooks SET conversation_summary = %s, "
-                        "summary_message_count = %s WHERE notebook_id = %s",
-                        (new_summary, new_count, record.notebook_id),
-                    )
-        except Exception:  # noqa: BLE001 - memory persist is best-effort
+            with pg_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE notebooks SET conversation_summary = %s, "
+                    "summary_message_count = %s WHERE notebook_id = %s",
+                    (new_summary, new_count, record.notebook_id),
+                )
+        except Exception:
             logger.exception("run %s: memory persist failed", record.run_id)
 
 

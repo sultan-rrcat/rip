@@ -27,7 +27,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable, TypedDict
+from collections.abc import Callable
+from typing import TypedDict
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver

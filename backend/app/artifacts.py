@@ -119,21 +119,21 @@ def _collect_from_data(
         ext = "png" if "png" in mime else ("svg" if "svg" in mime else "bin")
         try:
             add("image", mime, f"{step_id}.{ext}", base64.b64decode(image_b64))
-        except Exception:
+        except ValueError:
             logger.warning("artifact image_b64 undecodable run=%s step=%s", run_id, step_id)
 
     docx_b64 = data.get("docx_b64")
     if isinstance(docx_b64, str) and docx_b64:
         try:
             add("document", MIME_DOCX, f"{step_id}.docx", base64.b64decode(docx_b64))
-        except Exception:
+        except ValueError:
             logger.warning("artifact docx_b64 undecodable run=%s step=%s", run_id, step_id)
 
     pdf_b64 = data.get("pdf_b64")
     if isinstance(pdf_b64, str) and pdf_b64:
         try:
             add("document", MIME_PDF, f"{step_id}.pdf", base64.b64decode(pdf_b64))
-        except Exception:
+        except ValueError:
             logger.warning("artifact pdf_b64 undecodable run=%s step=%s", run_id, step_id)
 
     markdown = data.get("markdown")

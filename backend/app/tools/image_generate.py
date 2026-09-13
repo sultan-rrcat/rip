@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from typing import ClassVar
 
 from app.providers.base import ModelProvider
 from app.tools.base import Tool, ToolRequest, ToolResponse
@@ -32,12 +33,12 @@ class ImageGenerateTool(Tool):
         "Generate one image from a text prompt using the bound provider's "
         "image model; returns base64 PNG bytes with its mime type."
     )
-    input_schema = {
+    input_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {"message": {"type": "string"}},
         "required": ["message"],
     }
-    output_schema = {
+    output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "mime": {"type": "string"},

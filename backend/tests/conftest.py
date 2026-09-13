@@ -30,8 +30,8 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from app.core.config import Settings, settings  # noqa: E402
-from app.core.db import pg_connection  # noqa: E402
+from app.core.config import Settings, settings
+from app.core.db import pg_connection
 
 
 def _apply_schema():
@@ -39,9 +39,8 @@ def _apply_schema():
     schema_path = os.path.join(BACKEND_DIR, "schema.sql")
     with open(schema_path, "r", encoding="utf-8") as f:
         schema_sql = f.read()
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(schema_sql)
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(schema_sql)
 
 
 @pytest.fixture(scope="session")
@@ -67,7 +66,7 @@ def client():
         if torch.cuda.is_available():
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - teardown probes must never fail the suite
         pass
 
 
@@ -89,14 +88,14 @@ def llm_available() -> bool:
     """Probe the real Ollama endpoint; prompt tests skip when it is down."""
     try:
         base_url = Settings().ollama_base_url.rstrip("/")
-    except Exception:
+    except Exception:  # noqa: BLE001 - any settings failure means "down"
         return False
     if not base_url:
         return False
     try:
         response = httpx.get(f"{base_url}/api/tags", timeout=10, trust_env=False)
         return response.status_code < 500
-    except Exception:
+    except Exception:  # noqa: BLE001 - any probe failure means "down"
         return False
 
 

@@ -113,18 +113,17 @@ def _row_to_event(row: dict) -> RunEvent:
 
 def create_run(notebook_id: str) -> Run:
     """Insert a `pending` run for a notebook; fail-honest on FK violation."""
-    with pg_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
+    with pg_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
                 INSERT INTO runs (notebook_id)
                 VALUES (%s)
                 RETURNING id, notebook_id, status, goal, plan, result,
                           created_at, updated_at
                 """,
-                (str(notebook_id),),
-            )
-            row = cur.fetchone()
+            (str(notebook_id),),
+        )
+        row = cur.fetchone()
     run = _row_to_run(row)
     logger.info("run created id=%s notebook=%s", run.id, run.notebook_id)
     return run
@@ -132,33 +131,31 @@ def create_run(notebook_id: str) -> Run:
 
 def get_run(run_id: str) -> Run | None:
     """Fetch one run; None when unknown (fail-soft for GET/detail paths)."""
-    with pg_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
+    with pg_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
                 SELECT id, notebook_id, status, goal, plan, result,
                        created_at, updated_at
                 FROM runs WHERE id = %s
                 """,
-                (str(run_id),),
-            )
-            row = cur.fetchone()
+            (str(run_id),),
+        )
+        row = cur.fetchone()
     return _row_to_run(row) if row else None
 
 
 def list_runs(notebook_id: str) -> list[Run]:
     """All runs of a notebook, oldest first."""
-    with pg_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
+    with pg_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
                 SELECT id, notebook_id, status, goal, plan, result,
                        created_at, updated_at
                 FROM runs WHERE notebook_id = %s ORDER BY created_at, id
                 """,
-                (str(notebook_id),),
-            )
-            rows = cur.fetchall()
+            (str(notebook_id),),
+        )
+        rows = cur.fetchall()
     return [_row_to_run(r) for r in rows]
 
 
@@ -190,18 +187,17 @@ def update_run(
         assignments.append("result = %s")
         values.append(Json(result))
     values.append(str(run_id))
-    with pg_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                f"""
+    with pg_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            f"""
                 UPDATE runs SET {', '.join(assignments)}
                 WHERE id = %s
                 RETURNING id, notebook_id, status, goal, plan, result,
                           created_at, updated_at
                 """,
-                values,
-            )
-            row = cur.fetchone()
+            values,
+        )
+        row = cur.fetchone()
     if row is None:
         raise KeyError(f"Unknown run: {run_id}")
     return _row_to_run(row)
@@ -214,17 +210,16 @@ def cancel_run(run_id: str) -> bool:
     already terminal (completed/failed/cancelled) or unknown — a late cancel
     must never overwrite a final state.
     """
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 UPDATE runs
                 SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s AND status IN ('pending', 'running')
                 """,
-                (str(run_id),),
-            )
-            cancelled = cur.rowcount > 0
+            (str(run_id),),
+        )
+        cancelled = cur.rowcount > 0
     if cancelled:
         logger.info("run cancelled id=%s", run_id)
     return cancelled
@@ -241,38 +236,36 @@ def append_event(
     """
     if event_type == _LIVE_ONLY:
         return None
-    with pg_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id FROM runs WHERE id = %s FOR UPDATE", (str(run_id),))
-            if cur.fetchone() is None:
-                raise KeyError(f"Unknown run: {run_id}")
-            cur.execute(
-                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq "
-                "FROM run_events WHERE run_id = %s",
-                (str(run_id),),
-            )
-            seq = cur.fetchone()["next_seq"]
-            cur.execute(
-                """
+    with pg_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT id FROM runs WHERE id = %s FOR UPDATE", (str(run_id),))
+        if cur.fetchone() is None:
+            raise KeyError(f"Unknown run: {run_id}")
+        cur.execute(
+            "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq "
+            "FROM run_events WHERE run_id = %s",
+            (str(run_id),),
+        )
+        seq = cur.fetchone()["next_seq"]
+        cur.execute(
+            """
                 INSERT INTO run_events (run_id, seq, event_type, payload)
                 VALUES (%s, %s, %s, %s)
                 RETURNING id, run_id, seq, event_type, payload, created_at
                 """,
-                (str(run_id), seq, event_type, Json(payload or {})),
-            )
-            return _row_to_event(cur.fetchone())
+            (str(run_id), seq, event_type, Json(payload or {})),
+        )
+        return _row_to_event(cur.fetchone())
 
 
 def list_events(run_id: str) -> list[RunEvent]:
     """Replay a run's persisted events in seq order (structural only)."""
-    with pg_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
+    with pg_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
                 SELECT id, run_id, seq, event_type, payload, created_at
                 FROM run_events WHERE run_id = %s ORDER BY seq
                 """,
-                (str(run_id),),
-            )
-            rows = cur.fetchall()
+            (str(run_id),),
+        )
+        rows = cur.fetchall()
     return [_row_to_event(r) for r in rows]
