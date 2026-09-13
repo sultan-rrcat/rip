@@ -78,7 +78,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
   - Test: `pytest backend/tests/test_orchestration.py -q`
   - Done: Planner → Engine → Aggregator passes on a `rag.query` plan with `notebook_id` injected
 
-- [ ] **3.3 Runs store (Postgres)**
+- [x] **3.3 Runs store (Postgres)** (2026-09-13: wrote `app/store/runs.py` on pg_connection — Run/RunEvent CRUD, delta skipped gap-free (Q35), seq monotonic under row lock, conditional cancel_run; `test_runs_store.py` 15 passed live on compose postgres; found Windows `localhost`→21s/connect trap, use 127.0.0.1 — see SESSION_LOG)
   - Files: WRITE `rip/backend/app/store/runs.py` (Postgres CRUD using `core.db.pg_connection` and `schema.sql` `runs` + `run_events` tables; DO NOT copy Athena's SQLite store)
   - Edits: Run + RunEvent CRUD; `append_event` skips `delta` type (Q35); monotonic seq
   - Test: `pytest backend/tests/test_runs_store.py -q` — create run, append events, replay by `seq` (no deltas stored)

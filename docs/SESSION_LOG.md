@@ -269,4 +269,17 @@
 - **Verification:** `pytest tests/test_orchestration.py --noconftest` → **29 passed**; full suite (orchestration+tools+providers) → **66 passed**. Forbidden grep: no approvals/PluginHealth/manual_span/correlation_context/gemini_model/reflection in code. `ruff --select E,F`: only E501s (Athena-verbatim lines; 2 new engine lines + 2 test lines fixed, new files otherwise clean).
 - **Status:** Completed.
 - **Commits (multi-stage, AGENT.md §4b):** refactor (orchestration) → test (test_orchestration.py) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 3.3 - runs store (Postgres CRUD, Q35 replay)
+- **Task:** IMPLEMENTATION_PLAN Phase 3.3 — WRITE `app/store/runs.py` on `core.db.pg_connection` (runs + run_events; NOT Athena's SQLite); Run + RunEvent CRUD; `append_event` skips `delta` (Q35); monotonic seq; `pytest backend/tests/test_runs_store.py -q`.
+- **Actions Taken:**
+  - New `app/store/__init__.py` + `app/store/runs.py`: `Run`/`RunEvent` models; `create_run` (pending, FK-honest), `get_run` (None when unknown), `list_runs`, `update_run` (status allowlist, KeyError when unknown), `cancel_run` (conditional pending/running→cancelled; False on terminal/unknown — late cancel never overwrites final state), `append_event` (Q35: `delta` returns None without touching the DB and consumes no seq; parent row locked `FOR UPDATE` → gap-free monotonic seq), `list_events` (seq-ordered replay).
+  - New `backend/tests/test_runs_store.py` (15 tests, live Postgres, skips when unreachable): full CRUD, FK/status/KeyError paths, append+replay order + payload fidelity, delta-skip gap-free proof, cross-connection durability, cancel semantics, per-notebook isolation. Fixture notebooks CASCADE-cleaned.
+  - AGENT.md §6: added Windows `localhost` trap (below).
+- **Verification:** `pytest tests/test_runs_store.py --noconftest` → **15 passed in 1.86s** (DB_HOST=127.0.0.1, DB_PORT=5433); `ruff --select E,F` clean; DB left empty (0 runs/notebooks) after suite + manual residue cleanup.
+- **Environment trap found (Windows):** `psycopg2.connect(host='localhost')` costs ~21s PER connection (IPv6 blackhole before IPv4 fallback); `app/store` opens one connection per call, so the first suite run took 84s for a single test and the full run exceeded a 300s timeout with zero output. `host='127.0.0.1'` connects in 0.1s. Rule: host-side runs/tests use `DB_HOST=127.0.0.1` + `DB_PORT=5433` (compose `HOST_PG_PORT`); in-compose backend keeps `DB_HOST=postgres:5432` (unaffected). One stale `store-test` row from the killed run was deleted manually (CASCADE verified).
+- **Status:** Completed.
+- **Commits (multi-stage, AGENT.md §4b):** refactor (store) → test (test_runs_store.py) → docs (this file + checkbox + AGENT trap).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
