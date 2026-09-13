@@ -88,6 +88,27 @@ def _make_plan_node(planner: Planner, validator: PlanValidator) -> Callable:
             validator.validate(plan)
         except (ValueError, PlanValidationError) as e:
             return {"plan": None, "plan_error": str(e)}
+        # The worker persists + streams this as the SSE `plan` event. Emitted
+        # here (plan-time, before any step runs) so live subscribers and the
+        # persisted replay both see run_started -> plan -> step_* in order.
+        # Additive and None-safe: callers without on_event see no change.
+        on_event = _configurable(config).get(_ON_EVENT)
+        if callable(on_event):
+            on_event(
+                {
+                    "type": "plan",
+                    "plan_id": plan.plan_id,
+                    "goal": plan.goal,
+                    "steps": [
+                        {
+                            "step_id": s.step_id,
+                            "executor": s.executor_id,
+                            "depends_on": list(s.depends_on),
+                        }
+                        for s in plan.steps
+                    ],
+                }
+            )
         return {"plan": plan, "plan_error": None}
 
     return plan_node
