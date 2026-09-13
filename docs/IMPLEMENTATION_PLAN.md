@@ -154,7 +154,7 @@ Phase 5 exit: full UI chat works: Gallery → Workspace → send → plan + answ
   5. Refresh mid-run → reconnect `/events` → structural replay (no delta flood), no duplicate assistant message
   6. `POST /v1/runs/{id}/cancel` → `cancelled`, worker stops before next step
 
-- [ ] **6.3 Frontend checks**
+- [x] **6.3 Frontend checks** (2026-09-13: `npm run lint` exit 0 — only pre-existing Card/LeftSidebar warnings; `npm run build` exit 0, dist built, chunk-size advisory only; no zustand/react-query — see SESSION_LOG)
   - Test: `npm run lint` + `npm run build` in `frontend/`
   - Done: both pass, no `zustand` / `@tanstack/react-query` added
 

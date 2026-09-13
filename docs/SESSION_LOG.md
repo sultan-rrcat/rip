@@ -410,3 +410,11 @@
 - **Blocked (substitute model, NOT merge code):** minicpm5-2b systematically emits invalid plans (nested tool_id in input, truncated step_ids, empty steps; 4/4 attempts) → validator rejects → no plan/steps/sources/summary chain possible. Tried PLAN_SCHEMA enum hints — no effect, reverted. `generate_structured` was never proven on minicpm5 (2.1 proved generate+stream only). Full success chain needs qwen2.5:14b (locked default, 9GB pull).
 - **Status:** Partial — all 6.2 mechanics proven except the planner-dependent success chain. Smoke script kept at temp (`smoke62.py`) for re-run under qwen.
 - **Commits:** fix (main.py dotenv order) → docs (this file + 6.2 partial note).
+
+---
+
+## [2026-09-13] - PHASE 6.3 - frontend lint + build
+- **Task:** IMPLEMENTATION_PLAN Phase 6.3 — `npm run lint` + `npm run build` in `frontend/`; both pass, no zustand/react-query.
+- **Verification:** `npm run lint` exit 0 (only pre-existing `set-state-in-effect` warnings in Card.tsx/LeftSidebar.tsx — untouched legacy files); `npm run build` (`tsc -b && vite build`) exit 0, `dist/index.html` emitted (only the standard >500kB chunk-size advisory from MUI); package.json has no `zustand` / `@tanstack/react-query`.
+- **Status:** Completed (verification only — no code changes).
+- **Commits:** docs (this file + checkbox).
