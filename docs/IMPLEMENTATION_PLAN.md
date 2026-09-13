@@ -142,7 +142,7 @@ Phase 5 exit: full UI chat works: Gallery → Workspace → send → plan + answ
 
 ## Phase 6 — Integration + hardening
 
-- [ ] **6.1 Backend suite**
+- [x] **6.1 Backend suite** (2026-09-13: `PYTHONPATH=backend pytest backend/tests/` **104 passed** (test_app.py ignored — torch rot); `ruff check .` 131→45, zero in any merge-authored file — see SESSION_LOG)
   - Test: `pytest` (from `rip/`) + `ruff check .`
   - Done: green; only known noise is torch/CUDA teardown dump after pass (exit 0, not a failure)
 

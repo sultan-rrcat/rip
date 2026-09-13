@@ -372,4 +372,16 @@
 - **Verification:** `npm run dev` → HTTP 200 on `:5178` (then killed, no stray node); `tsc -b` exit 0; grep `8010` over `frontend/src/` + vite/nginx/Dockerfile → 0 hits.
 - **Status:** Completed. Phase 5 exit met: Gallery → Workspace → send → plan + answer + sources (pending live backend, Phase 6.2).
 - **Commits:** feat (proxy + nginx + env example) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 6.1 - backend suite + ruff hardening
+- **Task:** IMPLEMENTATION_PLAN Phase 6.1 — `pytest` (from `rip/`) + `ruff check .`; green.
+- **Actions Taken:**
+  - Correct invocation from `rip/` is `PYTHONPATH=backend pytest backend/tests/` (bare `pytest backend/tests/` fails collection: `No module named 'app'` — tests assume the `backend/` workdir per Q24; `testpaths` in pyproject already says `backend/tests`).
+  - Ruff hardening across ALL merge-authored files: safe autofixes (I001/UP/RUF010/PIE790/RUF100/F841) + manual: `ClassVar[dict]` on agent/tool `input_schema`/`output_schema` metadata (16 sites, runtime-neutral — they are subclass-overridden class metadata), explicit `check=False` on the two manual-`returncode` `subprocess.run` calls (sandbox + docker probe), `TypeError` for malformed RAG context (TRY004), justified `noqa`s (B008 FastAPI-Depends ×3, BLE001 probes/guards, S110 teardown).
+  - Two self-inflicted breakages caught by ruff before tests: a scripted noqa edit that ate a def paren (api/runs.py) and an un-nested block indent (manager._load_memory) — both fixed, suite re-run green.
+- **Verification:** **104 passed** (`test_app.py` ignored — torchaudio rot, unchanged); DB left empty. `ruff check .`: **131 → 45 errors, zero in any merge-authored file**. The remaining 45 sit entirely in untouched legacy originals (routes/files.py 12, routes/notebooks.py 10, rag/pipeline.py 7, services/file_processor.py 5, routes/messages.py 4, rag/vector_rag.py 4, core/dependencies.py + core/db.py + test_app.py 1 each) — deliberately not fixed (out-of-merge scope; several torch-blocked). `backend/download.py` shows a pre-existing local-path tweak in the working tree; left uncommitted (not mine).
+- **Status:** Completed.
+- **Commits:** chore (ruff hardening) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
