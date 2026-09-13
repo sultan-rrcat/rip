@@ -124,7 +124,7 @@ Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api
   - Test: `npm run lint` in `frontend/`
   - Done: no lint errors
 
-- [ ] **5.3 `hooks/notebooks/useMessages.ts` + UI components**
+- [x] **5.3 `hooks/notebooks/useMessages.ts` + UI components** (2026-09-13: run lifecycle in hook — user persist → createRun → EventSource → single assistant persist on run_completed; plan `<details>`, delta/summary tokens, sources, artifact links, cancel→Stop button; refresh resume via localStorage + seq dedupe + exactly-once persist guard; deleted `services/llm.ts`; tsc + lint clean — see SESSION_LOG)
   - Files: EDIT `frontend/src/hooks/notebooks/useMessages.ts`, `frontend/src/components/notebook/ChatArea.tsx` (and/or `Footer.tsx`); DELETE `services/llm.ts` import
   - Edits: run lifecycle; handle `sources` event (Q32); `delta` live only; on reconnect apply persisted events (Q35 — no delta replay); `artifacts` download links (Q34); cancel button; single `createMessageAPI(assistant, text, sources)` on `run_completed`
   - Test: manual chat — send message, see plan collapse, tokens stream, sources appear, cancel works

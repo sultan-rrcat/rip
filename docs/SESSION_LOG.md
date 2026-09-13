@@ -344,4 +344,19 @@
 - **Verification:** `npm run lint` exit 0 (only pre-existing warnings in Card.tsx/LeftSidebar.tsx, none in runs.ts); `tsc -b` exit 0.
 - **Status:** Completed.
 - **Commits:** feat (services/runs.ts) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 5.3 - useMessages run lifecycle + UI (plan/sources/artifacts/cancel)
+- **Task:** IMPLEMENTATION_PLAN Phase 5.3 — EDIT `useMessages.ts`, `ChatArea.tsx` (and/or `Footer.tsx`); DELETE `services/llm.ts` import; run lifecycle, `sources` (Q32), live-only `delta`, replay without delta flood (Q35), artifact links (Q34), cancel button, single assistant persist on `run_completed`.
+- **Actions Taken:**
+  - `useMessages.ts` rewritten: `createMessageAPI(user)` → `createRun()` → `subscribeToRunEvents` → per-event reducer with `String(seq)` dedupe (covers fractional live delta seqs); `summary` overwrites token text (authoritative — resume without deltas still renders); `sources` accumulate live; `run_completed` → single `createMessageAPI(assistant, text, sources)`; `error` normalizes backend `{message}` vs spec `{error}`; `cancelled` leaves partial text unpersisted (Q22). `isRunning` + `handleCancelRun` exposed.
+  - Refresh resume (Q35): active runId in `localStorage` per notebook; mount re-subscribes → persisted structural replay rebuilds plan/text/sources/artifacts; `rip:persistedRun` marker gives exactly-once assistant persist (replayed terminal of a saved run removes the placeholder instead of duplicating). Cleanup resets run refs (StrictMode-safe remount).
+  - `types/runs.ts`: additive `RunView{runId, messageId, goal, plan, sources, artifacts, running}` (locked union untouched).
+  - `ChatArea.tsx`: `activeRun` prop; in-flight bubble renders plan as `<details>` collapsible + artifact download links; finished messages unchanged.
+  - `Footer.tsx`: running → red Stop button (`onCancel`), else Send; `Notebook.tsx` wired (`isRunning`, `onCancel`, `activeRun`).
+  - Deleted `frontend/src/services/llm.ts` (sole importer was useMessages) — completes the 4.3 frontend deferral: `services/llm` grep → 0 hits.
+- **Verification:** `tsc -b` exit 0; `npm run lint` exit 0 (only pre-existing Card/LeftSidebar warnings); manual chat test pending (needs backend + Ollama + 5.4 proxy — Phase 6.2).
+- **Status:** Completed.
+- **Commits:** feat (hook + UI + llm.ts removal) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
