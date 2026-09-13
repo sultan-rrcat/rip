@@ -282,4 +282,21 @@
 - **Environment trap found (Windows):** `psycopg2.connect(host='localhost')` costs ~21s PER connection (IPv6 blackhole before IPv4 fallback); `app/store` opens one connection per call, so the first suite run took 84s for a single test and the full run exceeded a 300s timeout with zero output. `host='127.0.0.1'` connects in 0.1s. Rule: host-side runs/tests use `DB_HOST=127.0.0.1` + `DB_PORT=5433` (compose `HOST_PG_PORT`); in-compose backend keeps `DB_HOST=postgres:5432` (unaffected). One stale `store-test` row from the killed run was deleted manually (CASCADE verified).
 - **Status:** Completed.
 - **Commits (multi-stage, AGENT.md §4b):** refactor (store) → test (test_runs_store.py) → docs (this file + checkbox + AGENT trap).
+
+---
+
+## [2026-09-13] - PHASE 4.1 - runs API + Q31 worker + artifacts + admin/health
+- **Task:** IMPLEMENTATION_PLAN Phase 4.1 — COPY bff/envelope.py + api/health.py; REWRITE artifacts.py (Q34) + runs/manager.py (Q31); WRITE api/deps.py + api/runs.py + api/admin.py (Q37); test `POST /v1/runs → 202`.
+- **Actions Taken:**
+  - `app/bff/envelope.py` (COPY adapted: dropped `approval_required`, added `sources`; delta allowed fractional live seqs) + `app/api/health.py` (COPY, stdlib logging).
+  - `app/artifacts.py` (REWRITE Q34): shape-keyed collection (svg/image/docx/pdf/md/rows) → files at `{upload_dir}/{notebook_id}/artifacts/{run_id}/{step_id}/{filename}` + per-run `index.json`; SSE gets `{artifact_id, kind, filename, url}` links only; `resolve_artifact()` confines download to the run dir (no traversal).
+  - `app/runs/manager.py` (REWRITE Q31): always orchestrate; never writes `messages`; memory load/persist via `build_memory_context` (fold failure degrades to bare context); per-rag.step `sources` via `extract_sources()` (Q32); Q35 delta live-only with fractional `N.K` seqs (persisted log gap-free); terminal order row→event→close; conditional cancel; replay reads Postgres (restart-safe); MAX_RUNS=500 eviction.
+  - `app/api/runs.py`: Q1 verbatim (`202 {run_id}` bare, 404 unknown notebook, 422 empty) + detail/SSE-replay/cancel/artifact-download; full `/v1/` paths inline (RIP convention).
+  - `app/api/deps.py` (WRITE, no PluginManager): `configure()/reset()` + lazy getters; lifespan installs the rag-bound stack in 4.2.
+  - `app/api/admin.py` (Q37 stub): `GET /v1/admin/health` only — static agents/tools/model, degraded-never-500.
+  - Engine additive `plan` event at plan-time (run_started→plan→steps order live AND replayed); 3.2 suite still 29 green (subset assertions).
+- **Verification:** `test_runs_api.py` **17 passed** live (real Postgres + routes, fake orchestrator/provider): 202 bare shape, full replay chain with zero deltas, Q32 deduped sources, artifact download bytes, 12-turn fold → `conversation_summary` + count=2, zero `messages` writes, cancel→cancelled (late cancel keeps completed), crash→failed+error, live fractional delta seqs, admin ok. Full suite **98 passed** (providers 12 + tools 25 + orchestration 29 + store 15 + api 17; `test_app.py` ignored — torch rot). Ruff E/F clean except inherited-style E501s. DB left empty.
+- **Test-setup fix:** routes read `settings.upload_dir` live, so tests patch it to tmp_path (mirrors production where worker + routes share the root).
+- **Status:** Completed.
+- **Commits (multi-stage, AGENT.md §4b):** refactor (api/runs/bff/artifacts + engine plan event) → test (test_runs_api.py) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.

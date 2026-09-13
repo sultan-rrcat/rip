@@ -88,7 +88,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
 
 ## Phase 4 — API + main + cleanup
 
-- [ ] **4.1 Runs + admin + health API + artifacts + worker**
+- [x] **4.1 Runs + admin + health API + artifacts + worker** (2026-09-13: COPY bff/envelope.py (minus approval gate, plus sources) + api/health.py; REWRITE artifacts.py Q34 file-based + runs/manager.py Q31 worker; WRITE api/deps.py (no PluginManager) + api/runs.py (202/404/422, SSE replay, cancel, artifact download) + api/admin.py Q37 stub; engine additive plan event (3.2 tests still 29 green); `test_runs_api.py` 17 passed live; full suite 98 green; ruff E/F only E501s — see SESSION_LOG)
   - Files: COPY `bff/envelope.py` → `app/bff/`; REWRITE `artifacts.py` (Q34 file-based under `{upload_dir}/{notebook_id}/artifacts/`); WRITE `api/deps.py` (Ollama + registries + orchestrator, no PluginManager); COPY/adapt `api/runs.py`; **REWRITE `runs/manager.py` (Q31 worker contract)**; stub `api/admin.py` (Q37: `GET /v1/admin/health` only); COPY `api/health.py`
   - Edits: `CreateRunRequest{notebook_id, message}` → `202 {run_id}` bare; SSE replays persisted events only (Q35); emit `sources` on `rag.query` (Q32); artifacts as download URLs (Q34); worker loads/persists `conversation_summary`; never writes `messages`
   - Test: `curl -X POST localhost:8000/v1/runs -H "Content-Type: application/json" -d '{"notebook_id":"<uuid>","message":"hello"}'` → `202`
