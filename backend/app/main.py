@@ -89,8 +89,8 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(notebooks.router)
 app.include_router(files.router)
 app.include_router(messages.router)
-# NOTE (Phase 4.2): llm.router stays excluded — app/services/llm.py +
-# rewritter.py deleted per Q33; app/routes/llm.py orphaned pending 4.3.
+# NOTE (Phase 4.3): app/routes/llm.py deleted — the old prompt endpoints are
+# gone with no shim. Replacement: POST /v1/runs + GET /v1/runs/{id}/events.
 
 # Run lifecycle + admin stub (/v1/*, bare JSON — no envelope).
 app.include_router(runs.router)

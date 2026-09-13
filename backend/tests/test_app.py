@@ -12,7 +12,7 @@ test works inside an isolated notebook that is deleted afterwards.
 import os
 
 from app.main import app
-from conftest import needs_llm, wait_for_file_status
+from conftest import wait_for_file_status
 
 from app.core.config import settings
 from fastapi.testclient import TestClient
@@ -173,25 +173,3 @@ class TestRetrieval:
         context = app.state.rag.retrieve_context(test_notebook, "hello world")
         assert context["query"] == "hello world"
         assert context["results"] == []
-
-
-class TestPrompt:
-    @needs_llm
-    def test_prompt_non_stream(self, client, test_notebook):
-        response = client.post(
-            "/api/prompt",
-            json={"prompt": "Reply with the word: ok", "notebook_id": test_notebook},
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert body["chatbot_response"]
-        assert "sources" in body
-
-    @needs_llm
-    def test_prompt_stream(self, client, test_notebook):
-        response = client.post(
-            "/api/prompt/stream",
-            json={"prompt": "Reply with the word: ok", "notebook_id": test_notebook},
-        )
-        assert response.status_code == 200
-        assert "data: [DONE]" in response.text
