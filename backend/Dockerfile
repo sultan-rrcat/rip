@@ -13,7 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml Readme.md ./
+COPY pyproject.toml README.md ./
 COPY backend ./backend
 # RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install .

@@ -20,6 +20,9 @@ dependencies = [
     "docling>=2.81.0",
     "sentence-transformers>=5.2.3",
     "langchain-opendataloader-pdf>=2.0.0",  # pipeline.py PDF→markdown loader
+    "langchain-text-splitters>=1.1.2",  # pipeline.py MarkdownHeaderTextSplitter
+    "langchain-community>=0.4.2",  # pipeline.py HuggingFaceEmbeddings
+    "langchain-core>=1.5.5",  # orchestration graph + documents
     # Orchestration (from Athena requirements.txt)
     "langgraph>=1.1.6",
     "langfuse>=4.14.5",  # optional at runtime (langfuse_enabled=false = no-op), required for import
