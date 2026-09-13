@@ -331,22 +331,63 @@ class OllamaProvider(ModelProvider):
     def generate_structured(
         self, model, messages, schema, *, temperature: float = 0.0
     ) -> dict[str, Any]:
-        # OpenAI-canonical nested form ONLY: a degraded/bare schema risks
-        # generic-JSON mode. Ollama's compat layer maps this onto the native
-        # `format` param.
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {"name": "rip", "strict": True, "schema": schema},
+        # Native /api/chat with the RAW schema as `format` — NOT the /v1
+        # OpenAI wrapper. The compat layer's response_format mapping proved
+        # lossy on minicpm5-2b (malformed plans: stray step_ids, empty inputs),
+        # while native format went 4/4 VALID on the real planner prompt
+        # (2026-09-13 probes). think=False explicit: this tag rejects
+        # think:true ("does not support thinking").
+        payload: dict[str, Any] = {
+            "model": self._resolve_model(model),
+            "messages": messages,
+            "stream": False,
+            "format": schema,
+            "options": {
+                "temperature": temperature,
+                "num_predict": settings.default_max_tokens,
+            },
+            "think": False,
         }
-        data = self._chat(
-            model,
-            messages,
-            temperature=temperature,
-            max_tokens=settings.default_max_tokens,
-            response_format=response_format,
-        )
-        self._record_usage(data)
-        content = self._content(data)
+        try:
+            response = self._client.post("/api/chat", json=payload)
+        except httpx.RequestError as e:
+            logger.error("Ollama request failed: %s", e)
+            raise RuntimeError(f"Ollama connection failure: {e}") from e
+        if response.status_code != 200:
+            logger.error(
+                "Ollama non-200 status=%s body=%s",
+                response.status_code,
+                response.text,
+            )
+            raise RuntimeError(
+                f"Ollama error [status {response.status_code}]: {response.text}"
+            )
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Malformed Ollama response (not JSON): {e}") from e
+        # Native usage counters differ from the OpenAI shape: map honestly,
+        # never fabricate.
+        prompt_count = data.get("prompt_eval_count")
+        eval_count = data.get("eval_count")
+        if prompt_count is not None or eval_count is not None:
+            prompt_count = prompt_count or 0
+            eval_count = eval_count or 0
+            self._last_usage = {
+                "input": prompt_count,
+                "output": eval_count,
+                "total": prompt_count + eval_count,
+            }
+        else:
+            self._last_usage = None
+        try:
+            content = data["message"]["content"].strip()
+        except (KeyError, AttributeError, TypeError) as e:
+            logger.error("malformed Ollama response: %s", e)
+            raise RuntimeError(
+                f"Malformed response structure from Ollama: {e}"
+            ) from e
+        content = strip_think(content)
         try:
             return json.loads(content)
         except (json.JSONDecodeError, TypeError) as e:

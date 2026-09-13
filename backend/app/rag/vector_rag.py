@@ -112,7 +112,10 @@ class VectorRAG(RagPipeline):
                 scores = self.reranker_model.predict(pairs)
 
                 for i, score in enumerate(scores):
-                    rerank_subset[i]["rerank_score"] = score
+                    # Cast to plain float: numpy scalars break LangGraph's
+                    # msgpack checkpoint serde (StepResult) + SSE json.dumps
+                    # + Postgres Json() downstream (2026-09-13 live crash).
+                    rerank_subset[i]["rerank_score"] = float(score)
 
                 # Sort by rerank score
                 rerank_subset.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)

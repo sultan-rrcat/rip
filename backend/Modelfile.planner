@@ -1,0 +1,4 @@
+FROM openbmb/minicpm5-2b:latest
+PARAMETER num_ctx 32768
+PARAMETER temperature 0.9
+PARAMETER top_p 0.95
