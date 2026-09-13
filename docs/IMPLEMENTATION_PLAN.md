@@ -146,7 +146,7 @@ Phase 5 exit: full UI chat works: Gallery → Workspace → send → plan + answ
   - Test: `pytest` (from `rip/`) + `ruff check .`
   - Done: green; only known noise is torch/CUDA teardown dump after pass (exit 0, not a failure)
 
-- [ ] **6.2 Smoke test (must pass before merge done)**
+- [ ] **6.2 Smoke test (must pass before merge done)** (2026-09-13 PARTIAL live: notebook→upload→ready→202→SSE→cancel→replay all proven against minicpm5; full success chain blocked — substitute model cannot emit valid plans, NOT merge code; two boot bugs fixed along the way — see SESSION_LOG)
   1. Create notebook → upload PDF → poll `GET /api/notebooks/{id}/files` until `ready`
   2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`
   3. `GET /v1/runs/{id}/events` streams `run_started → plan → step_started → delta* (live) → step_completed → sources? → summary → artifacts? → run_completed`
