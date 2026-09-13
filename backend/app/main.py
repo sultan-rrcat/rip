@@ -18,11 +18,14 @@ from fastapi.middleware.cors import CORSMiddleware
 # server starts from rip/ or rip/backend/.
 load_dotenv(find_dotenv(usecwd=True))
 
-from app.api import admin, deps, health, runs
-from app.core.logging import setup_logging
-from app.routes import files, messages, notebooks
+from app.api import admin, deps, health, runs  # noqa: E402
+from app.core.logging import setup_logging  # noqa: E402
+from app.observability.langfuse import flush as langfuse_flush  # noqa: E402
+from app.observability.langfuse import init_langfuse  # noqa: E402
+from app.routes import files, messages, notebooks  # noqa: E402
 
 logger = setup_logging()
+init_langfuse()
 
 
 @asynccontextmanager
@@ -50,10 +53,11 @@ async def lifespan(app: FastAPI):
         from app.orchestration.planner import Planner
         from app.orchestration.validator import PlanValidator
         from app.providers.ollama import OllamaProvider
+        from app.providers.tracing import wrap_provider
         from app.runs.manager import RunManager
         from app.tools.registry import get_default_tool_registry
 
-        provider = OllamaProvider()
+        provider = wrap_provider(OllamaProvider())
         agent_registry = get_default_agent_registry(provider)
         tool_registry = get_default_tool_registry(
             rag=app.state.rag, provider=provider
@@ -84,6 +88,7 @@ async def lifespan(app: FastAPI):
     yield  # transferring control back to fastapi
 
     logger.info("Shutting down and clearing models...")
+    langfuse_flush()
     app.state.rag = None
     deps.reset()
 

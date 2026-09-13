@@ -21,6 +21,7 @@ from app.orchestration.planner import Planner
 from app.orchestration.validator import PlanValidator
 from app.providers.base import ModelProvider
 from app.providers.ollama import OllamaProvider
+from app.providers.tracing import wrap_provider
 from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 logger = logging.getLogger("api.deps")
@@ -61,10 +62,13 @@ def reset() -> None:
 
 
 def get_model_provider() -> ModelProvider:
-    """The active Ollama provider (fail-honest at build when Ollama is down)."""
+    """The active Ollama provider (fail-honest at build when Ollama is down).
+
+    Tracing-wrapped when langfuse_enabled (no-op wrapper otherwise).
+    """
     global _provider
     if _provider is None:
-        _provider = OllamaProvider()
+        _provider = wrap_provider(OllamaProvider())
         logger.info("model provider built lazily")
     return _provider
 

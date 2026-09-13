@@ -36,6 +36,14 @@ from psycopg2.extras import RealDictCursor
 from app.artifacts import collect_artifacts
 from app.bff.envelope import EventType
 from app.core.db import pg_connection
+from app.observability.langfuse import (
+    flush as langfuse_flush,
+)
+from app.observability.langfuse import (
+    manual_span,
+    request_attributes,
+    truncate,
+)
 from app.orchestration.memory import build_memory_context
 from app.orchestration.orchestrator import OrchestrationError
 from app.services.chat import extract_sources
@@ -242,6 +250,12 @@ class RunManager:
         self._publish(record, type, data)
 
     def _worker(self, record: RunRecord) -> None:
+        # One Langfuse trace per run (Athena pattern: one trace per
+        # request). session_id = notebook (one notebook = one conversation),
+        # so a notebook's traces group into one Langfuse session. Opened
+        # HERE in the worker thread: the plan graph copies this thread's
+        # contextvars per node, so engine/step/generation spans auto-parent.
+        # All no-ops when tracing is disabled.
         try:
             self._publish(
                 record,
@@ -249,6 +263,27 @@ class RunManager:
                 {"run_id": record.run_id, "notebook_id": record.notebook_id,
                  "message": record.message},
             )
+            with request_attributes(
+                session_id=record.notebook_id,
+                user_id="local",
+                metadata={"route": "runs", "run_id": record.run_id},
+                tags=["feature:runs"],
+                trace_name="run",
+            ):
+                with manual_span(
+                    "run", as_type="span", input=truncate(record.message, 2000)
+                ) as run_obs:
+                    self._run_traced(record, run_obs)
+        except Exception as e:
+            logger.exception("run %s crashed", record.run_id)
+            self._finish_failed(record, str(e))
+        finally:
+            langfuse_flush()
+            record._close()
+
+    def _run_traced(self, record: RunRecord, run_obs) -> None:
+        """Worker body inside the trace root (split for readability)."""
+        try:
             context, summary_update = self._load_memory(record)
             try:
                 result = self._orchestrator.run(
@@ -263,6 +298,7 @@ class RunManager:
                     self._finish_cancelled(record, str(e))
                 else:
                     self._finish_failed(record, str(e))
+                run_obs.update(output={"status": "failed", "error": str(e)[:500]})
                 return
 
             # Q32: one `sources` event per completed rag.query step, in plan
@@ -319,11 +355,14 @@ class RunManager:
             self._persist_memory(record, summary_update)
             self._publish(record, "run_completed",
                            {"status": result.status, "run_id": record.run_id})
+            run_obs.update(output={
+                "status": result.status,
+                "summary": truncate(result.summary, 2000),
+            })
         except Exception as e:
             logger.exception("run %s crashed", record.run_id)
+            run_obs.update(output={"status": "failed", "error": str(e)[:500]})
             self._finish_failed(record, str(e))
-        finally:
-            record._close()
 
     def _finish_failed(self, record: RunRecord, message: str) -> None:
         try:

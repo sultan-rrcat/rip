@@ -48,6 +48,7 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agents.base import DelegationRequest, StepStatus
 from app.agents.registry import AgentRegistry
 from app.core.config import settings
+from app.observability.langfuse import manual_span, truncate
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.results import ExecutionResult, StepResult
 from app.tools.registry import ToolRegistry
@@ -362,10 +363,20 @@ def _make_step_node(
             if step.tool_id and notebook_id is not None:
                 # Run-scoped truth wins over anything the planner emitted.
                 resolved_input["notebook_id"] = notebook_id
-            result = _run_step_body(
-                step, trace_id, resolved_input, registry, max_retries, timeout_ms,
-                cancel_event, delta_sink, tool_registry,
-            )
+            with manual_span(
+                f"step:{step.step_id}", as_type="span",
+                input=truncate(resolved_input, 2000),
+                metadata={"executor": step.executor_id},
+            ) as step_obs:
+                result = _run_step_body(
+                    step, trace_id, resolved_input, registry, max_retries, timeout_ms,
+                    cancel_event, delta_sink, tool_registry,
+                )
+                step_obs.update(output={
+                    "status": result.status.value,
+                    "output": truncate(result.output, 2000),
+                    "error": truncate(result.error, 500),
+                })
             if on_event is not None:
                 on_event(
                     {

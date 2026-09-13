@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     langfuse_host: str = "http://localhost:3002"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
+    # Request-scoped trace attributes (see observability/langfuse.py).
+    langfuse_environment: str = "development"
+    langfuse_release: str = "dev"
 
     # Auth (optional)
     api_keys_json: dict = {}

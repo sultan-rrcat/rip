@@ -36,6 +36,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.registry import AgentRegistry
+from app.observability.langfuse import manual_span, truncate
 from app.orchestration.aggregator import AggregationResult, Aggregator
 from app.orchestration.plan import Plan
 from app.orchestration.plan_graph import run_plan_graph
@@ -84,11 +85,21 @@ def _make_plan_node(planner: Planner, validator: PlanValidator) -> Callable:
         # on planning; the error terminal unwinds the graph.
         if _cancelled(config):
             return {"plan": None, "plan_error": "run cancelled"}
-        try:
-            plan = planner.plan(state["request_text"], context=state["context"])
-            validator.validate(plan)
-        except (ValueError, PlanValidationError) as e:
-            return {"plan": None, "plan_error": str(e)}
+        with manual_span(
+            "plan", as_type="span",
+            input=truncate(state["request_text"], 2000),
+        ) as plan_obs:
+            try:
+                plan = planner.plan(state["request_text"], context=state["context"])
+                validator.validate(plan)
+            except (ValueError, PlanValidationError) as e:
+                plan_obs.update(output={"error": str(e)[:500]})
+                return {"plan": None, "plan_error": str(e)}
+            plan_obs.update(output={
+                "goal": truncate(plan.goal, 500),
+                "steps": len(plan.steps),
+                "executors": [s.executor_id for s in plan.steps],
+            })
         # The worker persists + streams this as the SSE `plan` event. Emitted
         # here (plan-time, before any step runs) so live subscribers and the
         # persisted replay both see run_started -> plan -> step_* in order.
@@ -154,7 +165,14 @@ def _make_aggregate_node(aggregator: Aggregator) -> Callable:
             trace_id=state["trace_id"],
             step_results=[state["step_results"][s.step_id] for s in plan.steps],
         )
-        agg = aggregator.aggregate(plan, exec_result)
+        with manual_span(
+            "aggregate", as_type="span", input={"goal": truncate(plan.goal, 500)}
+        ) as agg_obs:
+            agg = aggregator.aggregate(plan, exec_result)
+            agg_obs.update(output={
+                "status": agg.status,
+                "summary": truncate(agg.summary, 2000),
+            })
         return {"aggregation": agg}
 
     return aggregate_node
