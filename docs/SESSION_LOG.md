@@ -299,4 +299,16 @@
 - **Test-setup fix:** routes read `settings.upload_dir` live, so tests patch it to tmp_path (mirrors production where worker + routes share the root).
 - **Status:** Completed.
 - **Commits (multi-stage, AGENT.md §4b):** refactor (api/runs/bff/artifacts + engine plan event) → test (test_runs_api.py) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 4.2 - main rewrite (lifespan + /api + /v1 mounts)
+- **Task:** IMPLEMENTATION_PLAN Phase 4.2 — REPLACE `app/main.py`: RIP lifespan (VectorRAG once) + Athena `/v1` mounts, no plugin loader; `GET /api/health` and `GET /health` both ok.
+- **Actions Taken:**
+  - New `app/main.py`: lifespan loads `VectorRAG()` once → `app.state.rag` → `bind_rag_singleton()` → composes provider + agent registry + rag-bound tool registry + orchestrator + `RunManager` into `deps.configure()`; Ollama-down is a degraded boot (warning, `/api/*` serves, `/v1/*` fails honest) not a crash; teardown clears models + `deps.reset()`. Mounts notebooks/files/messages + runs + admin + health; keeps `/api/health` alias + CORS `*`; llm.router still excluded (4.3).
+  - Singleton unification: `runs/manager.get_run_manager()` now delegates to `app.api.deps` (single source of truth; routes' `dependency_overrides` and the module helper can never diverge); `set_run_manager(None)` raises (teardown path is `deps.reset()`).
+  - New `backend/tests/test_main.py` (6 tests): torch chain (`vector_rag`, `pipeline`) stubbed in `sys.modules` — the ONLY host-blocked imports (`routes.files` pulls them via `core/dependencies`); real TestClient lifespan asserts both health probes, all `/v1` + `/api` routes mounted, no plugin machinery, rag singleton bound, tool registry rag-bound, admin lists reasoning/coding/vision + tools, and `deps.reset()` on shutdown (fresh manager instance after exit).
+- **Verification:** `test_main.py` **6 passed**; full suite **104 passed** (`test_app.py` ignored — torch rot); ruff E/F only E501s; DB left empty. `uvicorn` boot itself remains host-blocked by the torch rot (Phase 6); Docker image unaffected.
+- **Status:** Completed.
+- **Commits (multi-stage, AGENT.md §4b):** refactor (main + manager singleton) → test (test_main.py) → docs (this file + checkbox + OLLAMA_BASE_URL trap).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.

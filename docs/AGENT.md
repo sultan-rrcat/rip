@@ -86,6 +86,7 @@ Rules: inspect `git status` + `git diff --stat` before each stage; stage only in
 - **Config aliases.** Support `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR`; `cors_origins: str`.
 - **Test path.** `backend/tests/` (not `backend/app/tests/`). Conftest migrates in Phase 1.1.
 - **DB host from Windows host-side.** `localhost` costs ~21s per `pg_connection` (IPv6 blackhole); use `DB_HOST=127.0.0.1 DB_PORT=5433` for local runs/tests. In-compose backend keeps `DB_HOST=postgres:5432`.
+- **Ollama from Windows host-side.** Default `OLLAMA_BASE_URL` is the in-compose `host.docker.internal` name (unresolvable from the host); export `OLLAMA_BASE_URL=http://localhost:11434` for local runs/tests or provider tests self-skip as "Ollama down".
 - **Test teardown dump** (torch/CUDA access-violation after pass, exit 0) is not a failure.
 
 ## 7. Missing best-practices checklist (vibe-tool must not skip)

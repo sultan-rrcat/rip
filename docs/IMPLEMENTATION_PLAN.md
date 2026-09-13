@@ -94,7 +94,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
   - Test: `curl -X POST localhost:8000/v1/runs -H "Content-Type: application/json" -d '{"notebook_id":"<uuid>","message":"hello"}'` → `202`
   - Done: runs lifecycle + structural SSE replay + sources + cancel work
 
-- [ ] **4.2 Rewrite `app/main.py`**
+- [x] **4.2 Rewrite `app/main.py`** (2026-09-13: lifespan loads VectorRAG once + binds singleton + composes rag-bound /v1 runtime into deps (degraded boot when Ollama down); mounts /api/* + /v1/* + /health; no plugin loader; `test_main.py` 6 passed via stubbed torch chain under TestClient lifespan; full suite 104 green — see SESSION_LOG)**
   - Files: REPLACE `rip/backend/app/main.py`
   - Edits: merge RIP lifespan (load VectorRAG once) + Athena `/v1` mounts; no plugin loader
   - Test: `uvicorn app.main:app --port 8000` + `GET /api/health` and `GET /health` both `ok`
