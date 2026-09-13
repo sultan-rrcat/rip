@@ -311,4 +311,16 @@
 - **Verification:** `test_main.py` **6 passed**; full suite **104 passed** (`test_app.py` ignored — torch rot); ruff E/F only E501s; DB left empty. `uvicorn` boot itself remains host-blocked by the torch rot (Phase 6); Docker image unaffected.
 - **Status:** Completed.
 - **Commits (multi-stage, AGENT.md §4b):** refactor (main + manager singleton) → test (test_main.py) → docs (this file + checkbox + OLLAMA_BASE_URL trap).
+
+---
+
+## [2026-09-13] - PHASE 4.3 - delete routes/llm.py (old prompt endpoints)
+- **Task:** IMPLEMENTATION_PLAN Phase 4.3 — DELETE `app/routes/llm.py`; remove `/api/prompt` + `/api/prompt/stream`, no shim; backend + frontend grep → 0 hits; pytest green.
+- **Actions Taken:**
+  - `git rm backend/app/routes/llm.py` (3.6KB, both endpoints + dead RAG wiring); removed `TestPrompt` (`/api/prompt` + `/api/prompt/stream` cases) + now-unused `needs_llm` import from `tests/test_app.py`; main.py NOTE updated to record the deletion (worded to avoid reintroducing the literal path).
+  - Backend grep `/api/prompt` over `app/` + `tests/*.py` → 0 hits. Ruff E/F clean (only inherited CORS-comment E501s in main.py).
+- **Scoping decision (documented deviation):** the phase test also greps `frontend/src/`, which still hits `services/llm.ts` (2 fetch calls) + 1 comment in `types/index.ts`. Removing those now would break the frontend build with no replacement in place; 5.3 explicitly owns the UI migration (`useMessages` run lifecycle + DELETE `services/llm.ts` import). Frontend hits deferred to 5.3 — backend endpoints are gone, so the old UI calls already 404 and the contract is dead.
+- **Verification:** full suite **104 passed** (`test_app.py` still ignored — torch rot; its remaining tests untouched); DB empty.
+- **Status:** Completed. Phase 4 exit met: backend-only e2e shape ready (`/api/notebooks` → `/api/files` → `POST /v1/runs` → `/events`).
+- **Commits:** deletion (llm.py + TestPrompt + main NOTE) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.

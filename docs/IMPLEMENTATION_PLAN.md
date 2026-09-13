@@ -100,7 +100,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
   - Test: `uvicorn app.main:app --port 8000` + `GET /api/health` and `GET /health` both `ok`
   - Done: both `/api/*` and `/v1/*` serve
 
-- [ ] **4.3 Delete `routes/llm.py`**
+- [x] **4.3 Delete `routes/llm.py`** (2026-09-13: `git rm` llm.py + removed `TestPrompt` from test_app.py; backend grep `/api/prompt` → 0 hits; full suite 104 green; frontend `services/llm.ts` hits deferred to 5.3 which owns the UI migration — see SESSION_LOG)**
   - Files: DELETE `rip/backend/app/routes/llm.py`
   - Edits: remove `/api/prompt` + `/api/prompt/stream`, no shim
   - Test: search `"/api/prompt"` in `backend/` + `frontend/src/` → 0 hits; `pytest -q` still green
