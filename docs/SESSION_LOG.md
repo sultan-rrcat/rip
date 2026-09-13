@@ -210,3 +210,22 @@
   - Minicpm5 quirk found (model, not provider): ≤32-token budget can end inside `<think>` → honest empty string after strip; 256 budget returns clean text.
 - **Status:** Completed with noted deviation (qwen live proof deferred).
 - **Commits (multi-stage, AGENT.md §4b):** feat (providers) → test (test_providers.py) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 2.2 - agents (reasoning + coding + vision, Ollama, no plugins)
+- **Task:** IMPLEMENTATION_PLAN Phase 2.2 — COPY Athena `agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `rip/backend/app/agents/`; drop plugin system (Agent direct); gemini_model_* → ollama_default_model; export `get_default_agent_registry(provider)` factory.
+- **Actions Taken:**
+  - `base.py`: verbatim copy (no plugin imports; `app.core.classutils` path already valid in RIP).
+  - `registry.py`: kept `AgentRegistry` verbatim; added `get_default_agent_registry(provider)` factory (local imports to keep module light; registers reasoning + coding + vision sharing `provider`).
+  - `reasoning.py` / `coding.py` / `vision.py`: dropped `from app.plugins.api import AgentPlugin` (+ `plugin_id`/`version`); `XAgent(Agent)`; all `settings.gemini_model_*` → `settings.ollama_default_model`; `get_logger` → stdlib `logging.getLogger` (RIP logging.py has only setup_logging — same as Phase 2.1 providers); system prompts + execute flow otherwise verbatim.
+  - New `backend/app/agents/__init__.py` (empty, per Phase 1.1 package convention).
+- **Verification:**
+  - Plan test: `from app.agents.registry import get_default_agent_registry` imports ok (ml_env, workdir `backend/`).
+  - Registry with mock provider: `manifest()` → `['coding', 'reasoning', 'vision']`, `len == 3`, `isinstance(get('reasoning'), Agent)`.
+  - Mock execute: reasoning `message='hi'` → `SUCCESS / 'hello'`; coding missing `message` → `FAILURE / "'message' is required"`; provider called with `model='qwen2.5:14b'` (= `ollama_default_model`).
+  - Forbidden grep over `app/agents/`: no `AgentPlugin`/`ProviderPlugin`/`plugins.api` imports, no `gemini_model_`, no `get_logger` (one hit is a verbatim comment in base.py explaining `is_abstract`, not code).
+  - `ruff check app/agents --select E,F`: only E501s on Athena-verbatim long lines; full `ruff check app/agents` adds only inherited RUF012/PIE790/RUF010 style (same precedent as 1.1/1.3/2.1 — no F821, no new logic issues).
+  - Ollama live check: `localhost:11434/api/tags` refused in-session → no live agent→Ollama round-trip (mock allowed per box when Ollama down, same rule as 2.1); live proof defers to Phase 6 smoke.
+- **Status:** Completed with noted deviation (live Ollama round-trip deferred; mock execution proven).
+- **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.

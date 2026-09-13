@@ -56,7 +56,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
   - Test: `pytest backend/tests/test_providers.py -q` (create if missing: Ollama chat round-trip, mock allowed only if Ollama down)
   - Done: Ollama `qwen2.5:14b` chat call succeeds, ThinkFilter incrementally strips `<think>` tags
 
-- [ ] **2.2 Agents (reasoning + coding + vision)**
+- [x] **2.2 Agents (reasoning + coding + vision)** (2026-09-13: copied base verbatim + registry with get_default_agent_registry factory; reasoning/coding/vision de-pluginned → Agent direct, gemini_model_* → ollama_default_model, get_logger → stdlib; mock-provider execute ok — reasoning success + missing-message failure, model kw qwen2.5:14b; ruff E/F only inherited E501s, full-check only Athena-inherited RUF/PIE style — see SESSION_LOG)
   - Files: COPY `athena/backend/app/agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` → `rip/backend/app/agents/`
   - Edits: point models to `ollama_default_model`; drop `from app.plugins.api import AgentPlugin` (inherit directly from `Agent` in `base.py`); export `get_default_agent_registry(provider)` factory in `registry.py`
   - Test: `python -c "from app.agents.registry import get_default_agent_registry; print(get_default_agent_registry)"`
