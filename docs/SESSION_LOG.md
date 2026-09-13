@@ -384,4 +384,13 @@
 - **Verification:** **104 passed** (`test_app.py` ignored — torchaudio rot, unchanged); DB left empty. `ruff check .`: **131 → 45 errors, zero in any merge-authored file**. The remaining 45 sit entirely in untouched legacy originals (routes/files.py 12, routes/notebooks.py 10, rag/pipeline.py 7, services/file_processor.py 5, routes/messages.py 4, rag/vector_rag.py 4, core/dependencies.py + core/db.py + test_app.py 1 each) — deliberately not fixed (out-of-merge scope; several torch-blocked). `backend/download.py` shows a pre-existing local-path tweak in the working tree; left uncommitted (not mine).
 - **Status:** Completed.
 - **Commits:** chore (ruff hardening) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - ENV REPAIR - torch env fixed (torchaudio orphan + missing dep)
+- **Root causes (diagnosed, not guessed):** (1) `torchaudio 2.5.1+cu121` installed against `torch 2.14.0+cpu` — major-version + CUDA/CPU mismatch, so its `.pyd` failed `load_library`; `pip show` proved it an orphan (`Required-by:` empty). transformers' `audio_utils` guards on PRESENCE (`is_torchaudio_available()`), so present-but-broken crashed while absent is cleanly skipped. (2) `langchain_opendataloader_pdf` imported by `rag/pipeline.py:6` but absent from venv AND pyproject — `import app.main` could never succeed without it.
+- **Fix:** `pip uninstall torchaudio -y` + `pip install langchain-opendataloader-pdf==2.0.0` + pinned `"langchain-opendataloader-pdf>=2.0.0"` in pyproject (RAG section).
+- **Verification:** `import sentence_transformers`, `import app.main`, `import app.routes.files` all ok; full collection WITH the real conftest: 116 tests (incl. previously uncollectable `test_app.py` 12); `test_runs_store.py` 15 passed post-repair.
+- **Still blocked (model weights, not env):** `backend/models/` holds 16MB of tokenizers only — no bge-m3/reranker weights; `.env` points at absent `D:/models`. Real `VectorRAG()` boot (test_app.py, 6.2 smoke, `uvicorn`) needs ~3.5GB of weights via `snapshot_download`. Decision pending: download or defer.
+- **Commits:** fix (pyproject pin) → docs (this file + AGENT trap).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
