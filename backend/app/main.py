@@ -7,15 +7,21 @@
 
 from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Load FIRST, before any app.* import: the settings singleton is built at
+# first config import, so a late load_dotenv() silently leaves defaults in
+# force (found live 6.2: BGE paths fell back to relative defaults and boot
+# crashed). find_dotenv searches CWD upward, so rip/.env loads whether the
+# server starts from rip/ or rip/backend/.
+load_dotenv(find_dotenv(usecwd=True))
 
 from app.api import admin, deps, health, runs
 from app.core.logging import setup_logging
 from app.routes import files, messages, notebooks
 
-load_dotenv()
 logger = setup_logging()
 
 
