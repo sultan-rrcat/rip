@@ -441,3 +441,20 @@
 - **Known warts (not blocking):** planner ~75% on RAG questions (invalid 2-step/0-step plans surface as fail-honest `failed`, never crash); trivial prompts ("hii") → 0-step → `failed`; in-container PDF ingestion needs JRE in `backend/Dockerfile` (live `apt` failed — no DNS to deb.debian.org from container); container currently runs `docker cp`-patched code — **recreate/rebuild wipes it, rebuild image to bake fixes.**
 - **Status:** Completed. Phase 6.2 Done met on substitute model (qwen live proof still deferred, recorded).
 - **Commits (multi-stage, AGENT.md §4b):** fix (provider + vector_rag + Modelfile) → chore (pyproject multipart) → test (providers green) → docs (this file + 6.2 checkbox).
+
+---
+
+## [2026-09-13] - Langfuse tracing port (Athena pattern, opt-in)
+- **Task:** Wire Langfuse observability taking inspiration from Athena (`observability/langfuse.py`, `providers/tracing.py`, endpoint trace roots, separate compose stack on :3002).
+- **Actions Taken (Athena → RIP adaptations):**
+  - New `app/observability/` (`__init__` + `langfuse.py`): init/observe/manual_span/manual_generation/request_attributes/truncate/flush; plain-str keys (RIP Settings has no SecretStr); no tenant/auth (session=notebook_id, user=`local`).
+  - New `app/providers/tracing.py`: `TracingProvider` (generate/stream/structured as generations with usage) + `wrap_provider()` (idempotent, wraps only when enabled; test doubles via `deps.configure()` never wrapped).
+  - `api/deps.py` lazy + `main.py` lifespan wrap; `init_langfuse()` at startup, `flush()` on teardown.
+  - `runs/manager._worker`: one trace per run (`request_attributes` session=notebook + `manual_span("run")` root, status/summary updates, crash updates, `flush()` in finally). Plan-graph node contexts are copied in the worker thread, so engine/step/generation spans auto-parent — same mechanism as Athena's `copy_context`.
+  - `orchestration/engine.py`: `plan` + `aggregate` spans (goal/steps/summary I/O). `orchestration/plan_graph.py`: `step:{id}` spans (executor metadata, truncated I/O).
+  - Config: `langfuse_environment`/`langfuse_release` added; `.env.example` documents stack + keys; `docker-compose.yml` backend override `LANGFUSE_HOST=http://host.docker.internal:3002` (host runs keep `localhost:3002`).
+  - New `backend/tests/test_observability.py` (14 tests, disabled-mode no-ops + delegation, no server needed).
+- **Verification:** `test_observability.py` 14 passed; full merge suite (excl. `test_app.py`) 118 passed, zero regressions; ruff E/F clean on all new lines (remaining hits pre-existing). Langfuse stack restarted from Athena's compose file (volumes intact, UI 200 on :3002).
+- **Handover (needs operator):** sign in at `http://localhost:3002` (old account/data may persist via volumes) → project API keys → set `LANGFUSE_ENABLED=true` + keys in `rip/.env` → recreate backend (new code must reach container: `docker cp` or image rebuild) → one `/v1/runs` → trace appears under session=notebook_id.
+- **Status:** Code complete + infra up; live-trace verification pending keys.
+- **Commits (multi-stage, AGENT.md §4b):** feat (observability + tracing + spans + config) → test (test_observability.py) → docs (ADR-025 + this file).

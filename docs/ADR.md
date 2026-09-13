@@ -156,3 +156,10 @@ Each entry records a decision with status, context, the decision, and consequenc
 - **Context:** Athena admin endpoints depended on PluginManager for `/plugins` and `/reload`. Plugin system is removed.
 - **Decision:** Keep `GET /v1/admin/health` only — returns static registry health from factory-built registries. Drop `/plugins` and `/reload` from v1.
 - **Consequences:** No runtime plugin reload. Simpler admin surface.
+
+## ADR-025: Optional Langfuse tracing (Athena port)
+
+- **Status:** Accepted
+- **Context:** The merge removed Athena's tracing wrapper (`providers/tracing.py`) and all observability spans. The `langfuse` dependency was kept for import only, and the config keys did nothing. Operators need per-run visibility (planner output, step I/O, LLM generations, token usage) without changing run behavior.
+- **Decision:** Port Athena's observability layer adapted to RIP: `app/observability/langfuse.py` (init/observe/manual_span/manual_generation/request_attributes/truncate/flush, all no-ops when disabled), `app/providers/tracing.py` with `wrap_provider()` applied at composition time (never to test doubles), one trace per run worker (`session_id=notebook_id`, mirroring Athena's session=conversation), plan/aggregate spans in the engine, per-step spans in the plan graph. Deployment reuses Athena's separate compose stack (`external/docker-compose.langfuse.yml`, UI on host :3002); in-compose backend reaches it via `host.docker.internal:3002`.
+- **Consequences:** Tracing is strictly opt-in (`LANGFUSE_ENABLED=true` + keys, backend restart); disabled path is byte-identical behavior, proven by the no-op test suite. Trace data leaves the box only when the operator enables it (offline-first default preserved).
