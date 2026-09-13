@@ -112,7 +112,7 @@ Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api
 
 ## Phase 5 — Frontend (runs only)
 
-- [ ] **5.1 `types/runs.ts`**
+- [x] **5.1 `types/runs.ts`** (2026-09-13: verbatim Q7 union + PlanStep per backend plan payload; `npx tsc -b` clean; `npm install` to repair partial node_modules — see SESSION_LOG)**
   - Files: CREATE `frontend/src/types/runs.ts`
   - Edits: discriminated union `RunEvent` with `seq: number` on every variant (see `MERGE_PLAN.md §Frontend`); include `sources` + `cancelled`; `Artifact{artifact_id, kind, filename, url}` (Q34)
   - Test: `npx tsc -b` in `frontend/`

@@ -323,4 +323,15 @@
 - **Verification:** full suite **104 passed** (`test_app.py` still ignored — torch rot; its remaining tests untouched); DB empty.
 - **Status:** Completed. Phase 4 exit met: backend-only e2e shape ready (`/api/notebooks` → `/api/files` → `POST /v1/runs` → `/events`).
 - **Commits:** deletion (llm.py + TestPrompt + main NOTE) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 5.1 - types/runs.ts (Q7 verbatim union)
+- **Task:** IMPLEMENTATION_PLAN Phase 5.1 — CREATE `frontend/src/types/runs.ts` (discriminated union, `seq` on every variant, sources + cancelled, Q34 Artifact); `npx tsc -b` clean.
+- **Actions Taken:**
+  - New `frontend/src/types/runs.ts`: verbatim Q7 `Source`/`Artifact`/`RunEvent` plus `PlanStep{step_id, executor, depends_on}` shaped per the backend `plan` event payload (the spec references it without defining it — required for typecheck). One additive comment block flagging two 5.3 parse realities kept out of the locked shape: live `delta` seqs arrive as fractional strings (`"3.1"`, dedupe via `String(seq)`), and `step_started`/`error` carry `executor_id`/`message` (not `agent_id`/`error`).
+  - Env repair: `npx tsc` resolved to the wrong `tsc@2.0.4` package — local `typescript` was missing (partial node_modules: vite present, typescript/oxlint absent). Ran `npm install --no-audit --no-fund` (1m; pruned 112 extraneous packages) → `tsc -b` exit 0.
+- **Verification:** `.\node_modules\.bin\tsc -b` exit 0, no errors.
+- **Status:** Completed.
+- **Commits:** feat (types/runs.ts) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
