@@ -229,4 +229,26 @@
   - Ollama live check: `localhost:11434/api/tags` refused in-session → no live agent→Ollama round-trip (mock allowed per box when Ollama down, same rule as 2.1); live proof defers to Phase 6 smoke.
 - **Status:** Completed with noted deviation (live Ollama round-trip deferred; mock execution proven).
 - **Follow-up [2026-09-13] — live verification (user started Docker Desktop + Ollama):** Ollama up with `openbmb/minicpm5-2b:latest` only (`qwen2.5:14b` still not pulled — 9GB pull stays deferred to Phase 6 per 2.1 decision); `rip-postgres-1` healthy on host 5433. Reasoning agent via real `OllamaProvider` (in-process `ollama_default_model` → minicpm5 substitution) → `SUCCESS / 'hello rip'`, usage recorded. `pytest tests/test_providers.py -q --noconftest` with `OLLAMA_BASE_URL=http://localhost:11434` → **12 passed**. Agent→Ollama code path now proven live; only the default-model weight (qwen) remains unproven.
+
+---
+
+## [2026-09-13] - PHASE 3.1 - tools (all 5, rag.query rewrite, sandbox -i fix)
+- **Task:** IMPLEMENTATION_PLAN Phase 3.1 — COPY `base.py`, `registry.py`, `executor.py` → `app/tools/`; REWRITE `rag_query.py`; COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py`; drop ToolPlugin; delete approval gate; `pytest backend/tests/test_tools.py -q`.
+- **Actions Taken:**
+  - `base.py`: verbatim copy (no plugin deps; docstring approval paragraph rewritten — no gate in RIP).
+  - `registry.py`: kept `ToolRegistry` verbatim; added `get_default_tool_registry(rag, provider)` factory (registers all 5; binds rag → rag.query, provider → image.generate).
+  - `executor.py`: approval gate DELETED (`approved` param removed, `SideEffectBlockedError` removed); `get_logger` → stdlib; fail-honest boundary + identity check kept.
+  - `rag_query.py`: FULL REWRITE per Q6/Q30 — module fn `rag_query(notebook_id, query, top_k=8, *, rag)` + `RagQueryTool`; singleton via `bind_rag_singleton()` (lifespan binds in Phase 4.2) with `app.state.rag` lazy fallback; no top-level `vector_rag` import (module stays torch-free); response `data={results, sources (extract_sources, Q32), query, notebook_id}`, output = `format_context_for_llm`; `notebook_id` required (orchestrator-injected), `query` with `message` alias accepted.
+  - `plot_chart.py` / `doc_generate.py`: `ToolPlugin` → `Tool`, otherwise verbatim.
+  - `code_sandbox.py`: `ToolPlugin` → `Tool`, plugin init/health removed, `get_logger` → stdlib; **found bug (fixed): Athena's `docker run` lacked `-i`, so the stdin pipe never reached `python -` — every snippet exited 0 with empty output (proven live). Added `-i` with LOAD-BEARING comment.**
+  - `image_generate.py`: `ToolPlugin` → `Tool`, `PluginContext init` → constructor binding (`__init__(provider)` + `bind_provider`), `PluginHealth` removed, `get_logger` → stdlib.
+  - New `backend/tests/test_tools.py` (25 tests): registry/executor incl. no-`approved`-param assertion + fail-honest boundary; rag.query with FakeRAG (chunks, deduped sources, scoping, honest failures, singleton binding); plot/doc live; sandbox live on docker (print→42, exit-code failure); image honest-fail + b64 success via mock.
+  - Prereq done: `docker pull python:3.11-slim` (Status: Downloaded newer image).
+- **Verification:**
+  - `pytest tests/test_tools.py --noconftest` → **25 passed**; with providers suite → **37 passed** (12s + 35s).
+  - Forbidden grep: no ToolPlugin/plugins.api/PluginHealth/approved-param/gemini/rag_base_url in code (only rewrite-note comments).
+  - `ruff --select E,F`: 20x E501 only (inherited Athena-verbatim lines; 2 new test lines fixed, test file now clean).
+  - Live: plot/doc/sandbox proven on docker+libs; rag.query proven via FakeRAG (real VectorRAG e2e blocked by standing torch rot — Phase 6); image honest-fail proven (no provider / no image model).
+- **Status:** Completed with noted caveat (real-VectorRAG rag.query e2e awaits torch repair).
+- **Commits (multi-stage, AGENT.md §4b):** refactor (tools) → test (test_tools.py) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.

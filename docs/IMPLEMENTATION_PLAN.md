@@ -66,7 +66,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
 
 ## Phase 3 — Tools + orchestration + runs store
 
-- [ ] **3.1 Tools (all 5)**
+- [x] **3.1 Tools (all 5)** (2026-09-13: base/registry/executor copied, ToolPlugin dropped, approval gate deleted; rag_query.py full rewrite on lifespan singleton via bind_rag_singleton/app.state.rag, extract_sources shape for Q32; plot/doc/sandbox/image kept with Tool direct; sandbox `-i` fix — Athena cmd dropped stdin; `test_tools.py` 25 passed + providers 12 still green = 37; ruff E/F only E501s — see SESSION_LOG)
   - Files: COPY `base.py`, `registry.py`, `executor.py` → `app/tools/`; REWRITE `rag_query.py`; COPY `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py`
   - Edits: drop `ToolPlugin`; delete approval gate in `executor.py`; `rag_query.py` reuse `VectorRAG` singleton via `get_rag`; return shape feeds `extract_sources()` for Q32; `notebook_id` from Run, never LLM
   - Test: `pytest backend/tests/test_tools.py -q` — `rag.query` returns chunks for a test notebook with files
