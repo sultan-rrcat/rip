@@ -1,3 +1,5 @@
+> **ARCHIVED — frozen 2026-09-13.** The Athena→RIP merge is complete. This file is history only; it is no longer authoritative. Current docs: `../ARCHITECTURE.md`, `../ADR.md`, `../SETUP.md`.
+
 # Merge Plan: Athena → RIP (Research Intelligence Platform)
 
 ## §0 Authority (single point of truth)

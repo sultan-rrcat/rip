@@ -1,3 +1,5 @@
+> **ARCHIVED — frozen 2026-09-13.** Append-only merge history (2026-09-08 → 2026-09-13). New work is recorded in `../CHANGELOG.md`.
+
 # Session Log (`SESSION_LOG.md`)
 
 ## [2026-09-08] - Documentation suite initialization

@@ -1,6 +1,6 @@
-# Setup Guide: RIP Merge
+# Setup Guide: RIP
 
-> Authoritative spec: `docs/MERGE_PLAN.md`. This file is the runnable subset (env, DB, compose, smoke test).
+> Design reference: `docs/ARCHITECTURE.md`. Gotchas: `docs/CAVEATS.md` (read before debugging).
 
 ---
 
@@ -11,7 +11,7 @@
 | Python | 3.11+ (per `pyproject.toml`) |
 | Node.js | 20.19+ or 22.12+ |
 | PostgreSQL | pgvector/pgvector:pg16, extension `vector` enabled |
-| Ollama | Reachable at `OLLAMA_BASE_URL`, model `qwen2.5:14b` pulled |
+| Ollama | Reachable at `OLLAMA_BASE_URL`, planner model pulled (default `qwen2.5:14b`; local override possible, see CAVEATS) |
 | Local weights | BGE-M3 + reranker on disk (paths below) |
 
 Model paths (Pydantic `backend/app/core/config.py`):
@@ -27,13 +27,13 @@ Model paths (Pydantic `backend/app/core/config.py`):
 copy .env.example .env
 ```
 
-Keys (see MERGE_PLAN §Config):
+Keys ( authoritative defaults in `backend/app/core/config.py`):
 
 | Key | Value |
 |---|---|
-| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; local override allowed; ⚠️ breaking rename from `db`/`prototype_rip`/`trainee` — `docker compose down` before migrating |
+| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; **host-local runs use `127.0.0.1` + `HOST_PG_PORT`** (see CAVEATS — bare `localhost` can hang) |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` in compose, `http://localhost:11434` local |
-| `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` |
+| `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` (config default; a local `.env` may override, e.g. a smaller planner model) |
 | `OLLAMA_CONTEXT_WINDOW` | `32768` (budget = `*0.7` ≈ 22900 tokens, `len//4` estimator) |
 | `PORT` | `8000` |
 | `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
@@ -49,11 +49,11 @@ psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schem
 
 Creates `notebooks` (with `conversation_summary` + `summary_message_count`), `files`, `messages`, `embeddings`, `runs`, `run_events`, vector + text-search indexes.
 
-## 4. Run (Required: Postgres + Ollama. Optional: Redis, Langfuse)
+## 4. Run (Required: Postgres + Ollama. Optional: Langfuse)
 
 ```powershell
 docker compose up postgres backend frontend
-# Redis / Langfuse are optional (commented in compose)
+# Langfuse runs as a separate stack (see CAVEATS); backend reaches it via host gateway
 ```
 
 Local alternative:
@@ -66,7 +66,7 @@ npm install; npm run dev
 ```
 
 Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (alias `GET /health`).
-Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see MERGE_PLAN §Frontend); prod `nginx.conf` must proxy both.
+Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see `vite.config.ts`); prod `nginx.conf` must proxy both.
 
 ## 5. Smoke test
 
@@ -86,6 +86,6 @@ Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see MERGE_PLAN §
 ## Troubleshooting
 
 - **DB connect fail** → check `DB_*`, pgvector extension, `schema.sql` applied.
-- **Ollama empty** → `OLLAMA_BASE_URL` reachable, `qwen2.5:14b` pulled.
+- **Ollama empty** → `OLLAMA_BASE_URL` reachable (host-local: `http://localhost:11434`; in-compose: `http://host.docker.internal:11434`), planner model pulled.
 - **Startup crash (models)** → BGE paths wrong; fix env.
 - **Upload stuck `processing`** → background `run_rag_pipeline` has no retry; re-`POST /process`.

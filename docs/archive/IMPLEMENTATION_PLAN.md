@@ -1,3 +1,5 @@
+> **ARCHIVED — frozen 2026-09-13.** All phase boxes were checked. This checklist is history only. Current docs: `../ARCHITECTURE.md`, `../ADR.md`.
+
 # Implementation Plan — Athena → RIP (phased checklist)
 
 > Complete picture lives in `MERGE_PLAN.md` + `CONTEXT.md`. This file is execution only: phases in order, one checkbox per task, test per task.

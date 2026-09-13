@@ -1,165 +1,133 @@
 # Architecture Decision Records (ADR)
 
-> Merge mode: `docs/MERGE_PLAN.md` is authoritative for Athena→RIP work. This file keeps history + merge decisions only.
-
-Each entry records a decision with status, context, the decision, and consequences.
+Active decisions first; superseded merge-era history is collapsed at the bottom. Full merge rationale lives in `archive/MERGE_PLAN.md`.
 
 ---
 
 ## ADR-001: FastAPI + Python backend
+
 - **Status:** Accepted
-- **Context:** A backend that must integrate heavy ML libraries (Docling, sentence-transformers/BGE) and handle long-running streaming responses.
-- **Decision:** Use FastAPI on Python 3.11+, with an async lifespan that loads the ML models once at startup.
-- **Consequences:** Fast async/streaming support (SSE), easy integration with the Python ML ecosystem, auto-generated OpenAPI docs. The lifespan loads models eagerly, so startup fails fast if local weights are unavailable.
-
-## ADR-002: Hybrid vector + graph RAG
-- **Status:** Superseded by ADR-007, archived with merge (see MERGE_PLAN Appendix A)
-- **Context:** Standard vector search is insufficient for the complex, cross-document relationships and precise domain terminology in physics R&D.
-- **Decision:** Combine PostgreSQL + **pgvector** (vector cosine + full-text) with a **Neo4j** knowledge graph (chunk `NEXT`/`MENTIONS` edges and `Entity` nodes). Retrieval is orchestrated by `GraphRAG` (the active path); `VectorRAG` (vector + full-text with Reciprocal Rank Fusion) remains for the legacy non-stream endpoint.
-- **Consequences:** Deeper context across technical documents, but higher operational complexity (two data stores to keep in sync) and a slower, LLM-in-the-loop retrieval path. (Pre-merge note, retained for history.)
-
-## ADR-003: Offline / on-premise model execution over OpenAI-compatible HTTP
-- **Status:** Superseded by merge (see MERGE_PLAN §Design Decisions: Ollama-only, `ollama_default_model=qwen2.5:14b`)
-- **Context:** Internal R&D data must remain confidential and air-gapped.
-- **Decision:** Keep all models local/on-premise. Embeddings and reranking load from local weights (`D:\models\...`, hardcoded in `config.py`); the chat/rewrite/entity LLM is reached over an internal OpenAI-compatible endpoint (`LLM_URL`, model `qwen2.5-coder-14b`).
-- **Consequences:** Zero external cloud dependencies. Trade-offs: model paths are non-portable (Windows-specific), and the exact LLM endpoint is environment-dependent. An earlier plan to use Ollama (`OLLAMA_URL`) is **not** in the live code path.
+- **Context:** The backend must integrate heavy ML libraries (Docling, sentence-transformers/BGE) and serve long-running streaming responses.
+- **Decision:** FastAPI on Python 3.11+, with an async lifespan that loads ML models once at startup.
+- **Consequences:** SSE streaming, Python ML ecosystem access, auto-generated OpenAPI docs. Startup fails fast if local weights are unavailable.
 
 ## ADR-004: Docling → Markdown, header-based chunking
+
 - **Status:** Accepted
-- **Context:** Physics documents (equations, tables, sectioned papers) need parsing that preserves structure and meaningful boundaries.
-- **Decision:** Parse with **Docling** to Markdown, then chunk on Markdown headers (`#/##/###` → H1/H2/H3) via `MarkdownHeaderTextSplitter`. Semantic chunking exists in code but is disabled.
-- **Consequences:** Section-aware metadata on chunks (`source`, H1/H2/H3) that feeds retrieval and source display. Complex equations/tables are only as good as Docling's output; see MERGE_PLAN Appendix A.
+- **Context:** Sectioned documents (papers, reports) need parsing that preserves structure and meaningful boundaries.
+- **Decision:** Parse with Docling to Markdown, then chunk on Markdown headers (`#/##/###` → H1/H2/H3) via `MarkdownHeaderTextSplitter`.
+- **Consequences:** Section-aware chunk metadata (`source`, H1/H2/H3) feeds retrieval and source display. Output quality bounds to Docling's parse.
 
 ## ADR-005: Background-task ingestion pipeline
+
 - **Status:** Accepted
-- **Context:** Document ingestion (parsing, embedding) is slow and must not block the HTTP request.
-- **Decision:** `POST /api/files/{file_id}/process` enqueues `run_rag_pipeline` as a FastAPI `BackgroundTasks` job; the frontend polls file status until `ready`.
-- **Consequences:** Responsive UX, but no progress reporting or retry beyond a final `ready`/`error` status, and no durable job queue — a restart mid-ingestion leaves a file stuck in `processing`.
+- **Context:** Ingestion (parse, embed) is slow and must not block HTTP.
+- **Decision:** `POST /api/files/{file_id}/process` enqueues `run_rag_pipeline` as a FastAPI `BackgroundTasks` job; the frontend polls file status until `ready`/`error`.
+- **Consequences:** Responsive UX, but no progress reporting and no durable queue — a restart mid-ingestion can strand a file in `processing`.
 
-## ADR-006 (Deferred): Agentic RAG
-- **Status:** Superseded by merge — agentic layer returns via Athena orchestration (see MERGE_PLAN)
-- **Context:** An intended next step was an agentic retrieval layer choosing strategies per query.
-- **Decision:** The `AgenticRAG` stub (`retrieve_context` was `pass`) was removed together with the graph RAG stack (see ADR-007). No agentic layer exists.
-- **Consequences:** Do not treat agentic RAG as working pre-merge. The active retrieval is `VectorRAG`; agentic layer returns via merge orchestration.
+## ADR-007: Single vector + full-text retrieval path (no knowledge graph)
 
-## ADR-007: Remove graph RAG; single vector + full-text retrieval path
-- **Status:** Accepted (supersedes ADR-002)
-- **Context:** The Neo4j knowledge graph (LLM entity extraction during ingestion, `store_graph`, hybrid graph traversal in `GraphRAG`) required a second datastore to operate and keep in sync, a mandatory Neo4j service, and a slow LLM-in-the-loop retrieval path. `VectorRAG` (pgvector + full-text with Reciprocal Rank Fusion + BGE reranking) already served the non-stream endpoint and produces the same context shape.
-- **Decision:** Remove the graph RAG stack entirely: `rag/graph_rag.py`, `rag/agentic_rag.py`, `core/prompts.py`, document-type detection, entity extraction, `store_graph`, the Neo4j driver in `core/db.py`, graph cleanup in the delete endpoints, the `neo4j` dependency, and the `NEO4J_*` env vars. `VectorRAG` is the single retrieval path for both prompt endpoints; ingestion is load → chunk → embed → store.
-- **Consequences:** One datastore (PostgreSQL), faster ingestion (no per-chunk LLM extraction), simpler deployment and onboarding. Existing data in the Neo4j database is orphaned and can be dropped. Graph retrieval can be reintroduced later via a new ADR if cross-document traversal becomes a requirement.
-
----
+- **Status:** Accepted
+- **Context:** A Neo4j knowledge graph required a second datastore, per-chunk LLM extraction, and a slow LLM-in-the-loop retrieval path.
+- **Decision:** `VectorRAG` is the single retrieval path: pgvector cosine + full-text rank fusion (RRF) + BGE rerank. No graph store, no `NEO4J_*` config.
+- **Consequences:** One datastore, faster ingestion, simpler deployment. Revisit via new ADR if cross-document traversal becomes a requirement.
 
 ## ADR-014: Postgres-backed runs with SSE replay
 
 - **Status:** Accepted
-- **Context:** Runs must survive page refreshes and notebook switches. Only the stop button can terminate a run. The original design specified in-memory-only runs, but a page refresh kills the SSE connection and the run becomes orphaned.
-- **Decision:** Persist run state and structural SSE events to Postgres (`runs` + `run_events` tables). Per-token `delta` events are live-only and not persisted (Q35). The SSE endpoint replays persisted events on reconnect; frontend deduplicates by `seq`. Redis stays optional for queue/cache.
-- **Consequences:** Runs survive page refreshes. Reconnect replays plan/steps/final text without delta flood. The stop button sends `POST /v1/runs/{id}/cancel` which sets `status=cancelled`; the worker checks this before each step.
+- **Context:** Runs must survive page refresh and notebook switches.
+- **Decision:** Persist run state + structural SSE events (`runs` + `run_events`). `delta` frames are live-only (see ADR-020). The SSE endpoint replays persisted events on reconnect; the frontend dedupes by `seq`. Cancel via `POST /v1/runs/{id}/cancel`.
+- **Consequences:** Refresh-safe runs. Only the stop button terminates a run.
 
-## ADR-015: Remove conversations table
+## ADR-015: One notebook = one conversation (no conversations table)
 
 - **Status:** Accepted
-- **Context:** The original design had a separate `conversations` table with a 1:1 relationship to notebooks. This added unnecessary complexity: a redundant table, a nullable FK on messages, and confusing dual ownership (notebook_id + conversation_id).
-- **Decision:** One notebook = one conversation. Remove the `conversations` table entirely. Internal memory fields (`conversation_summary`, `summary_message_count`) live on the `notebooks` table (Q38). Messages are linked to notebooks via `notebook_id` only; the `conversation_id` column is dropped.
-- **Consequences:** Simpler data model. No join needed to get conversation state — it's on the notebook row. Pre-merge messages with `conversation_id` set are unaffected (column dropped, `notebook_id` still valid).
+- **Context:** A separate `conversations` table duplicated the notebook with a redundant 1:1 join and dual ownership.
+- **Decision:** Messages link by `notebook_id` only. Internal memory fields (`conversation_summary`, `summary_message_count`) live on `notebooks`.
+- **Consequences:** Simpler model; conversation state reads straight off the notebook row.
 
 ## ADR-016: Context-window-based summary
 
 - **Status:** Accepted
-- **Context:** The original design triggered summary after >10 turns. This is a rough heuristic — it doesn't account for varying message lengths or the actual model context window. A 32k-context model might fill up in 5 long turns or 20 short ones.
-- **Decision:** Summary triggered when accumulated message tokens reach ~70% of the model context window. The summary is generated by Ollama and stored in `notebooks.conversation_summary` (internal, not user-visible; distinct from SSE `summary` event = final answer). Recent messages are kept verbatim; old messages are compressed into the summary.
-- **Consequences:** More accurate, model-aware context management. The `summary_threshold_pct` config (default 0.7) controls the trigger. The `memory_window_size` config remains as an advisory cap on verbatim messages, but the real constraint is the token budget.
+- **Context:** Turn-count heuristics ignore message length and model context size.
+- **Decision:** Fold history into `notebooks.conversation_summary` (Ollama-generated, internal, not user-visible) when tokens reach ~70% of the model context window (`summary_threshold_pct`, default 0.7). Distinct from the SSE `summary` event (the final answer).
+- **Consequences:** Model-aware memory. `memory_window_size` remains an advisory cap; the token budget governs.
 
----
-
-## Merge ADRs (details in MERGE_PLAN.md, logged here for status)
-
-- **ADR-008 Ollama-only:** Accepted. No Gemini/llama-server; rewrite 5 coupled files to `ollama_default_model`.
-- **ADR-009 Backend root `backend/app/`:** Accepted. Single `from app.*` root; RIP flat files move under it.
-- **ADR-010 Single messages table:** Superseded by ADR-015. `conversation_id` column dropped; notebook = conversation.
-- **ADR-011 Rolling summary kept:** Superseded by ADR-016. Summary by context window (~70%), not turn count.
-- **ADR-012 Break SSE/REST:** Accepted. Delete `/api/prompt[/stream]`, serve `/v1/runs` + new SSE; keep `/api/health` alias.
-- **ADR-013 Keep LangGraph:** Accepted. `engine.py` + `plan_graph.py` stay; plugins/admin-console/tracing removed.
-- **ADR-014 Postgres-backed runs:** Accepted. Runs persist to Postgres (`runs` + `run_events`); survive page refresh; full SSE replay on reconnect; only stop button terminates.
-- **ADR-015 Remove conversations table:** Accepted. One notebook = one conversation. Internal memory on `notebooks.conversation_summary`. Messages linked by `notebook_id` only.
-- **ADR-016 Context-window-based summary:** Accepted. Summary triggered at ~70% of model context window. Stored in `conversation_summary` (not SSE `summary` event).
-- **ADR-017 Direct capability inheritance & VectorRAG singleton:** Accepted. Providers/agents/tools inherit directly from base classes (dropping plugin scaffolding); `rag.query` reuses application lifespan `VectorRAG` singleton.
-- **ADR-018 Drop query rewrite:** Accepted. Delete `rewritter.py` + legacy `services/llm.py`.
-- **ADR-019 File-based artifacts:** Accepted. Files on disk; SSE download URLs.
-- **ADR-020 Structural SSE persistence:** Accepted. No delta replay from Postgres.
-- **ADR-021 Run worker contract:** Accepted. Memory load/persist; never write messages; always orchestrate.
-- **ADR-022 Sources SSE event:** Accepted. Citations on `rag.query` complete.
-- **ADR-023 Deterministic aggregator:** Accepted. Q36 selection rules; no LLM synthesis.
-- **ADR-024 Admin health stub:** Accepted. Health only; no PluginManager endpoints.
-
----
-
-## ADR-017: Direct capability inheritance and VectorRAG singleton
+## ADR-017: Direct capability inheritance + VectorRAG singleton
 
 - **Status:** Accepted
-- **Context:** Athena's agent, tool, and provider classes inherited from dynamic plugin wrappers (`ProviderPlugin`, `AgentPlugin`, `ToolPlugin` in `app.plugins.api`). With the plugin system removed, dynamic discovery is replaced by static composition. Additionally, re-instantiating `VectorRAG()` on every `rag.query` tool call would repeatedly reload heavy PyTorch model weights (BGE-M3 and reranker).
-- **Decision:**
-  1. Inherit directly from `ModelProvider`, `Agent`, and `Tool` base classes; drop `app.plugins.api` imports and wrappers.
-  2. Provide explicit factory functions (`get_default_agent_registry`, `get_default_tool_registry`) in registries.
-  3. In `rag_query.py`, reuse the existing `VectorRAG` singleton instantiated at application lifespan (`app.state.rag` via `get_rag()`).
-  4. Port core utilities (`classutils.py`, `constants.py`), provider streaming helper (`streaming.py`), and artifact delivery (`artifacts.py`).
-- **Consequences:** Eliminates plugin scaffolding, avoids PyTorch model reloading spikes per query, and ensures all imports resolve cleanly without dynamic discovery.
+- **Context:** Dynamic plugin wrappers add indirection, and re-instantiating `VectorRAG` per query reloads heavy PyTorch weights.
+- **Decision:** Agents/tools/providers inherit directly from base classes with explicit registry factories. `rag.query` reuses the lifespan `VectorRAG` singleton; the orchestrator injects `notebook_id` from the run (never LLM-generated).
+- **Consequences:** No plugin scaffolding, no per-query model reload spikes.
 
----
-
-## ADR-018: Drop query rewrite
+## ADR-018: No query rewrite
 
 - **Status:** Accepted
-- **Context:** Pre-merge RIP used `services/rewritter.py` + legacy `services/llm.py` to rewrite queries before RAG retrieval. Orchestration replaces the direct prompt path; rewrite added LLM cost and depended on forbidden `LLM_URL`.
-- **Decision:** Delete `rewritter.py` and `services/llm.py`. No query rewrite in v1; the Planner + `rag.query` tool handle retrieval intent.
-- **Consequences:** One fewer LLM call per turn. Planner must produce good search queries in plan steps.
+- **Context:** A pre-retrieval rewrite step cost an extra LLM call per turn.
+- **Decision:** No rewrite layer. The Planner produces search intent inside plan steps.
+- **Consequences:** One fewer LLM call per turn; planner prompt quality carries retrieval intent.
 
 ## ADR-019: File-based artifacts
 
 - **Status:** Accepted
-- **Context:** Athena delivered artifacts as inline base64 in sync responses. RIP merge needs durable downloads scoped to notebooks.
-- **Decision:** Write tool outputs to `{upload_dir}/{notebook_id}/artifacts/{artifact_id}/{filename}`. SSE `artifacts` event carries `{artifact_id, kind, filename, url}` download links.
-- **Consequences:** Artifacts survive page refresh. Requires static file serving or download route under `/api/`.
+- **Context:** Tool outputs must survive refresh as downloadable files scoped to notebooks.
+- **Decision:** Write to `{upload_dir}/{notebook_id}/artifacts/{artifact_id}/{filename}`; SSE `artifacts` carries download URLs, never inline base64.
+- **Consequences:** Durable downloads; requires a download route under `/api/`.
 
 ## ADR-020: Structural SSE persistence (no delta replay)
 
 - **Status:** Accepted
-- **Context:** Persisting every token `delta` to Postgres would bloat `run_events` and flood reconnect clients.
-- **Decision:** Persist structural events + final text only. `delta` is live-streamed to connected clients but not written to `run_events`. Reconnect uses `step_completed`/`summary` for text state.
-- **Consequences:** Smaller DB footprint. Frontend must not expect delta replay after refresh.
+- **Context:** Persisting per-token `delta` frames would bloat `run_events` and flood reconnects.
+- **Decision:** Persist structural events + final text only. Reconnect rebuilds text from `step_completed`/`summary`.
+- **Consequences:** Small DB footprint; frontend must never expect delta replay.
 
 ## ADR-021: Run worker contract
 
 - **Status:** Accepted
-- **Context:** Athena's `runs/manager.py` wrote messages, used complexity routing, and mixed in-memory buffers with SQLite. Merge forbids backend message writes and requires notebook-scoped memory.
-- **Decision:** Rewrite `_worker`: always orchestrate; load `conversation_summary` + messages → `build_memory_context()` → pass `context=`; persist updated summary to notebooks; emit `sources` on `rag.query`; never INSERT into `messages`.
-- **Consequences:** Clear ownership boundary (frontend = messages, backend = runs + internal memory).
+- **Context:** Message ownership and memory boundaries need one enforceable contract.
+- **Decision:** The worker always orchestrates; loads memory → passes `context=`; persists updated summary; emits `sources` on `rag.query`; **never writes `messages`** (frontend-owned).
+- **Consequences:** Clear boundary: frontend = chat rows, backend = runs + internal memory.
 
 ## ADR-022: Sources SSE event
 
 - **Status:** Accepted
-- **Context:** Pre-merge RIP sent citations via deprecated `/api/prompt/stream` `{type:"sources"}`. New SSE protocol had no citation path.
-- **Decision:** Emit `{type:"sources", sources:[{source, section}]}` when `rag.query` completes; persist to `run_events`; frontend saves on assistant message.
-- **Consequences:** Source citations preserved in merged UI without a separate RAG pre-call.
+- **Context:** Citations need a first-class path in the runs protocol.
+- **Decision:** Emit `{type:"sources", sources:[{source, section}]}` on `rag.query` completion; persist; frontend stores them on the assistant message.
+- **Consequences:** Grounded citations without a separate pre-call.
 
-## ADR-023: Deterministic aggregator rules
+## ADR-023: Deterministic aggregator (no LLM synthesis)
 
 - **Status:** Accepted
-- **Context:** Athena's aggregator used LLM synthesis for multi-step plans. Merge removes LLM aggregation to cut cost and latency.
-- **Decision:** One successful step → its output. Multiple successes → labeled concatenation. Clarification step → verbatim output. All failed → join error strings. No LLM call.
-- **Consequences:** Predictable, testable aggregation. Less polish on multi-step synthesis.
+- **Context:** LLM synthesis per run costs latency/money and is hard to test.
+- **Decision:** 1 success → verbatim; N successes → labeled concatenation; clarification → verbatim; all-failed → joined errors.
+- **Consequences:** Predictable and testable; less polish on multi-step synthesis.
 
 ## ADR-024: Admin health stub
 
 - **Status:** Accepted
-- **Context:** Athena admin endpoints depended on PluginManager for `/plugins` and `/reload`. Plugin system is removed.
-- **Decision:** Keep `GET /v1/admin/health` only — returns static registry health from factory-built registries. Drop `/plugins` and `/reload` from v1.
-- **Consequences:** No runtime plugin reload. Simpler admin surface.
+- **Context:** No admin console exists; plugin reload endpoints have no backend.
+- **Decision:** `GET /v1/admin/health` only. No `/plugins`, no `/reload`.
+- **Consequences:** Minimal admin surface.
 
-## ADR-025: Optional Langfuse tracing (Athena port)
+## ADR-025: Opt-in Langfuse tracing
 
 - **Status:** Accepted
-- **Context:** The merge removed Athena's tracing wrapper (`providers/tracing.py`) and all observability spans. The `langfuse` dependency was kept for import only, and the config keys did nothing. Operators need per-run visibility (planner output, step I/O, LLM generations, token usage) without changing run behavior.
-- **Decision:** Port Athena's observability layer adapted to RIP: `app/observability/langfuse.py` (init/observe/manual_span/manual_generation/request_attributes/truncate/flush, all no-ops when disabled), `app/providers/tracing.py` with `wrap_provider()` applied at composition time (never to test doubles), one trace per run worker (`session_id=notebook_id`, mirroring Athena's session=conversation), plan/aggregate spans in the engine, per-step spans in the plan graph. Deployment reuses Athena's separate compose stack (`external/docker-compose.langfuse.yml`, UI on host :3002); in-compose backend reaches it via `host.docker.internal:3002`.
-- **Consequences:** Tracing is strictly opt-in (`LANGFUSE_ENABLED=true` + keys, backend restart); disabled path is byte-identical behavior, proven by the no-op test suite. Trace data leaves the box only when the operator enables it (offline-first default preserved).
+- **Context:** Operators need per-run visibility (planner output, step I/O, generations, token usage) without changing run behavior.
+- **Decision:** Ported observability layer (`observability/langfuse.py`, `providers/tracing.py` via `wrap_provider()` at composition time, never on test doubles). One trace per run worker (`session_id = notebook_id`); spans `run/plan/step:{id}/aggregate`. Strictly opt-in (`LANGFUSE_ENABLED=true` + keys + restart); disabled path is behavior-identical.
+- **Consequences:** Tracing data leaves the box only when the operator enables it; offline-first default preserved.
+
+## ADR-026: Trivial-plan fallback (no empty plans)
+
+- **Status:** Accepted (2026-09-13, commit `e58e18b`)
+- **Context:** The planner prompt allowed `steps: []` for trivial/conversational requests. Empty DAGs execute zero steps, and the deterministic aggregator reports `failed: No steps were executed` — so greetings like "Hii there" failed (Langfuse-verified).
+- **Decision:** (1) Planner rule 6 now requires exactly one `agent_id="reasoning"` step carrying the user request verbatim — never an empty array. (2) Defense in depth: the engine repairs any still-trivial plan to a single `reasoning` step (first registered agent if `reasoning` is absent) before execution.
+- **Consequences:** Conversational turns succeed via one reasoning call. The aggregator's empty-is-failed rule is unchanged (still correct for genuinely unexecutable plans).
+
+---
+
+## Historical (superseded, one line each)
+
+- **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.
+- **ADR-003** (on-premise OpenAI-compatible `LLM_URL`): superseded — Ollama-only via `OLLAMA_BASE_URL`.
+- **ADR-006** (deferred Agentic RAG stub): superseded — agentic behavior lives in orchestration.
+- **ADR-008–013** (merge mechanics: Ollama-only, `backend/app/` root, single messages table, rolling summary, SSE break, keep LangGraph): fulfilled during the merge; kept state is recorded above.

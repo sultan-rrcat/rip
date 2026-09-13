@@ -2,7 +2,7 @@
 
 RIP is an offline-capable, single-codebase research assistant that combines document RAG with multi-agent orchestration. Users upload documents into notebooks, then query them through a chat interface backed by local LLMs.
 
-> **Implementation constraints** (endpoint signatures, schema DDL, config keys, forbidden patterns) live in `MERGE_PLAN.md` §0. This file is the domain glossary and data-flow reference only.
+> **Design constraints** (endpoint signatures, schema DDL, config keys, forbidden patterns) live in `ARCHITECTURE.md` and `ADR.md`. This file is the domain glossary and data-flow reference only.
 
 ## Language
 
@@ -45,7 +45,7 @@ _Avoid_: Passage, segment, slice
 ### Orchestration
 
 **Planner**:
-LLM-driven component that decomposes a user message into a goal and a plan — an ordered list of steps with dependencies (some run in parallel), each with an agent and tool assignment.
+LLM-driven component that decomposes a user message into a goal and a plan — an ordered list of steps with dependencies (some run in parallel), each with an agent and tool assignment. Trivial/conversational requests yield a single `reasoning` step (never an empty plan — ADR-026).
 _Avoid_: Router, dispatcher, coordinator
 
 **Step**:
