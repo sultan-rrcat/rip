@@ -8,6 +8,12 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5178,
+    proxy: {
+      // Same-origin dev access: both API families reach the backend at
+      // http://localhost:8000 (uvicorn app.main:app from rip/backend/).
+      '/api/': 'http://localhost:8000',
+      '/v1/': 'http://localhost:8000',
+    },
   },
   plugins: [react(), tailwindcss()],
   resolve: {
