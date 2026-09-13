@@ -359,4 +359,17 @@
 - **Verification:** `tsc -b` exit 0; `npm run lint` exit 0 (only pre-existing Card/LeftSidebar warnings); manual chat test pending (needs backend + Ollama + 5.4 proxy — Phase 6.2).
 - **Status:** Completed.
 - **Commits:** feat (hook + UI + llm.ts removal) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 5.4 - config + proxy + nginx + Dockerfile
+- **Task:** IMPLEMENTATION_PLAN Phase 5.4 — EDIT config/vite/nginx/Dockerfile; keep `API = VITE_API_URL` (dev `http://localhost:8000`); vite proxy `/api/` + `/v1/`; nginx `/v1/` = `/api/` block; Dockerfile CMD `app.main:app`; no `8010`; `npm run dev` works.
+- **Actions Taken:**
+  - `vite.config.ts`: added `server.proxy` `/api/` + `/v1/` → `http://localhost:8000` (port stays 5178, `@` alias untouched).
+  - `nginx.conf`: added `location /v1/` block identical to `/api/` (`proxy_pass http://backend:8000`, buffering off, 600s) — production same-origin works for runs, SSE replay and artifact downloads.
+  - `.env.example`: `VITE_API_URL` → `http://localhost:8000` (was a stale LAN IP; copy-to-`.env` comment already says adjust per machine). `.env.production` stays empty (relative URLs via nginx).
+  - No-ops verified, not edited: `config.ts` already `export const API = VITE_API_URL`; `backend/Dockerfile` already `WORKDIR /app/backend` + `CMD ["uvicorn", "app.main:app", ...]`.
+- **Verification:** `npm run dev` → HTTP 200 on `:5178` (then killed, no stray node); `tsc -b` exit 0; grep `8010` over `frontend/src/` + vite/nginx/Dockerfile → 0 hits.
+- **Status:** Completed. Phase 5 exit met: Gallery → Workspace → send → plan + answer + sources (pending live backend, Phase 6.2).
+- **Commits:** feat (proxy + nginx + env example) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.

@@ -130,7 +130,7 @@ Phase 4 exit: backend-only e2e works without frontend: create notebook via `/api
   - Test: manual chat — send message, see plan collapse, tokens stream, sources appear, cancel works
   - Done: tokens stream live, refresh replays structural events, cancel stops run
 
-- [ ] **5.4 `config.ts` + `vite.config.ts` + `nginx.conf` + `Dockerfile`**
+- [x] **5.4 `config.ts` + `vite.config.ts` + `nginx.conf` + `Dockerfile`** (2026-09-13: config.ts already `API = VITE_API_URL`; vite proxy `/api/`+`/v1/`→localhost:8000; nginx `/v1/` block = `/api/` block; Dockerfile already CMD app.main:app; .env.example→localhost:8000; `npm run dev` 200; 0× `8010` — see SESSION_LOG)**
   - Files: EDIT `frontend/src/config.ts`, `frontend/vite.config.ts`, `frontend/nginx.conf`, `backend/Dockerfile`
   - Edits: keep `export const API = VITE_API_URL (http://localhost:8000)`; `vite.server.proxy` for `/api/` + `/v1/`; `nginx` add `location /v1/` = `/api/` block; `backend/Dockerfile` CMD `app.main:app`; no `8010`
   - Test: `npm run dev`, search `8010` in `frontend/src/` → 0 hits
