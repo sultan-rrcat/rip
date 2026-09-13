@@ -7,6 +7,12 @@ import remarkGfm from 'remark-gfm'
 import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import type { Message, Source } from '@/types'
+import type { Artifact, PlanStep, RunView } from '@/types/runs'
+
+interface ChatAreaProps {
+  messages: Message[]
+  activeRun?: RunView | null
+}
 
 interface ChatAreaProps {
   messages: Message[]
@@ -56,7 +62,7 @@ const markdownComponents: Components = {
   },
 }
 
-const ChatArea = memo(function ChatArea({ messages }: ChatAreaProps) {
+const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -66,12 +72,19 @@ const ChatArea = memo(function ChatArea({ messages }: ChatAreaProps) {
   return (
     <div className="m-1 space-y-6 flex-1 overflow-y-auto px-8 py-10 bg-white border border-gray-400 rounded-xl shadow-sm">
       {messages.map((message) => {
+        // The in-flight run renders its plan + artifacts inside the run's
+        // placeholder bubble; finished messages render from their rows.
+        const runView =
+          activeRun && activeRun.messageId === message.id ? activeRun : null
         if (message.role === 'assistant') {
           return (
             <AssistantMessage
               key={message.id}
               text={message.text}
               sources={message.sources}
+              plan={runView?.plan ?? null}
+              goal={runView?.goal ?? null}
+              artifacts={runView?.artifacts ?? []}
             />
           )
         }
@@ -100,9 +113,19 @@ interface AssistantMessageProps {
   text?: string
   children?: ReactNode
   sources?: Source[]
+  plan?: PlanStep[] | null
+  goal?: string | null
+  artifacts?: Artifact[]
 }
 
-function AssistantMessage({ text, children, sources = [] }: AssistantMessageProps) {
+function AssistantMessage({
+  text,
+  children,
+  sources = [],
+  plan = null,
+  goal = null,
+  artifacts = [],
+}: AssistantMessageProps) {
   return (
     <div className="flex gap-4 items-start">
       {/* avatar  */}
@@ -122,6 +145,45 @@ function AssistantMessage({ text, children, sources = [] }: AssistantMessageProp
             >
               {text}
             </ReactMarkdown>
+          )}
+
+          {plan && plan.length > 0 && (
+            <details className="mt-3 text-[11px] text-gray-500">
+              <summary className="cursor-pointer font-semibold hover:text-gray-700">
+                Plan{goal ? `: ${goal}` : ''}
+              </summary>
+              <ol className="mt-1 ml-4 list-decimal space-y-0.5">
+                {plan.map((step) => (
+                  <li key={step.step_id}>
+                    {step.step_id} · {step.executor}
+                    {step.depends_on.length > 0 &&
+                      ` (after ${step.depends_on.join(', ')})`}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          )}
+
+          {artifacts && artifacts.length > 0 && (
+            <div className="mt-3 pt-2 border-t border-gray-300">
+              <p className="text-[11px] font-semibold text-gray-500 mb-1">
+                Artifacts
+              </p>
+              <ul className="space-y-0.5">
+                {artifacts.map((a) => (
+                  <li key={a.artifact_id} className="text-[11px]">
+                    <a
+                      className="text-blue-600 hover:underline"
+                      href={a.url}
+                      download={a.filename}
+                    >
+                      {a.filename}
+                    </a>
+                    <span className="text-gray-400"> · {a.kind}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
 
           {sources && sources.length > 0 && (

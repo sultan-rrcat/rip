@@ -26,3 +26,17 @@ export type RunEvent =
   | { type: 'artifacts'; artifacts: Artifact[]; seq: number }
   | { type: 'error'; error: string; seq: number }
   | { type: 'cancelled'; reason: string; seq: number }
+
+// Live view-model for the in-flight run, kept alongside messages[] by
+// useMessages. The plan/sources/artifacts render inside the run's
+// placeholder assistant bubble; on run_completed the placeholder is swapped
+// for the persisted message and the view is cleared.
+export interface RunView {
+  runId: string
+  messageId: string
+  goal: string | null
+  plan: PlanStep[] | null
+  sources: Source[]
+  artifacts: Artifact[]
+  running: boolean
+}

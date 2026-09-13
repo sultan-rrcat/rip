@@ -1,4 +1,5 @@
 import SendIcon from '@mui/icons-material/Send'
+import StopIcon from '@mui/icons-material/Stop'
 import { useState, useRef, useEffect, memo } from 'react'
 import type {
   ChangeEvent,
@@ -11,9 +12,16 @@ const CODE_PASTE_THRESHOLD = 200
 interface FooterProps {
   onSendMessage: (text: string) => void
   isLoading?: boolean
+  isRunning?: boolean
+  onCancel?: () => void
 }
 
-const Footer = memo(function Footer({ onSendMessage, isLoading }: FooterProps) {
+const Footer = memo(function Footer({
+  onSendMessage,
+  isLoading,
+  isRunning,
+  onCancel,
+}: FooterProps) {
   const [inputText, setInputText] = useState('')
   const [isCode, setIsCode] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -87,13 +95,23 @@ const Footer = memo(function Footer({ onSendMessage, isLoading }: FooterProps) {
               Qwen 2.5
             </div>
             <div className="border-none">
-              <button
-                onClick={handleSend}
-                disabled={isLoading || !inputText.trim()}
-                className="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg shrink-0 transition-all"
-              >
-                <SendIcon sx={{ fontSize: 16 }} />
-              </button>
+              {isRunning ? (
+                <button
+                  onClick={onCancel}
+                  title="Stop run"
+                  className="flex items-center justify-center w-8 h-8 bg-red-700 hover:bg-red-600 text-white rounded-lg shrink-0 transition-all"
+                >
+                  <StopIcon sx={{ fontSize: 16 }} />
+                </button>
+              ) : (
+                <button
+                  onClick={handleSend}
+                  disabled={isLoading || !inputText.trim()}
+                  className="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg shrink-0 transition-all"
+                >
+                  <SendIcon sx={{ fontSize: 16 }} />
+                </button>
+              )}
             </div>
           </div>
         </div>

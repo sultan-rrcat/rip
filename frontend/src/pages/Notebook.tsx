@@ -11,7 +11,8 @@ export default function Notebook() {
   // console.log(`NID: ${notebook_id}`)
   const { notebookName, renameNotebook } = useNotebook(notebook_id)
   const { files, handleUpload, handleDelete } = useFiles(notebook_id)
-  const { messages, handleSendMessage } = useMessages(notebook_id)
+  const { messages, activeRun, isRunning, handleSendMessage, handleCancelRun } =
+    useMessages(notebook_id)
 
   return (
     <div className="flex h-screen bg-gray-200 overflow-hidden">
@@ -23,8 +24,13 @@ export default function Notebook() {
         onRenameNotebook={renameNotebook}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
-        <ChatArea messages={messages} />
-        <Footer onSendMessage={handleSendMessage} />
+        <ChatArea messages={messages} activeRun={activeRun} />
+        <Footer
+          onSendMessage={handleSendMessage}
+          isLoading={isRunning}
+          isRunning={isRunning}
+          onCancel={handleCancelRun}
+        />
       </main>
     </div>
   )
