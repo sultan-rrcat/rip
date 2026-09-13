@@ -38,7 +38,7 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agents.registry import AgentRegistry
 from app.observability.langfuse import manual_span, truncate
 from app.orchestration.aggregator import AggregationResult, Aggregator
-from app.orchestration.plan import Plan
+from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.plan_graph import run_plan_graph
 from app.orchestration.planner import Planner
 from app.orchestration.results import ExecutionResult, StepResult
@@ -79,7 +79,9 @@ def _configurable(config: RunnableConfig) -> dict:
     return config.get("configurable") or {}
 
 
-def _make_plan_node(planner: Planner, validator: PlanValidator) -> Callable:
+def _make_plan_node(
+    planner: Planner, validator: PlanValidator, registry: AgentRegistry
+) -> Callable:
     def plan_node(state: OrchestrationState, config: RunnableConfig) -> dict:
         # Cooperative cancel: a cancelled run never spends another LLM call
         # on planning; the error terminal unwinds the graph.
@@ -92,6 +94,40 @@ def _make_plan_node(planner: Planner, validator: PlanValidator) -> Callable:
             try:
                 plan = planner.plan(state["request_text"], context=state["context"])
                 validator.validate(plan)
+                if plan.is_trivial():
+                    # Defensive fallback: the planner prompt forbids empty
+                    # plans, but older models / cached outputs can still emit
+                    # steps=[]. An empty DAG would execute zero steps and the
+                    # deterministic aggregator would report failed ("No steps
+                    # were executed."). Route trivial requests to one
+                    # conversational reasoning step instead.
+                    fallback_id = "reasoning"
+                    try:
+                        registry.get(fallback_id)
+                    except KeyError:
+                        manifest = registry.manifest()
+                        if not manifest:
+                            raise PlanValidationError(
+                                "trivial plan has no steps and no agents registered"
+                            )
+                        fallback_id = manifest[0]["agent_id"]
+                    plan = Plan(
+                        plan_id=plan.plan_id,
+                        goal=plan.goal,
+                        steps=[
+                            PlanStep(
+                                step_id="1",
+                                agent_id=fallback_id,
+                                input={"message": state["request_text"]},
+                                expected_output_type="text",
+                            )
+                        ],
+                    )
+                    validator.validate(plan)
+                    logger.info(
+                        "trivial plan repaired plan=%s fallback_agent=%s",
+                        plan.plan_id, fallback_id,
+                    )
             except (ValueError, PlanValidationError) as e:
                 plan_obs.update(output={"error": str(e)[:500]})
                 return {"plan": None, "plan_error": str(e)}
@@ -193,7 +229,7 @@ def build_orchestration_graph(
     """Compile the outer graph once per Orchestrator (process-wide)."""
     graph = StateGraph(OrchestrationState)
     graph.add_node(
-        "plan", _make_plan_node(planner, validator),
+        "plan", _make_plan_node(planner, validator, registry),
         input_schema=OrchestrationState,  # type: ignore[call-overload]
     )
     graph.add_node(

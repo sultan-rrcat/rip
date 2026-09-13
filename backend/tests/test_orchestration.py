@@ -455,10 +455,12 @@ class TestOrchestrator:
         deltas = [e for e in events if e["type"] == "delta"]
         assert deltas and deltas[0]["step_id"] == "1"
 
-    def test_trivial_plan_failed_result(self):
+    def test_trivial_plan_falls_back_to_single_step(self):
         orch = self._orchestrator({"goal": "nothing", "steps": []})
         result = orch.run("hi", "nb-1")
-        assert result.status == "failed" and result.plan_incomplete
+        assert result.status == "success" and not result.plan_incomplete
+        assert len(result.step_results) == 1
+        assert result.summary == "final answer"
 
     def test_plan_error_raises(self):
         orch = self._orchestrator(

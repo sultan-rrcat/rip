@@ -118,7 +118,11 @@ class Planner:
            steps, you MUST use {{{{<step_id>}}}} placeholders for dynamic
            values — NEVER hardcode placeholder numeric values like 1 or 2.
            The engine resolves placeholders BEFORE the tool runs.
-        6. If the request is trivial and requires no agent execution, return an empty steps array.
+        6. If the request is trivial/conversational and needs no tools or
+           multi-step work, return EXACTLY ONE step with agent_id="reasoning"
+           and input={{"message": "<the user's request verbatim>"}}.
+           Never return an empty steps array — empty plans cannot execute
+           and always aggregate as failed.
         7. Return only the JSON object matching the provided execution-plan schema.
 
         Examples:
