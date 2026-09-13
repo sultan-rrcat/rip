@@ -456,5 +456,13 @@
   - New `backend/tests/test_observability.py` (14 tests, disabled-mode no-ops + delegation, no server needed).
 - **Verification:** `test_observability.py` 14 passed; full merge suite (excl. `test_app.py`) 118 passed, zero regressions; ruff E/F clean on all new lines (remaining hits pre-existing). Langfuse stack restarted from Athena's compose file (volumes intact, UI 200 on :3002).
 - **Handover (needs operator):** sign in at `http://localhost:3002` (old account/data may persist via volumes) → project API keys → set `LANGFUSE_ENABLED=true` + keys in `rip/.env` → recreate backend (new code must reach container: `docker cp` or image rebuild) → one `/v1/runs` → trace appears under session=notebook_id.
-- **Status:** Code complete + infra up; live-trace verification pending keys.
+- **Status:** Code complete + infra up; live-trace VERIFIED (see follow-up entry below).
 - **Commits (multi-stage, AGENT.md §4b):** feat (observability + tracing + spans + config) → test (test_observability.py) → docs (ADR-025 + this file).
+
+---
+
+## [2026-09-13] - Langfuse live verification (traces landing)
+- **Setup:** operator created account + project; `rip/.env` (gitignored) `LANGFUSE_ENABLED=true` + keys; backend recreated (new env) + new code shipped via `docker cp` + `python-multipart` reinstall + restart; health + admin ok.
+- **Verification:** one `/v1/runs` (greeting, 0-step fail-honest) → ClickHouse `events_core` shows trace `run` with `session_id=<notebook_id>` plus children `plan`, `aggregate`, `llm.generate_structured` (model `rip-minicpm5-32k:latest` recorded). Probe span round-trips too.
+- **Discovery:** this Langfuse v4 server runs in **`events_only` mode** — the read API (`/api/public/traces`, `/sessions`) 404s by design and `traces`/`observations` tables stay empty; raw events land in `events_core`/`events_full` and the UI reads those. Verify in the UI (Traces view), not via API/ClickHouse `traces` table.
+- **Status:** Completed — tracing proven end to end on the substitute model.
