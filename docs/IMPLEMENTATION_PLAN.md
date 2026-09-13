@@ -72,7 +72,7 @@ Phase 1 exit: `cd backend; uvicorn app.main:app --port 8000` serves `GET /api/he
   - Test: `pytest backend/tests/test_tools.py -q` — `rag.query` returns chunks for a test notebook with files
   - Done: all 5 tools import and inherit from `Tool`, `rag.query` e2e works without model reload
 
-- [ ] **3.2 Orchestration**
+- [x] **3.2 Orchestration** (2026-09-13: plan/results/validator verbatim; planner Ollama + RIP tools, never emits notebook_id; aggregator Q36 deterministic no-LLM; engine reflection removed; plan_graph no gate + notebook_id injection into tool steps + step/delta events; orchestrator Q28 run(request_text, notebook_id, on_event, context, cancel_event); memory Q28 window-10/budget-70%/512 via ollama_default_model; `test_orchestration.py` 29 passed, full suite 66; ruff E/F only inherited E501s — see SESSION_LOG)
   - Files: COPY `plan.py`, `planner.py`, `validator.py`, `aggregator.py`, `engine.py`, `plan_graph.py`, `orchestrator.py`, `memory.py`, `results.py` → `app/orchestration/`
   - Edits: `planner.py` gemini→Ollama; `aggregator.py` Q36 deterministic rules (1 success→output; multiple→labeled join; clarification→verbatim; all failed→errors; no LLM); `engine.py` remove reflection; `plan_graph.py` no approval gate, inject `notebook_id`; `orchestrator.py` signature with `notebook_id` + `context`; `memory.py` Q28 port, persist target `notebooks.conversation_summary`
   - Test: `pytest backend/tests/test_orchestration.py -q`

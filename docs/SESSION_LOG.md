@@ -251,4 +251,22 @@
   - Live: plot/doc/sandbox proven on docker+libs; rag.query proven via FakeRAG (real VectorRAG e2e blocked by standing torch rot — Phase 6); image honest-fail proven (no provider / no image model).
 - **Status:** Completed with noted caveat (real-VectorRAG rag.query e2e awaits torch repair).
 - **Commits (multi-stage, AGENT.md §4b):** refactor (tools) → test (test_tools.py) → docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - PHASE 3.2 - orchestration (planner/engine/aggregator, Q36 + Q28)
+- **Task:** IMPLEMENTATION_PLAN Phase 3.2 — COPY plan/planner/validator/aggregator/engine/plan_graph/orchestrator/memory/results → `app/orchestration/`; planner Ollama; aggregator Q36 deterministic; engine no reflection; plan_graph no gate + notebook_id injection; orchestrator notebook_id + context; memory Q28; `pytest backend/tests/test_orchestration.py -q`.
+- **Actions Taken:**
+  - `plan.py` / `results.py`: verbatim (results docstring: tool data feeds SSE sources/artifacts, not /v1/invoke).
+  - `validator.py`: logic verbatim; `get_logger` → stdlib; docstring approval paragraph rewritten (tools run directly).
+  - `memory.py`: Q28 port — WINDOW_SIZE=10, `len//4` estimator, budget `int(ollama_context_window * summary_threshold_pct)` resolved live (test-overridable), `_SUMMARY_MAX_TOKENS` → `settings.summary_max_tokens`, summarize via `ollama_default_model`; `folded_count` ↔ `summary_message_count` documented for the Phase 4 worker.
+  - `planner.py`: `gemini_model_planner` → `ollama_default_model`; SQL-agent/tool prompt rules + examples replaced with RIP set (rag.query/plot/doc/sandbox/image); explicit rule: planner NEVER emits `notebook_id` (engine injects, Q6); `get_logger` → stdlib.
+  - `aggregator.py`: Q36 rewrite — no provider, no LLM; 1 success → verbatim, multiple → labeled join, clarification → verbatim, all-failed/empty → joined errors; `conflicts` always [].
+  - `plan_graph.py`: approval gate + ApprovalStore deleted (`approved` kwarg gone); Langfuse/correlation deleted (local `_trunc`); `notebook_id` plumbed build/run/node and force-injected into TOOL-step inputs (run truth wins); step lifecycle via opaque `on_event` dicts (step_started/delta/step_completed); agent `on_delta` wired to delta events; `_DEFAULT_MAX_RETRIES=2` code constant (no new Settings key; `default_timeout_ms` reused from Settings).
+  - `engine.py`: reflection edge + cycles removed (plan→execute→aggregate→END, honest failure); approvals/Langfuse/correlation deleted; notebook_id rides config → state → tool injection.
+  - `orchestrator.py`: Q28 locked `run(request_text, notebook_id, on_event, context, cancel_event)`; tenancy/quotas/approval/reflection/audit removed; trace = fresh uuid4 (no `current_trace_id` in RIP logging).
+  - New `backend/tests/test_tools.py`-style `backend/tests/test_orchestration.py` (29 tests): validator (unknown/both/cycle/budget), aggregator Q36 rules, memory fold/budget/model, plan_graph (notebook_id injection proven: planner output lacks it, FakeRAG receives run's id; agents do NOT receive it; placeholders; cancel; trivial), planner model, full Orchestrator e2e on rag.query plan with step events + delta streaming, no-replan proof (planner called exactly once on failure).
+- **Verification:** `pytest tests/test_orchestration.py --noconftest` → **29 passed**; full suite (orchestration+tools+providers) → **66 passed**. Forbidden grep: no approvals/PluginHealth/manual_span/correlation_context/gemini_model/reflection in code. `ruff --select E,F`: only E501s (Athena-verbatim lines; 2 new engine lines + 2 test lines fixed, new files otherwise clean).
+- **Status:** Completed.
+- **Commits (multi-stage, AGENT.md §4b):** refactor (orchestration) → test (test_orchestration.py) → docs (this file + checkbox).
 - **Next:** Phase 3.1 Tools (all 5) — needs `sandbox_image` pull (`docker pull python:3.11-slim`) before `code.sandbox` work per AGENT.md §7.
