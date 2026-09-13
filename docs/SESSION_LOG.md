@@ -418,3 +418,26 @@
 - **Verification:** `npm run lint` exit 0 (only pre-existing `set-state-in-effect` warnings in Card.tsx/LeftSidebar.tsx — untouched legacy files); `npm run build` (`tsc -b && vite build`) exit 0, `dist/index.html` emitted (only the standard >500kB chunk-size advisory from MUI); package.json has no `zustand` / `@tanstack/react-query`.
 - **Status:** Completed (verification only — no code changes).
 - **Commits:** docs (this file + checkbox).
+
+---
+
+## [2026-09-13] - MiniCPM5 probes: ctx + think + native structured endpoint
+- **Context (user challenge):** prior verdict blamed the 2B substitute model; user pointed to MiniCPM5-2B strength (Hugging Face) and asked about `<think>` handling and lower temperature. Planner already runs at `temperature=0`, so no lower setting exists.
+- **Think tokens:** verified active on both paths (`strip_think` in `_content`, `ThinkFilter` in streams); live probe showed raw output had zero `<think>` blocks — stripping was never the failure cause.
+- **Model file (`ollama show` + GGUF header):** `MiniCPM5-2B`, llama arch, 42 blocks, 2048 embed, 131072 native ctx, Q4_K_M, 1.45GB; served with `num_ctx=4096`, generic system prompt, `completion` capability only. Template carries a think-switch but the server rejects `think:true` ("does not support thinking" on this tag). Native `/api/chat` with the OpenAI `json_schema` wrapper → `invalid JSON schema`; raw schema works.
+- **Probes (real planner prompt, 8.2K chars):** ctx 4K → VALID, ctx 32K → VALID (×2 each, deterministic), 32K plan richer (depends_on + output types). `/v1` compat `response_format` mapping proved lossy vs native `format` (4/4 VALID native).
+- **Status:** Completed (probes only — fixes followed next session).
+- **Commits:** none (probe scripts in temp, not repo).
+
+---
+
+## [2026-09-13] - PHASE 6.2 (FULL PASS on MiniCPM) - native structured + np.float32 fix + 32K model
+- **Actions Taken:**
+  - `ollama create rip-minicpm5-32k` from new `backend/Modelfile.planner` (`FROM openbmb/minicpm5-2b:latest` + `PARAMETER num_ctx 32768`; zero-download, layer reuse); `.env` (gitignored, local-only) `OLLAMA_DEFAULT_MODEL=rip-minicpm5-32k:latest`. Merge default `qwen2.5:14b` untouched in `config.py`.
+  - `app/providers/ollama.py` `generate_structured` rerouted to native `POST /api/chat` with the RAW schema as `format` + `think:false` (this tag rejects `think:true`); native usage counters (`prompt_eval_count`/`eval_count`) mapped honestly. Only caller is the planner; `test_providers.py` 12 passed (no structured-endpoint pins existed).
+  - `app/rag/vector_rag.py`: `float(score)` on CrossEncoder output — **real merge bug found live:** `np.float32 rerank_score` crashed the run worker (`TypeError: StepResult not msgpack serializable` in LangGraph checkpoint serde; would also break SSE `json.dumps` + Postgres `Json()`). Empty-result runs never tripped it.
+  - `pyproject.toml`: pinned `python-multipart>=0.0.18` (backend crash-loop root cause from prior session; fix baked for rebuilds).
+- **Verification (SMOKE PASS):** notebook → reportlab PDF upload → host-side ingestion (1 chunk / 1 embedding; in-container ingestion is broken — no Java for OpenDataLoader fallback, Docling hard-disabled by `raise Exception` in `pipeline.py:36`) → `POST /v1/runs → 202` → SSE `run_started → plan → step_started → step_completed → sources → summary → run_completed`, `sources=[{zephyr.pdf, Zephyr Notes}]`, cited summary, `completed`; replay 7 events with 0 deltas (Q35); cancel path covered by `test_runs_api` + prior 6.2 partial (live cancel attempts this session raced fast-failing invalid plans). Smoke notebooks deleted after (cascade verified, DB tidy).
+- **Known warts (not blocking):** planner ~75% on RAG questions (invalid 2-step/0-step plans surface as fail-honest `failed`, never crash); trivial prompts ("hii") → 0-step → `failed`; in-container PDF ingestion needs JRE in `backend/Dockerfile` (live `apt` failed — no DNS to deb.debian.org from container); container currently runs `docker cp`-patched code — **recreate/rebuild wipes it, rebuild image to bake fixes.**
+- **Status:** Completed. Phase 6.2 Done met on substitute model (qwen live proof still deferred, recorded).
+- **Commits (multi-stage, AGENT.md §4b):** fix (provider + vector_rag + Modelfile) → chore (pyproject multipart) → test (providers green) → docs (this file + 6.2 checkbox).
