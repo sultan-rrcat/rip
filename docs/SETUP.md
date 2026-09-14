@@ -66,7 +66,7 @@ npm install; npm run dev
 ```
 
 Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (alias `GET /health`).
-Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see `vite.config.ts`); prod `nginx.conf` must proxy both.
+Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see `vite.config.ts`); prod `nginx.conf` must proxy both. Empty `VITE_API_URL` = same-origin; nginx allows 100M uploads with unbuffered SSE.
 
 ## 5. Smoke test
 
