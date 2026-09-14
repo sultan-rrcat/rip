@@ -1,8 +1,9 @@
 """Backend integration tests (real DB, real models, real APIs — no mocks).
 
-Run from the repo root with the ``agent_env`` interpreter::
+Run from the repo root with the ``ml_env`` interpreter
+(``agent_env`` is legacy and no longer exists)::
 
-    ..\\ENV\\agent_env\\Scripts\\python.exe -m pytest
+    C:\\Users\\offic\\venvs\\ml_env\\Scripts\\python.exe -m pytest
 
 The session ``client`` fixture (see ``conftest.py``) applies ``schema.sql``,
 boots the real FastAPI app (lifespan loads BGE-M3 + reranker once) and each
