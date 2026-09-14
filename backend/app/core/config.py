@@ -12,6 +12,7 @@ Deltas vs the TARGET block (all forced by pre-1.4 environment, see log):
 """
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
@@ -76,6 +77,17 @@ class Settings(BaseSettings):
     def _abs_model_path(cls, v: object) -> object:
         if isinstance(v, (str, Path)):
             return _to_absolute_model_path(str(v))
+        return v
+
+    # PDF ingestion: selected loader runs first, the other is fallback.
+    # RAG_PDF_LOADER=docling | opendataloader (default docling).
+    rag_pdf_loader: Literal["docling", "opendataloader"] = "docling"
+
+    @field_validator("rag_pdf_loader", mode="before")
+    @classmethod
+    def _norm_pdf_loader(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip().lower()
         return v
 
     @field_validator("upload_dir", mode="before")

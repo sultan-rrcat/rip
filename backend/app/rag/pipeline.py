@@ -41,33 +41,49 @@ class RagPipeline:
     # =========================
     # 📄 DOCUMENT LOADER
     # =========================
+    def _load_with_docling(self, file):
+        # Primary: Docling (re-enabled P0.1; fallback below needs Java)
+        converter = DocumentConverter()
+        result = converter.convert(file)
+
+        md_text = result.document.export_to_markdown()
+
+        logger.info("✅ Loaded with Docling")
+
+        return [
+            Document(
+                page_content=md_text, metadata={"source": file, "loader": "docling"}
+            )
+        ]
+
+    def _load_with_opendataloader(self, file):
+        loader = OpenDataLoaderPDFLoader(file, format="markdown")
+        documents = loader.load_and_split()
+
+        logger.info(f"✅ Loaded with OpenDataLoader: {len(documents)} pages")
+
+        return documents  # already Document objects
+
     def document_loader(self, file):
+        # Order from settings (RAG_PDF_LOADER); the other loader is fallback.
+        primary = (settings.rag_pdf_loader or "docling").strip().lower()
+        loaders = (
+            (self._load_with_opendataloader, self._load_with_docling)
+            if primary == "opendataloader"
+            else (self._load_with_docling, self._load_with_opendataloader)
+        )
+        names = (
+            ("OpenDataLoader", "Docling")
+            if primary == "opendataloader"
+            else ("Docling", "OpenDataLoader")
+        )
         try:
-            # Primary: Docling (re-enabled P0.1; fallback below needs Java)
-            converter = DocumentConverter()
-            result = converter.convert(file)
-
-            md_text = result.document.export_to_markdown()
-
-            logger.info("✅ Loaded with Docling")
-
-            return [
-                Document(
-                    page_content=md_text, metadata={"source": file, "loader": "docling"}
-                )
-            ]
-
+            return loaders[0](file)
         except Exception as e:
-            logger.warning(f"⚠️ Docling failed, fallback to OpenDataLoader: {e}")
+            logger.warning(f"⚠️ {names[0]} failed, fallback to {names[1]}: {e}")
 
             try:
-                loader = OpenDataLoaderPDFLoader(file, format="markdown")
-                documents = loader.load_and_split()
-
-                logger.info(f"✅ Loaded with OpenDataLoader: {len(documents)} pages")
-
-                return documents  # already Document objects
-
+                return loaders[1](file)
             except Exception as e:
                 logger.info(f"❌ Both loaders failed: {e}")
                 raise
