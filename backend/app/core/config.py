@@ -78,6 +78,13 @@ class Settings(BaseSettings):
             return _to_absolute_model_path(str(v))
         return v
 
+    @field_validator("upload_dir", mode="before")
+    @classmethod
+    def _abs_upload_dir(cls, v: object) -> object:
+        if isinstance(v, (str, Path)):
+            return _to_absolute_model_path(str(v))
+        return v
+
     @field_validator("db_host", mode="before")
     @classmethod
     def _norm_db_host(cls, v: object) -> object:
