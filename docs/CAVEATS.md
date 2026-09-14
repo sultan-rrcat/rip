@@ -15,8 +15,8 @@ Environment traps and behavioral gotchas verified against the live system. Each 
 ### `OLLAMA_BASE_URL` differs host vs compose
 
 - **Symptom:** provider tests self-skip as "Ollama down", or the container can't reach Ollama.
-- **Cause:** compose default `http://host.docker.internal:11434` is unresolvable from the host.
-- **Fix:** export `OLLAMA_BASE_URL=http://localhost:11434` for host-local runs/tests. Init probes 5s and degrades (per-request fail-honest), never boot-crashes.
+- **Cause:** compose default `http://host.docker.internal:11434` is unresolvable from the host and from Linux Engine without a gateway mapping.
+- **Fix:** export `OLLAMA_BASE_URL=http://localhost:11434` for host-local runs/tests. Compose sets `extra_hosts: ["host.docker.internal:host-gateway"]` so the mapping works on Windows and Linux. Init probes 5s and degrades (per-request fail-honest), never boot-crashes.
 
 ### BGE model paths must be absolute
 
@@ -41,6 +41,18 @@ Environment traps and behavioral gotchas verified against the live system. Each 
 - **Symptom:** PDF uploads stall in `processing` inside compose while host-local works.
 - **Cause:** the Docling path needs a Java runtime absent from the image.
 - **Fix:** install a JRE in `backend/Dockerfile` or pre-process PDFs host-side.
+
+### Compose Postgres init runs once
+
+- **Symptom:** `backend/schema.sql` changes have no effect after `docker compose up`.
+- **Cause:** the `./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro` mount runs only on an empty `pgdata` volume.
+- **Fix:** re-apply via `psql "host=127.0.0.1 port=<HOST_PG_PORT> ..."` or `docker compose down -v` for a fresh bootstrap (deletes data).
+
+### Frontend is same-origin only
+
+- **Symptom:** `docker run -e VITE_API_URL=... frontend` still calls the old backend.
+- **Cause:** `VITE_API_URL` is baked at `npm run build`; the image sets it empty so `/api/` + `/v1/` go through nginx to `backend:8000`.
+- **Fix:** retarget by rebuilding with a different `VITE_API_URL`; no runtime override (intentional, Q4-A).
 
 ---
 

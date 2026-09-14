@@ -61,6 +61,25 @@ frontend/src/
 | Backend lint | `ruff` | root |
 | Frontend install/dev/lint/build | `npm install` / `npm run dev` / `npm run lint` / `npm run build` | `frontend/` |
 
+### 5.1 Host environments (`agent_env` vs `ml_env`)
+
+- **Canonical host env is `ml_env`** at `C:\Users\offic\venvs\ml_env`
+  (probed 2026-09-14: Python 3.12.0, torch 2.14.0+cpu). Use its interpreter
+  for host-side work:
+  `C:\Users\offic\venvs\ml_env\Scripts\python.exe -m pytest`.
+- **`agent_env` is legacy / absent.** Old paths (`..\ENV\agent_env`,
+  `C:\Users\offic\ENV\agent_env`) no longer exist; `C:\Users\offic\venvs`
+  contains only `ml_env`. Do not reference `agent_env` in new docs/tests —
+  `docs/archive/SESSION_LOG.md:130` already records its removal.
+- Either env name may be passed for host work ("use agent_env or ml_env,
+  whatever available"): prefer `ml_env` when present, fall back to
+  `agent_env` only on machines where it still exists. Verify with
+  `Test-Path C:\Users\offic\venvs\ml_env` before documenting further.
+- Host-local DB rule: `DB_HOST=127.0.0.1` (never bare `localhost` on
+  Windows) + `DB_PORT` synced to `HOST_PG_PORT`; host-local Ollama at
+  `OLLAMA_BASE_URL=http://localhost:11434` (in-compose backend uses
+  `http://host.docker.internal:11434` via `extra_hosts`).
+
 ## 6. Standing rules (do not break)
 
 - Ollama only (`OLLAMA_BASE_URL`); port `8000`; `CORS *` as plain str.

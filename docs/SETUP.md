@@ -31,7 +31,7 @@ Keys ( authoritative defaults in `backend/app/core/config.py`):
 
 | Key | Value |
 |---|---|
-| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; **host-local runs use `127.0.0.1` + `HOST_PG_PORT`** (see CAVEATS — bare `localhost` can hang) |
+| `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; **host-local runs use `127.0.0.1` + `DB_PORT=<HOST_PG_PORT>`** (see CAVEATS — bare `localhost` can hang; sync `DB_PORT` to the mapped host port) |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` in compose, `http://localhost:11434` local |
 | `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` (config default; a local `.env` may override, e.g. a smaller planner model) |
 | `OLLAMA_CONTEXT_WINDOW` | `32768` (budget = `*0.7` ≈ 22900 tokens, `len//4` estimator) |
@@ -44,16 +44,21 @@ No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 ## 3. Database bootstrap
 
 ```powershell
-psql "host=<DB_HOST> port=5432 dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
+psql "host=<DB_HOST> port=<HOST_PG_PORT> dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
 ```
 
 Creates `notebooks` (with `conversation_summary` + `summary_message_count`), `files`, `messages`, `embeddings`, `runs`, `run_events`, vector + text-search indexes.
+Use `HOST_PG_PORT` (default 5432, live override e.g. 5433) — not hardcoded
+`5432`. `schema.sql` also mounts as Postgres init (`001-schema.sql`) but runs
+only on an empty `pgdata` volume; re-apply via `psql` after DDL changes.
 
 ## 4. Run (Required: Postgres + Ollama. Optional: Langfuse)
 
 ```powershell
-docker compose up postgres backend frontend
+docker compose up --build postgres backend frontend
 # Langfuse runs as a separate stack (see CAVEATS); backend reaches it via host gateway
+# (`extra_hosts: host.docker.internal:host-gateway`, portable Windows/Linux).
+# Backend honors $PORT (default 8000); frontend gates on backend healthy.
 ```
 
 Local alternative:

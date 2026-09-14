@@ -4,9 +4,20 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
-## Unreleased — BGE path resolution
+## Unreleased — container/deploy hardening
 
-- Relative BGE model paths auto-resolve to repo-root absolute and fail fast with the missing path instead of a cryptic boot crash.
+- Compose: backend + frontend healthchecks (`/api/health`, `/healthz`),
+  frontend gates on backend healthy, `extra_hosts` gateway for portable
+  `host.docker.internal` (Windows/Linux), optional `.env` file.
+- Backend image honors `$PORT`, stdlib `HEALTHCHECK`, proxy hygiene
+  (`NO_PROXY` defaults; build proxy no longer persisted).
+- Frontend nginx: real `proxy_cache off`/timeouts for SSE, `/healthz`,
+  immutable `/assets/` vs no-cache `index.html`; new `frontend/.dockerignore`.
+- Docs: host env canonical `ml_env` (`docs/AGENT.md` §5.1), `HOST_PG_PORT`
+  sync + `psql` port fix, compose-init-once + same-origin notes.
+
+- BGE path resolution (prior unreleased):
+  Relative BGE model paths auto-resolve to repo-root absolute and fail fast.
 - `DB_HOST` defaults to `127.0.0.1` (`localhost` auto-normalized), 5s connect timeout, password masked on connect failure.
 - Ollama init degrades on 5s probe instead of boot-crashing; requests fail honest per call.
 - Frontend uses same-origin API when `VITE_API_URL` is empty; nginx allows 100M uploads with unbuffered SSE.
