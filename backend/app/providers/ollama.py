@@ -54,23 +54,33 @@ class OllamaProvider(ModelProvider):
         self._last_usage: dict[str, int] | None = None
         self._available: set[str] = set()
         self._warned: set[str] = set()
+        self._reachable = False
 
+        # Degraded boot: a 5s probe only — never raise here. Per-request paths
+        # re-probe and fail honest when Ollama is still down.
+        self._probe_once(timeout=5.0)
+
+    def _probe_once(self, *, timeout: float) -> bool:
+        """Single /api/tags probe; returns reachability, never raises."""
         try:
-            response = self._client.get("/api/tags")
-            if response.status_code != 200:
-                raise ValueError(
-                    f"Ollama health check failed "
-                    f"(status {response.status_code}): {response.text}"
-                )
+            response = self._client.get("/api/tags", timeout=timeout)
         except httpx.RequestError as e:
-            logger.error(
-                "Ollama unreachable at %s: %s", settings.ollama_base_url, e
+            logger.warning(
+                "Ollama unreachable at %s: %s (degraded — per-request fail-honest)",
+                settings.ollama_base_url,
+                e,
             )
-            raise ValueError(
-                f"Could not connect to Ollama at {settings.ollama_base_url}. "
-                "Start it or fix OLLAMA_BASE_URL (see .env.example)."
-            ) from e
-
+            self._reachable = False
+            self._available = set()
+            return False
+        if response.status_code != 200:
+            logger.warning(
+                "Ollama health check status %s (degraded — per-request fail-honest)",
+                response.status_code,
+            )
+            self._reachable = False
+            self._available = set()
+            return False
         try:
             self._available = {
                 m["name"]
@@ -84,13 +94,24 @@ class OllamaProvider(ModelProvider):
                 e,
             )
             self._available = set()
-
+        self._reachable = True
         logger.info(
             "Ollama reachable at %s (%d model(s): %s)",
             settings.ollama_base_url,
             len(self._available),
             ", ".join(sorted(self._available)) or "none listed",
         )
+        return True
+
+    def ensure_ready(self) -> None:
+        """Fail-honest per-request gate; re-probes once when degraded."""
+        if self._reachable:
+            return
+        if not self._probe_once(timeout=5.0):
+            raise ValueError(
+                f"Could not connect to Ollama at {settings.ollama_base_url}. "
+                "Start it or fix OLLAMA_BASE_URL (see .env.example)."
+            )
 
     @property
     def last_usage(self) -> dict[str, int] | None:
@@ -100,7 +121,9 @@ class OllamaProvider(ModelProvider):
     def _resolve_model(self, requested: str) -> str:
         """Honor per-request names the server actually has; everything else
         resolves to the configured default — logged ONCE per foreign name,
-        never silent, and mirrored by served_model() for trace honesty."""
+        never silent, and         mirrored by served_model() for trace honesty."""
+        if not self._reachable:
+            return settings.ollama_default_model
         if requested in self._available:
             return requested
         if requested not in self._warned:
@@ -123,6 +146,7 @@ class OllamaProvider(ModelProvider):
         max_tokens: int,
         response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self.ensure_ready()
         payload: dict[str, Any] = {
             "model": self._resolve_model(model),
             "messages": messages,
@@ -177,6 +201,7 @@ class OllamaProvider(ModelProvider):
         non-200 with status + body). A `data:` line that is not JSON is
         transport noise: logged and skipped, never fatal to the stream.
         """
+        self.ensure_ready()
         try:
             with self._client.stream(
                 "POST", "/v1/chat/completions", json=payload
@@ -337,6 +362,7 @@ class OllamaProvider(ModelProvider):
         # while native format went 4/4 VALID on the real planner prompt
         # (2026-09-13 probes). think=False explicit: this tag rejects
         # think:true ("does not support thinking").
+        self.ensure_ready()
         payload: dict[str, Any] = {
             "model": self._resolve_model(model),
             "messages": messages,

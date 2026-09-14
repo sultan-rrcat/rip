@@ -16,7 +16,7 @@ Environment traps and behavioral gotchas verified against the live system. Each 
 
 - **Symptom:** provider tests self-skip as "Ollama down", or the container can't reach Ollama.
 - **Cause:** compose default `http://host.docker.internal:11434` is unresolvable from the host.
-- **Fix:** export `OLLAMA_BASE_URL=http://localhost:11434` for host-local runs/tests.
+- **Fix:** export `OLLAMA_BASE_URL=http://localhost:11434` for host-local runs/tests. Init probes 5s and degrades (per-request fail-honest), never boot-crashes.
 
 ### BGE model paths must be absolute
 
