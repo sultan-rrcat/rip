@@ -43,9 +43,7 @@ class RagPipeline:
     # =========================
     def document_loader(self, file):
         try:
-            
-            raise Exception
-            # 🔥 Primary: Docling
+            # Primary: Docling (re-enabled P0.1; fallback below needs Java)
             converter = DocumentConverter()
             result = converter.convert(file)
 
