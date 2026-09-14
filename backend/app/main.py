@@ -45,9 +45,21 @@ async def lifespan(app: FastAPI):
         _settings.bge_m3_model_path,
         _settings.bge_reranker_v2_m3,
     )
-    app.state.rag = VectorRAG()
-    bind_rag_singleton(app.state.rag)
-    logger.info("ML models loaded successfully.")
+    try:
+        from app.rag.vector_rag import VectorRAG
+
+        app.state.rag = VectorRAG()
+        bind_rag_singleton(app.state.rag)
+        logger.info("ML models loaded successfully.")
+    except Exception:
+        # Degraded boot, not a crash: /api/* still serves, /v1/* fails
+        # honest per request (rag.query unbound → ok=False).
+        app.state.rag = None
+        logger.warning(
+            "ML models NOT loaded (BGE weights missing?) — "
+            "/api/* serves, rag.query fails honest",
+            exc_info=True,
+        )
 
     # Compose the /v1 runtime around the lifespan RAG singleton so
     # rag.query reuses it (never reloads models per query). Ollama-down is

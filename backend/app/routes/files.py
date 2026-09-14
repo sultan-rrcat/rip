@@ -169,6 +169,11 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
 def process_file(
     file_id: str, background_tasks: BackgroundTasks, rag: Any = Depends(get_rag)
 ):
+    if rag is None:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG models not loaded (BGE weights missing) — retry after restart",
+        )
     with pg_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM files WHERE file_id=%s", (file_id,))
