@@ -38,6 +38,13 @@ async def lifespan(app: FastAPI):
     from app.tools.rag_query import bind_rag_singleton
 
     logger.info("Initiating ML models...")
+    from app.core.config import settings as _settings
+
+    logger.info(
+        "BGE m3=%s reranker=%s",
+        _settings.bge_m3_model_path,
+        _settings.bge_reranker_v2_m3,
+    )
     app.state.rag = VectorRAG()
     bind_rag_singleton(app.state.rag)
     logger.info("ML models loaded successfully.")

@@ -11,8 +11,30 @@ Deltas vs the TARGET block (all forced by pre-1.4 environment, see log):
   class only).
 """
 
-from pydantic import AliasChoices, Field
+from pathlib import Path
+
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings
+
+
+def _resolve_repo_root() -> Path:
+    """Repo root (`rip/`) anchored to this file, independent of CWD."""
+    return Path(__file__).resolve().parents[3]
+
+
+def _to_absolute_model_path(value: str) -> str:
+    """Resolve relative BGE paths against the repo root; keep absolute as-is."""
+    text = (value or "").strip()
+    if not text:
+        return text
+    if text.startswith("/"):
+        # POSIX absolute (compose `/app/...`); preserve verbatim even when
+        # validated on Windows where Path() lacks a drive letter.
+        return text
+    candidate = Path(text)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str((_resolve_repo_root() / candidate).resolve())
 
 
 class Settings(BaseSettings):
@@ -39,6 +61,13 @@ class Settings(BaseSettings):
         default="./backend/models/reranker/bge_reranker_v2_m3",
         validation_alias=AliasChoices("bge_reranker_v2_m3", "reranker_model_dir"),
     )
+
+    @field_validator("bge_m3_model_path", "bge_reranker_v2_m3", mode="before")
+    @classmethod
+    def _abs_model_path(cls, v: object) -> object:
+        if isinstance(v, (str, Path)):
+            return _to_absolute_model_path(str(v))
+        return v
 
     # Server (keep 8000 to avoid nginx/frontend churn; was 8010 in draft)
     port: int = 8000

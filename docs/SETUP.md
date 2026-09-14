@@ -18,8 +18,8 @@ Model paths (Pydantic `backend/app/core/config.py`):
 
 | Key | Default |
 |---|---|
-| `BGE_M3_MODEL_PATH` | `./backend/models/bge-m3` |
-| `BGE_RERANKER_V2_M3` | `./backend/models/reranker/bge_reranker_v2_m3` |
+| `BGE_M3_MODEL_PATH` | `/abs/path/to/backend/models/bge-m3` (relative auto-resolves to repo-root absolute) |
+| `BGE_RERANKER_V2_M3` | `/abs/path/to/backend/models/reranker/bge_reranker_v2_m3` |
 
 ## 2. Environment
 

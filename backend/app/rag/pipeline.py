@@ -22,6 +22,17 @@ logger = setup_logging()
 
 class RagPipeline:
     def __init__(self):
+        from pathlib import Path
+
+        for label, model_path in (
+            ("BGE_M3_MODEL_PATH", settings.bge_m3_model_path),
+            ("BGE_RERANKER_V2_M3", settings.bge_reranker_v2_m3),
+        ):
+            if not Path(model_path).exists():
+                raise FileNotFoundError(
+                    f"BGE model missing at {model_path} ({label}) — "
+                    "set an absolute path in .env, see docs/CAVEATS.md"
+                )
         self.embedding_model = HuggingFaceEmbeddings(
             model_name=settings.bge_m3_model_path
         )

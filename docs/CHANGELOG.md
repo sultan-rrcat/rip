@@ -4,6 +4,10 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — BGE path resolution
+
+- Relative BGE model paths auto-resolve to repo-root absolute and fail fast with the missing path instead of a cryptic boot crash.
+
 ## 2026-09-13 — Trivial-plan fallback
 
 - Greetings and other trivial messages no longer fail with `No steps were executed`. The planner is instructed to emit a single `reasoning` step, and the engine repairs any still-empty plan the same way (`e58e18b`, ADR-026).

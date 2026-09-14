@@ -22,7 +22,7 @@ Environment traps and behavioral gotchas verified against the live system. Each 
 
 - **Symptom:** backend boot crash loading embeddings.
 - **Cause:** relative `./backend/*` paths assume CWD=`rip/`, but uvicorn runs from `rip/backend/` (compose uses `/app/backend`).
-- **Fix:** absolute paths in `.env` (`BGE_M3_MODEL_PATH`, `BGE_RERANKER_V2_M3`); `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` are honored aliases.
+- **Fix:** absolute paths in `.env` (`BGE_M3_MODEL_PATH`, `BGE_RERANKER_V2_M3`); `BGE_MODEL_DIR`/`RERANKER_MODEL_DIR` are honored aliases. Relative values auto-resolve to repo-root absolute and fail fast with the missing path if weights are absent.
 
 ### Never install `torchaudio`
 
