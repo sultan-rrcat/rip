@@ -11,11 +11,13 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 
 class _PollAccessFilter(logging.Filter):
-    """Drop uvicorn access lines for the hot file-list poll path.
+    """Drop uvicorn access lines for hot, low-value poll/probe paths.
 
-    The frontend refetches GET /api/notebooks/{id}/files every 2s while
-    ingestion is processing; each hit would otherwise spam console/app.log.
-    Failures still surface via the endpoint's logger.exception.
+    - GET /api/notebooks/{id}/files: the frontend refetches every 2s while
+      ingestion is processing; each hit would otherwise spam console/app.log.
+    - GET /api/health with 200: compose HEALTHCHECK hits every 10s.
+      Non-200 health lines still pass so failures stay visible.
+    Failures still surface via each endpoint's logger.exception.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -23,7 +25,9 @@ class _PollAccessFilter(logging.Filter):
             msg = record.getMessage()
         except Exception:  # noqa: BLE001 - exotic records must never break logging
             return True
-        return not ("GET /api/notebooks/" in msg and "/files HTTP/" in msg)
+        if "GET /api/notebooks/" in msg and "/files HTTP/" in msg:
+            return False
+        return not ("GET /api/health HTTP/" in msg and '" 200 ' in msg)
 
 
 def setup_logging():
