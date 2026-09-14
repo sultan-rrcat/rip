@@ -22,6 +22,14 @@ def _resolve_repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _normalize_db_host(value: str) -> str:
+    """Map IPv6-blackholed `localhost` to `127.0.0.1`; keep rest as-is."""
+    text = (value or "").strip()
+    if text.lower() == "localhost":
+        return "127.0.0.1"
+    return text
+
+
 def _to_absolute_model_path(value: str) -> str:
     """Resolve relative BGE paths against the repo root; keep absolute as-is."""
     text = (value or "").strip()
@@ -39,11 +47,12 @@ def _to_absolute_model_path(value: str) -> str:
 
 class Settings(BaseSettings):
     # Database (target; current pre-merge is prototype_rip/trainee @10.10.30.65)
-    db_host: str = "localhost"
+    db_host: str = "127.0.0.1"
     db_port: int = 5432
     db_name: str = "rip"
     db_user: str = "rip"
     db_password: str = "rippass"
+    db_connect_timeout_s: int = 5
 
     # Ollama (replaces LLM_URL=http://10.10.30.77:21434)
     model_provider: str = "ollama"
@@ -67,6 +76,13 @@ class Settings(BaseSettings):
     def _abs_model_path(cls, v: object) -> object:
         if isinstance(v, (str, Path)):
             return _to_absolute_model_path(str(v))
+        return v
+
+    @field_validator("db_host", mode="before")
+    @classmethod
+    def _norm_db_host(cls, v: object) -> object:
+        if isinstance(v, str):
+            return _normalize_db_host(v)
         return v
 
     # Server (keep 8000 to avoid nginx/frontend churn; was 8010 in draft)

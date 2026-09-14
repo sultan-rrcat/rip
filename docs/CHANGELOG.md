@@ -7,6 +7,7 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 ## Unreleased — BGE path resolution
 
 - Relative BGE model paths auto-resolve to repo-root absolute and fail fast with the missing path instead of a cryptic boot crash.
+- `DB_HOST` defaults to `127.0.0.1` (`localhost` auto-normalized), 5s connect timeout, password masked on connect failure.
 
 ## 2026-09-13 — Trivial-plan fallback
 

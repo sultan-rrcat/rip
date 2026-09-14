@@ -10,7 +10,7 @@ Environment traps and behavioral gotchas verified against the live system. Each 
 
 - **Symptom:** every `pg_connection` takes ~21s; runs crawl.
 - **Cause:** `localhost` resolves to IPv6 first and blackholes; the driver falls back to IPv4 only after timeout.
-- **Fix:** host-local runs/tests use `DB_HOST=127.0.0.1` + `HOST_PG_PORT` (e.g. `5433` when host 5432 is taken). In-compose backend keeps `DB_HOST=postgres:5432`.
+- **Fix:** host-local runs/tests use `DB_HOST=127.0.0.1` + `HOST_PG_PORT` (e.g. `5433` when host 5432 is taken). In-compose backend keeps `DB_HOST=postgres:5432`. `localhost` is auto-normalized to `127.0.0.1` and connections fail fast via `DB_CONNECT_TIMEOUT_S=5`.
 
 ### `OLLAMA_BASE_URL` differs host vs compose
 
