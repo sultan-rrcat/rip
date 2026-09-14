@@ -1,15 +1,18 @@
 FROM python:3.11-slim
 
+# Build-time proxy only (ARG, not persisted): apt/pip read the env during
+# RUN. Persisting empty HTTP_PROXY/HTTPS_PROXY breaks LAN traffic
+# (postgres, host.docker.internal for Ollama/Langfuse — see CAVEATS proxy
+# trap); only NO_PROXY defaults are baked for runtime.
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
-ENV HTTP_PROXY=$HTTP_PROXY
-ENV HTTPS_PROXY=$HTTPS_PROXY
-ENV NO_PROXY=$NO_PROXY
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    NO_PROXY=postgres,backend,host.docker.internal,127.0.0.1,localhost \
+    no_proxy=postgres,backend,host.docker.internal,127.0.0.1,localhost
 
 WORKDIR /app
 
@@ -42,4 +45,9 @@ RUN mkdir -p /app/uploads
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Stdlib-only liveness (no curl in slim image); compose gates frontend on it.
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=60s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
+
+# Shell form so $PORT is honored (default 8000, see core/config.py + .env).
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
