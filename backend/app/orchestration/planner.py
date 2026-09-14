@@ -26,9 +26,10 @@ logger = logging.getLogger("orchestration.planner")
 
 # JSON Schema describing the plan shape the model must produce. It must
 # MATCH the Plan/PlanStep pydantic models above — same field names/types.
-# agent_id/tool_id exactly-one-of is enforced TWICE: here via oneOf so
-# Ollama constrained decoding (/api/chat `format`) cannot emit a step with
-# neither (or both), and in the Validator for defense-in-depth.
+# NOTE: no oneOf/anyOf here — Ollama 0.9.3 /api/chat `format` rejects them
+# with 500 "invalid JSON schema in format" (2026-09-14, granite4.1:3b).
+# agent_id/tool_id exactly-one-of is enforced by the Validator (fail-honest
+# PlanValidationError) and by the system prompt rules, not by the schema.
 PLAN_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -47,10 +48,6 @@ PLAN_SCHEMA: dict = {
                     "expected_output_type": {"type": "string"},
                 },
                 "required": ["step_id", "input"],
-                "oneOf": [
-                    {"required": ["agent_id"]},
-                    {"required": ["tool_id"]},
-                ],
             },
         },
     },
