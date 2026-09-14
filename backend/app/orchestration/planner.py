@@ -26,9 +26,9 @@ logger = logging.getLogger("orchestration.planner")
 
 # JSON Schema describing the plan shape the model must produce. It must
 # MATCH the Plan/PlanStep pydantic models above — same field names/types.
-# agent_id and tool_id are exactly-one-of (enforced by the Validator):
-# the schema keeps both optional so a malformed step surfaces as a
-# validation failure, never a schema crash.
+# agent_id/tool_id exactly-one-of is enforced TWICE: here via oneOf so
+# Ollama constrained decoding (/api/chat `format`) cannot emit a step with
+# neither (or both), and in the Validator for defense-in-depth.
 PLAN_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -42,13 +42,15 @@ PLAN_SCHEMA: dict = {
                     "agent_id": {"type": "string"},
                     "tool_id": {"type": "string"},
                     # Allow the LLM to output arbitrary tool-specific keys
-                    "input": {
-                        "type": "object"
-                    },
+                    "input": {"type": "object"},
                     "depends_on": {"type": "array", "items": {"type": "string"}},
                     "expected_output_type": {"type": "string"},
                 },
                 "required": ["step_id", "input"],
+                "oneOf": [
+                    {"required": ["agent_id"]},
+                    {"required": ["tool_id"]},
+                ],
             },
         },
     },
