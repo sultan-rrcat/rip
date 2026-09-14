@@ -135,13 +135,17 @@ app.include_router(health.router)
 def health():
     return {"status": "ok"}
 
-# Enable CORS
-# middleware - code that runs before and after every request
-# CORS - Cross Origin Resource Sharing - Is a mechanism that allows to specify which other origins(domains, ports, protocols) are permitted to access their resources.
+# Enable CORS — origins from settings (plain str, split on ",").
+# Browsers reject wildcard + credentials, so credentials are only
+# enabled for explicit origin lists.
+from app.core.config import settings as _cors_settings  # noqa: E402
+
+_cors_origins = [o.strip() for o in (_cors_settings.cors_origins or "*").split(",") if o.strip()]
+_cors_allow_credentials = "*" not in _cors_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # meaning only http://localhost:5173", "http://10.31.2.94:5173 can make request here.
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
