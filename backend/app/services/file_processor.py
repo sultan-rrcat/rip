@@ -2,14 +2,14 @@
 
 import os
 import asyncio
+from typing import Any
 from app.core.logging import setup_logging
 from app.core.db import pg_connection
-from app.rag.vector_rag import VectorRAG
 from app.core.config import settings
 
 logger = setup_logging()
 
-async def run_rag_pipeline(file_id: str, rag: VectorRAG):
+async def run_rag_pipeline(file_id: str, rag: Any):
     try:
         # ─── Fetch metadata ───
         with pg_connection() as conn:

@@ -30,9 +30,9 @@ init_langfuse()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Deferred: app.rag.vector_rag pulls torch (sentence_transformers). It
-    # also enters via app.routes.files at import time (production installs
-    # torch properly); the singleton itself is still constructed here, once,
+    # Deferred: app.rag.vector_rag pulls torch (sentence_transformers).
+    # routes/services use lazy/Any typing so import app.main never pulls
+    # torch; the singleton itself is still constructed here, once,
     # so rag.query reuses it instead of reloading models per query.
     from app.rag.vector_rag import VectorRAG
     from app.tools.rag_query import bind_rag_singleton

@@ -11,12 +11,11 @@ from fastapi import (
     Depends,
 )
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 from app.core.logging import setup_logging
 from app.core.db import pg_connection
 from app.core.dependencies import get_rag
 from app.services.file_processor import run_rag_pipeline
-from app.rag.pipeline import RagPipeline
 from uuid import uuid4
 import os
 from app.core.config import settings
@@ -168,7 +167,7 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
 
 @router.post("/api/files/{file_id}/process")
 def process_file(
-    file_id: str, background_tasks: BackgroundTasks, rag: RagPipeline = Depends(get_rag)
+    file_id: str, background_tasks: BackgroundTasks, rag: Any = Depends(get_rag)
 ):
     with pg_connection() as conn:
         with conn.cursor() as cur:
