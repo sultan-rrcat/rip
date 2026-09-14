@@ -1,8 +1,7 @@
-# MIGRATION WARNING (vibe-tool: do NOT auto-migrate data): current compose uses
-# service `db` + DB prototype_rip/trainee + volume postgres_data. Target uses
-# `postgres` + rip/rip + volume pgdata. Steps: `docker compose down`,
-# `copy .env.example .env` (update OLLAMA_BASE_URL + BGE paths), then
-# `docker compose up --build postgres`. Old volume orphaned by design.
+# Compose TARGET: service `postgres` + DB rip/rip + volumes pgdata/uploads.
+# Fresh bootstrap: `docker compose down`, `copy .env.example .env`
+# (set OLLAMA_BASE_URL + BGE paths + HOST_PG_PORT), then
+# `docker compose up --build`. `schema.sql` init runs only on empty pgdata.
 services:
   backend:
     build:
@@ -13,11 +12,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      # redis: optional (runs are Postgres-backed, Redis only for queue/cache if needed)
-    env_file: ./.env
+    extra_hosts:
+      # Portable container->host gateway: no-op on Docker Desktop
+      # (Windows/macOS), required on Linux Engine where
+      # host.docker.internal does not resolve (OLLAMA/LANGFUSE_HOST).
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - path: ./.env
+        required: false
     environment:
       DB_HOST: postgres
       DB_PORT: 5432  # container-side; .env HOST_PG_PORT is host-only
+      NO_PROXY: postgres,backend,host.docker.internal,127.0.0.1,localhost
+      no_proxy: postgres,backend,host.docker.internal,127.0.0.1,localhost
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       # Container-path facts (not machine-local): relative ./backend/*
       # defaults assume CWD=rip/, but the image runs from /app/backend.
@@ -31,6 +38,13 @@ services:
     volumes:
       - ./backend/models:/app/backend/models:ro
       - uploads:/app/uploads
+    healthcheck:
+      # stdlib-only probe: image has no curl/wget; /api/health is trivial ok.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
   frontend:
@@ -38,7 +52,14 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   postgres:
