@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from fastapi import APIRouter, HTTPException
 import json
 from app.core.logging import setup_logging
@@ -8,8 +8,10 @@ from app.core.db import pg_connection
 router = APIRouter()
 logger = setup_logging()
 
+MessageRole = Literal["user", "assistant", "error"]
+
 class MessageCreate(BaseModel):
-    role: str
+    role: MessageRole
     text: str
     sources: Optional[Any] = None
 
