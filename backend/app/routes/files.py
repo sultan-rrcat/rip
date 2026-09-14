@@ -31,7 +31,9 @@ class FileCreate(BaseModel):
 
 @router.get("/api/notebooks/{id}/files")
 def get_files(id: str):
-    logger.info(f"Fetching files for notebook: {id}")
+    # Hot poll path (frontend refetches every 2s while processing):
+    # debug only, so INFO logs aren't spammed per poll.
+    logger.debug(f"Fetching files for notebook: {id}")
 
     try:
         with pg_connection() as conn:
@@ -47,7 +49,7 @@ def get_files(id: str):
                 )
                 rows = cur.fetchall()
 
-        logger.info(f"Fetched {len(rows)} files for notebook: {id}")
+        logger.debug(f"Fetched {len(rows)} files for notebook: {id}")
 
         return [{"id": r[0], "name": r[1], "size": r[2], "status": r[3]} for r in rows]
 
