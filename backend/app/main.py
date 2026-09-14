@@ -34,7 +34,6 @@ async def lifespan(app: FastAPI):
     # routes/services use lazy/Any typing so import app.main never pulls
     # torch; the singleton itself is still constructed here, once,
     # so rag.query reuses it instead of reloading models per query.
-    from app.rag.vector_rag import VectorRAG
     from app.tools.rag_query import bind_rag_singleton
 
     logger.info("Initiating ML models...")
