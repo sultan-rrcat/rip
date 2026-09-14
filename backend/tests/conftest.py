@@ -46,7 +46,10 @@ def _apply_schema():
 @pytest.fixture(scope="session")
 def client():
     """TestClient with lifespan executed: real VectorRAG models loaded once."""
-    _apply_schema()
+    try:
+        _apply_schema()
+    except Exception as e:
+        pytest.skip(f"Postgres unreachable, skipping integration tests: {e}")
     from app.main import app
 
     with TestClient(app) as test_client:
