@@ -4,8 +4,11 @@ Turns a plan's per-step outputs into ONE final answer with NO LLM synthesis
 step (merge decision: cuts cost and latency; predictable and testable).
 
 Q36 locked rules:
-- exactly one successful step → its output verbatim;
-- multiple successes → labeled concatenation ("Step <id> (<executor>): ...");
+- exactly one successful step → its output verbatim, EXCEPT chart/SVG
+  outputs which aggregate to a short placeholder (the SVG bytes travel via
+  the SSE `artifacts` event as a download URL and render inline as <img>);
+- multiple successes → labeled concatenation ("Step <id> (<executor>): ...",
+  same SVG placeholder per chart step);
 - a step needing clarification → its question verbatim (never mangled);
 - all steps failed (or nothing executed) → the joined error strings.
 
@@ -22,6 +25,21 @@ from app.orchestration.plan import Plan
 from app.orchestration.results import ExecutionResult
 
 logger = logging.getLogger("orchestration.aggregator")
+
+#: Placeholder replacing raw chart SVG in the user-visible summary. The SVG
+#: bytes stay on StepResult.output (placeholder resolution, traces) and are
+#: delivered as a file via the SSE `artifacts` event; the summary (and the
+#: persisted assistant message) carries only this short text so the chat
+#: never renders raw `<svg>` markup.
+CHART_PLACEHOLDER = "Chart generated — see Artifacts below."
+
+
+def _summarizable(output: str | None) -> str:
+    """Return placeholder when output carries chart SVG, else verbatim."""
+    text = output or ""
+    if "<svg" in text.lower():
+        return CHART_PLACEHOLDER
+    return text
 
 
 class AggregationResult(BaseModel):
@@ -78,13 +96,13 @@ class Aggregator:
                 status="failed", plan_incomplete=True, summary=summary
             )
 
-        # One success: its output IS the answer.
+        # One success: its output IS the answer (charts → placeholder).
         if len(successful) == 1:
-            summary = successful[0].output or ""
-        # Multiple successes: labeled concatenation.
+            summary = _summarizable(successful[0].output)
+        # Multiple successes: labeled concatenation (charts → placeholder).
         else:
             summary = "\n\n".join(
-                f"Step {r.step_id} ({r.agent_id}): {r.output or ''}"
+                f"Step {r.step_id} ({r.agent_id}): {_summarizable(r.output)}"
                 for r in successful
             )
         logger.info(

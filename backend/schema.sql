@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS public.messages
     role        character varying(10) COLLATE pg_catalog."default" NOT NULL,
     text        text COLLATE pg_catalog."default" NOT NULL,
     sources     jsonb,
+    artifacts   jsonb,
     created_at  timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT messages_pkey PRIMARY KEY (message_id),
     CONSTRAINT messages_notebook_id_fkey FOREIGN KEY (notebook_id)
@@ -94,6 +95,19 @@ CREATE TABLE IF NOT EXISTS public.messages
 
 CREATE INDEX IF NOT EXISTS idx_messages_notebook
     ON public.messages (notebook_id);
+
+-- Guarded for re-runnability on pre-existing databases (CAVEATS: compose
+-- init runs once — re-apply schema.sql via psql after DDL changes).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'messages'
+          AND column_name = 'artifacts'
+    ) THEN
+        ALTER TABLE public.messages ADD COLUMN artifacts jsonb;
+    END IF;
+END $$;
 
 -- ─── runs ───────────────────────────────────────────────────────────────────
 -- Ephemeral orchestration units. Persisted to survive page refresh.

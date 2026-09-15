@@ -36,6 +36,16 @@ async def lifespan(app: FastAPI):
     # so rag.query reuses it instead of reloading models per query.
     from app.tools.rag_query import bind_rag_singleton
 
+    # Self-healing DDL for pre-existing volumes: compose Postgres init runs
+    # schema.sql only on an empty pgdata volume, so redeploys with new
+    # columns would 500 until hand-migrated. Fail-soft (warns only).
+    try:
+        from app.routes.messages import ensure_artifacts_column
+
+        ensure_artifacts_column()
+    except Exception:
+        logger.warning("startup DDL ensure failed, continuing", exc_info=True)
+
     logger.info("Initiating ML models...")
     from app.core.config import settings as _settings
 
