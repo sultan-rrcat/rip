@@ -15,6 +15,12 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
   immutable `/assets/` vs no-cache `index.html`; new `frontend/.dockerignore`.
 - Docs: host env canonical `ml_env` (`docs/AGENT.md` §5.1), `HOST_PG_PORT`
   sync + `psql` port fix, compose-init-once + same-origin notes.
+- Docker hardening round 2: frontend `context: ./frontend` fix, `VITE_API_URL`
+  build-arg, `PORT: 8000` pinned with `HOST_BACKEND_PORT`/`HOST_FRONTEND_PORT`
+  host remaps, backend healthcheck grace 180s, Postgres `pg_isready` via
+  container `$POSTGRES_USER`/`$POSTGRES_DB`, `OLLAMA_BASE_URL` interpolated
+  from `.env`, nginx dual `listen` + `127.0.0.1` probes, reranker mount path
+  `models/reranker/bge_reranker_v2_m3`, stale shell `DB_*` shadow documented.
 
 - BGE path resolution (prior unreleased):
   Relative BGE model paths auto-resolve to repo-root absolute and fail fast.
