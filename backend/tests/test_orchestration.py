@@ -231,7 +231,9 @@ class TestAggregator:
                 trace_id="t", step_results=[_ok("1", "aaa"), _fail("2", "boom")]
             ),
         )
-        assert agg.status == "partial" and agg.summary == "aaa"
+        assert agg.status == "partial"
+        assert agg.summary.startswith("aaa")
+        assert "Step 2 (reasoning) failed: boom" in agg.summary
 
     def test_all_failed_joins_errors(self):
         agg = Aggregator().aggregate(

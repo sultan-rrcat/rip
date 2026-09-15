@@ -1,4 +1,4 @@
-"""Phase 3.1 — tools: registry/executor + all 5 tools.
+"""Phase 3.1 — tools: registry/executor + all 7 tools.
 
 Live where possible (plot = stdlib, doc = installed libs, sandbox = docker
 daemon, guarded by skip); fakes where live deps are unavailable (rag.query
@@ -21,7 +21,13 @@ from app.tools.rag_query import RagQueryTool, bind_rag_singleton, rag_query
 from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 EXPECTED_IDS = [
-    "code.sandbox", "doc.generate", "image.generate", "plot.chart", "rag.query",
+    "code.sandbox",
+    "doc.convert",
+    "doc.generate",
+    "image.generate",
+    "notebook.inspect",
+    "plot.chart",
+    "rag.query",
 ]
 
 
@@ -61,10 +67,10 @@ class FakeRAG:
 
 
 class TestRegistry:
-    def test_all_five_registered(self):
+    def test_all_seven_registered(self):
         reg = get_default_tool_registry(rag=FakeRAG())
         assert sorted(t["tool_id"] for t in reg.manifest()) == EXPECTED_IDS
-        assert len(reg) == 5
+        assert len(reg) == 7
 
     def test_all_inherit_tool(self):
         reg = get_default_tool_registry(rag=FakeRAG())
