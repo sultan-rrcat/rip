@@ -123,6 +123,13 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Decision:** (1) Planner rule 6 now requires exactly one `agent_id="reasoning"` step carrying the user request verbatim — never an empty array. (2) Defense in depth: the engine repairs any still-trivial plan to a single `reasoning` step (first registered agent if `reasoning` is absent) before execution.
 - **Consequences:** Conversational turns succeed via one reasoning call. The aggregator's empty-is-failed rule is unchanged (still correct for genuinely unexecutable plans).
 
+## ADR-027: Dynamic document awareness (notebook.inspect + doc.convert)
+
+- **Status:** Accepted
+- **Context:** The planner was blind to uploads: `Planner.plan()` received only the user text + memory, so factual questions over uploaded docs were answered from parametric knowledge (single `reasoning` step) and "convert to docx" had no discovery path — `doc.generate` synthesizes reports from answer text and cannot read files.
+- **Decision:** (1) New read-only `notebook.inspect` tool listing `{file_id, file_name, file_size, file_status}` for the run's notebook (`notebook_id` injected, never LLM-generated). (2) New sandboxed `doc.convert(file_id, target_format=md|docx|pdf)` tool for exact file conversion via the ingest loaders (Docling Markdown export for PDF/DOCX → markdown, then lossless render to md/docx/pdf). `file_id: "*"` converts every ready file in one step; `file_name` alias supported. (3) Thread a static file snapshot (`manager._load_memory` → `orchestrator.run(notebook_context=)` → planner prompt `Notebook documents:` section) plus routing rules: factual/QA with ready docs → `rag.query` first; plural convert-all or single named convert → single `doc.convert` with literal `file_id` from snapshot (or `"*"`) — never placeholders, never `notebook.inspect` chain; `notebook.inspect` is a freshness probe only (single step, output not chained); report-format → `doc.generate`; ambiguous convert or missing format → single `reasoning` counter-question (`needs_clarification`). Placeholder rule hardened: placeholders only carry whole-text step output; dotted access like `{{1.files[0].id}}` is forbidden. `doc.generate` vs `doc.convert` stay separate tools by intent.
+- **Consequences:** Tool set grows 5→7. `doc.convert` v2 supports DOCX→markdown and convert-all via `"*"`, returns per-file `conversions` list; artifacts writer emits stem-named files (`{stepid}_{stem}.md`) and iterates conversions. Aggregator surfaces failures on partial runs. No schema change; File→Artifact only (never mutates `files`).
+
 ---
 
 ## Historical (superseded, one line each)

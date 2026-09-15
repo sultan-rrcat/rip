@@ -4,6 +4,13 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — dynamic document awareness (ADR-027)
+
+- Planner now sees notebook files: factual questions over uploaded docs route to `rag.query` first instead of answering from parametric knowledge.
+- New `notebook.inspect` tool (list files) and `doc.convert` tool (exact file→md/docx/pdf, lossless, no LLM/search). `doc.generate` stays report-only.
+- Ambiguous convert requests ("convert it" with several files, or no format stated) yield a counter-question instead of a guessed conversion.
+- `doc.convert` v2: DOCX support via python-docx, `file_id="*"` convert-all, `file_name` alias, per-file `conversions` list, stem-named artifacts, placeholder ban in planner prompt, aggregator surfaces partial failures.
+
 ## Unreleased — compose lifecycle scripts
 
 - New `scripts/rip.ps1` (+ `scripts/rip.sh` mirror): `up` (always `--build`, waits healthy), `down`, `fresh` (wipes `pgdata` + `uploads` with confirm), `restart`, `rebuild`, `logs`, `ps`/`status`, `migrate` (re-applies `schema.sql` to running postgres, no host `psql` needed), `health`. Scripts clear stale shell `DB_*`, probe `127.0.0.1`, and read host ports from `.env`. Documented in `docs/SETUP.md` §4–5; `docs/AGENT.md` §5 points at them as canonical.
