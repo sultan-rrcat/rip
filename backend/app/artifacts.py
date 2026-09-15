@@ -90,6 +90,30 @@ def _collect_from_data(
 ) -> list[dict]:
     out: list[dict] = []
 
+    # doc.convert convert-all: one entry per source file.
+    conversions = data.get("conversions")
+    if isinstance(conversions, list) and conversions:
+        for entry in conversions:
+            if isinstance(entry, dict):
+                out.extend(
+                    _collect_from_data(entry, run_dir=run_dir, run_id=run_id, step_id=step_id)
+                )
+        return out
+
+    def _stem() -> str:
+        """Filename stem: source file name when present, else the step id."""
+        raw = data.get("source_file_name")
+        if isinstance(raw, str) and raw.strip():
+            stem = raw.strip().rsplit(".", 1)[0]
+            return _safe(stem)
+        return _safe(step_id)
+
+    def _filename(ext: str) -> str:
+        stem = _stem()
+        if stem == _safe(step_id):
+            return f"{stem}.{ext}"
+        return f"{_safe(step_id)}_{stem}.{ext}"
+
     def add(kind: str, mime: str, filename: str, content: bytes) -> None:
         artifact_id = uuid.uuid4().hex
         try:
@@ -125,22 +149,29 @@ def _collect_from_data(
     docx_b64 = data.get("docx_b64")
     if isinstance(docx_b64, str) and docx_b64:
         try:
-            add("document", MIME_DOCX, f"{step_id}.docx", base64.b64decode(docx_b64))
+            add("document", MIME_DOCX, _filename("docx"), base64.b64decode(docx_b64))
         except ValueError:
             logger.warning("artifact docx_b64 undecodable run=%s step=%s", run_id, step_id)
 
     pdf_b64 = data.get("pdf_b64")
     if isinstance(pdf_b64, str) and pdf_b64:
         try:
-            add("document", MIME_PDF, f"{step_id}.pdf", base64.b64decode(pdf_b64))
+            add("document", MIME_PDF, _filename("pdf"), base64.b64decode(pdf_b64))
         except ValueError:
             logger.warning("artifact pdf_b64 undecodable run=%s step=%s", run_id, step_id)
 
     markdown = data.get("markdown")
     if isinstance(markdown, str) and markdown and ("docx_b64" in data or "pdf_b64" in data):
         # Only a file artifact when it rides with rendered binaries; a bare
-        # markdown string is just step output.
-        add("document", MIME_MARKDOWN, f"{step_id}.md", markdown.encode("utf-8"))
+        # markdown string is just step output — EXCEPT doc.convert output,
+        # which is a verbatim file conversion (source_file_id marks it).
+        add("document", MIME_MARKDOWN, _filename("md"), markdown.encode("utf-8"))
+    elif (
+        isinstance(markdown, str)
+        and markdown
+        and isinstance(data.get("source_file_id"), str)
+    ):
+        add("document", MIME_MARKDOWN, _filename("md"), markdown.encode("utf-8"))
 
     rows = data.get("rows")
     if isinstance(rows, list) and "row_count" in data:

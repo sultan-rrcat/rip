@@ -105,6 +105,12 @@ class Aggregator:
                 f"Step {r.step_id} ({r.agent_id}): {_summarizable(r.output)}"
                 for r in successful
             )
+        if failed:
+            # Partial runs must not hide failures behind successes (e.g. an
+            # inspect listing masking failed converts) — append them honestly.
+            summary += "\n\n" + "\n".join(
+                f"Step {r.step_id} ({r.agent_id}) failed: {r.error}" for r in failed
+            )
         logger.info(
             "aggregated plan=%s status=%s successes=%d",
             plan.plan_id, status, len(successful),
