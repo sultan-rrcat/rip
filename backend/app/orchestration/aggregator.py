@@ -7,8 +7,8 @@ Q36 locked rules:
 - exactly one successful step → its output verbatim, EXCEPT chart/SVG
   outputs which aggregate to a short placeholder (the SVG bytes travel via
   the SSE `artifacts` event as a download URL and render inline as <img>);
-- multiple successes → labeled concatenation ("Step <id> (<executor>): ...",
-  same SVG placeholder per chart step);
+- multiple successes → final step output only; step internals are exposed via
+  `step_completed` events and UI collapsible, not in the summary;
 - a step needing clarification → its question verbatim (never mangled);
 - all steps failed (or nothing executed) → the joined error strings.
 
@@ -96,21 +96,38 @@ class Aggregator:
                 status="failed", plan_incomplete=True, summary=summary
             )
 
-        # One success: its output IS the answer (charts → placeholder).
-        if len(successful) == 1:
-            summary = _summarizable(successful[0].output)
-        # Multiple successes: labeled concatenation (charts → placeholder).
+        # Final step output only: use the last step in plan order as the user-facing answer.
+        # Step internals remain available via step_completed events for the UI collapsible.
+        last_step = plan.steps[-1] if plan.steps else None
+        last_result = None
+        if last_step:
+            last_result = next((r for r in result.step_results if r.step_id == last_step.step_id), None)
+
+        if last_result and last_result.status is StepStatus.SUCCESS:
+            summary = _summarizable(last_result.output)
+        elif last_result and last_result.status is StepStatus.FAILURE:
+            # If final step failed, surface its error honestly.
+            summary = f"Step {last_result.step_id} ({last_result.agent_id}) failed: {last_result.error or 'unknown error'}"
+        elif successful:
+            # Fallback: last successful step in plan order
+            result_by_id = {r.step_id: r for r in result.step_results}
+            for step in reversed(plan.steps):
+                r = result_by_id.get(step.step_id)
+                if r and r.status is StepStatus.SUCCESS:
+                    summary = _summarizable(r.output)
+                    break
+            else:
+                summary = ""
         else:
-            summary = "\n\n".join(
-                f"Step {r.step_id} ({r.agent_id}): {_summarizable(r.output)}"
-                for r in successful
-            )
-        if failed:
-            # Partial runs must not hide failures behind successes (e.g. an
-            # inspect listing masking failed converts) — append them honestly.
-            summary += "\n\n" + "\n".join(
-                f"Step {r.step_id} ({r.agent_id}) failed: {r.error}" for r in failed
-            )
+            summary = ""
+
+        # Append failures for partial runs to keep honesty, but keep them separate from main answer.
+        if failed and summary:
+            if not (last_result and last_result.status is StepStatus.FAILURE):
+                summary += "\n\n" + "\n".join(
+                    f"Step {r.step_id} ({r.agent_id}) failed: {r.error}" for r in failed
+                )
+
         logger.info(
             "aggregated plan=%s status=%s successes=%d",
             plan.plan_id, status, len(successful),

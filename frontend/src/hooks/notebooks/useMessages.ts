@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { getMessagesAPI, createMessageAPI } from '@/services/messages'
 import { createRun, subscribeToRunEvents, cancelRun } from '@/services/runs'
 import type { Message, MessageArtifact, Source } from '@/types'
-import type { RunEvent, RunView } from '@/types/runs'
+import type { RunEvent, RunView, PlanStep } from '@/types/runs'
 
 const DEFAULT_MESSAGES: Message[] = [
   {
@@ -39,6 +39,9 @@ export function useMessages(notebook_id: string | undefined) {
   const unsubscribeRef = useRef<(() => void) | null>(null)
   const seenRef = useRef<Set<string>>(new Set())
   const placeholderRef = useRef<string | null>(null)
+  // Step results for collapsible steps view
+  const stepResultsRef = useRef<Record<string, {executor:string,status:string,output:string,delta:string}>>({})
+  const planStepsRef = useRef<PlanStep[] | null>(null)
   // Notebook owning the current subscription. Written in effects/handlers
   // only (never during render) so the SSE callbacks can't go stale.
   const nbRef = useRef<string | undefined>(undefined)
@@ -129,9 +132,16 @@ export function useMessages(notebook_id: string | undefined) {
       switch (evt.type) {
         case 'plan': {
           const planEvt = evt as Extract<RunEvent, { type: 'plan' }>
+          planStepsRef.current = planEvt.steps
+          // initialise step results map
+          const initSteps: Record<string, {executor:string,status:string,output:string,delta:string}> = {}
+          for (const s of planEvt.steps) {
+            initSteps[s.step_id] = { executor: s.executor, status: 'pending', output: '', delta: '' }
+          }
+          stepResultsRef.current = initSteps
           setActiveRun((r) =>
             r && r.runId === runId
-              ? { ...r, goal: planEvt.goal, plan: planEvt.steps }
+              ? { ...r, goal: planEvt.goal, plan: planEvt.steps, stepResults: initSteps }
               : r,
           )
           break
@@ -139,14 +149,28 @@ export function useMessages(notebook_id: string | undefined) {
         case 'delta': {
           const text = eventText(evt.content)
           if (!text) break
-          textRef.current += text
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === messageId
-                ? { ...m, text: textRef.current, status: 'streaming' as const }
-                : m,
-            ),
-          )
+          const stepId = (evt as any).step_id as string | undefined
+          const planSteps = planStepsRef.current
+          const finalStepId = planSteps && planSteps.length > 0 ? planSteps[planSteps.length - 1].step_id : undefined
+          const isFinal = stepId && finalStepId && stepId === finalStepId
+          if (isFinal) {
+            textRef.current += text
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId
+                  ? { ...m, text: textRef.current, status: 'streaming' as const }
+                  : m,
+              ),
+            )
+          } else if (stepId) {
+            // stream into step panel
+            const step = stepResultsRef.current[stepId]
+            if (step) {
+              step.delta += text
+              stepResultsRef.current[stepId] = { ...step, delta: step.delta }
+              setActiveRun(r => r && r.runId === runId ? { ...r, stepResults: { ...stepResultsRef.current } } : r)
+            }
+          }
           break
         }
         case 'summary': {
@@ -201,11 +225,33 @@ export function useMessages(notebook_id: string | undefined) {
             `Something went wrong. Error: ${eventText(evt.error) || eventText(evt.message) || 'unknown'}`,
           )
           break
+        case 'step_started': {
+          const sEvt = evt as any
+          const stepId = sEvt.step_id as string
+          if (stepId && stepResultsRef.current[stepId]) {
+            stepResultsRef.current[stepId] = { ...stepResultsRef.current[stepId], status: 'running' }
+            setActiveRun(r => r && r.runId === runId ? { ...r, stepResults: { ...stepResultsRef.current } } : r)
+          }
+          break
+        }
+        case 'step_completed': {
+          const sEvt = evt as any
+          const stepId = sEvt.step_id as string
+          if (stepId && stepResultsRef.current[stepId]) {
+            stepResultsRef.current[stepId] = {
+              ...stepResultsRef.current[stepId],
+              status: sEvt.status || 'done',
+              output: sEvt.output || stepResultsRef.current[stepId].delta
+            }
+            setActiveRun(r => r && r.runId === runId ? { ...r, stepResults: { ...stepResultsRef.current } } : r)
+          }
+          break
+        }
         case 'cancelled':
           finalizeCancelled()
           break
         default:
-          break // run_started / step_started / step_completed: no UI state
+          break // run_started: no UI state
       }
     },
     [finalizeCompleted, finalizeError, finalizeCancelled],
@@ -220,6 +266,7 @@ export function useMessages(notebook_id: string | undefined) {
       sourcesRef.current = []
       artifactsRef.current = []
       placeholderRef.current = messageId
+      stepResultsRef.current = {}
       localStorage.setItem(activeKey(nb), runId)
       setActiveRun({
         runId,
@@ -229,6 +276,7 @@ export function useMessages(notebook_id: string | undefined) {
         sources: [],
         artifacts: [],
         running: true,
+        stepResults: {},
       })
       setIsRunning(true)
       unsubscribeRef.current?.()

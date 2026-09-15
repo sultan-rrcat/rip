@@ -31,6 +31,13 @@ export type RunEvent =
 // useMessages. The plan/sources/artifacts render inside the run's
 // placeholder assistant bubble; on run_completed the placeholder is swapped
 // for the persisted message and the view is cleared.
+export interface StepResultView {
+  executor: string
+  status: string
+  output: string
+  delta: string
+}
+
 export interface RunView {
   runId: string
   messageId: string
@@ -39,4 +46,5 @@ export interface RunView {
   sources: Source[]
   artifacts: Artifact[]
   running: boolean
+  stepResults?: Record<string, StepResultView>
 }

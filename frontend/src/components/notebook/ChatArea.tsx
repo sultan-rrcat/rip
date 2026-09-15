@@ -97,6 +97,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
                 plan={runView?.plan ?? null}
                 goal={runView?.goal ?? null}
                 artifacts={artifacts}
+                stepResults={runView?.stepResults}
               >
                 <TypingDots />
               </AssistantMessage>
@@ -110,6 +111,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
               plan={runView?.plan ?? null}
               goal={runView?.goal ?? null}
               artifacts={artifacts}
+              stepResults={runView?.stepResults}
             />
           )
         }
@@ -141,6 +143,7 @@ interface AssistantMessageProps {
   plan?: PlanStep[] | null
   goal?: string | null
   artifacts?: Artifact[]
+  stepResults?: Record<string, {executor:string,status:string,output:string,delta:string}>
 }
 
 function AssistantMessage({
@@ -150,6 +153,7 @@ function AssistantMessage({
   plan = null,
   goal = null,
   artifacts = [],
+  stepResults = {},
 }: AssistantMessageProps) {
   return (
     <div className="flex gap-4 items-start">
@@ -186,6 +190,32 @@ function AssistantMessage({
                   </li>
                 ))}
               </ol>
+            </details>
+          )}
+
+          {plan && plan.length > 0 && stepResults && Object.keys(stepResults).length > 0 && (
+            <details className="mt-3 text-[11px] text-gray-500">
+              <summary className="cursor-pointer font-semibold hover:text-gray-700">
+                Steps
+              </summary>
+              <div className="mt-1 ml-2 space-y-2">
+                {plan.map((step) => {
+                  const sr = stepResults[step.step_id]
+                  if (!sr) return null
+                  const content = sr.status === 'running' ? sr.delta || '' : sr.output || sr.delta || ''
+                  const isFinal = step.step_id === plan[plan.length - 1].step_id
+                  return (
+                    <div key={step.step_id} className="border-l-2 border-gray-300 pl-2">
+                      <div className="font-semibold">
+                        Step {step.step_id} · {step.executor} {isFinal ? '· Final' : ''} · {sr.status}
+                      </div>
+                      <div className="whitespace-pre-wrap break-words text-[10px] text-gray-600">
+                        {content}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </details>
           )}
 
