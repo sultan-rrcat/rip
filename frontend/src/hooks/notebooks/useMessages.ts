@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { getMessagesAPI, createMessageAPI } from '@/services/messages'
 import { createRun, subscribeToRunEvents, cancelRun } from '@/services/runs'
-import type { Message, Source } from '@/types'
+import type { Message, MessageArtifact, Source } from '@/types'
 import type { RunEvent, RunView } from '@/types/runs'
 
 const DEFAULT_MESSAGES: Message[] = [
@@ -35,6 +35,7 @@ export function useMessages(notebook_id: string | undefined) {
   // accumulated text, sources, unsubscribe, dedupe set, placeholder id.
   const textRef = useRef('')
   const sourcesRef = useRef<Source[]>([])
+  const artifactsRef = useRef<MessageArtifact[]>([])
   const unsubscribeRef = useRef<(() => void) | null>(null)
   const seenRef = useRef<Set<string>>(new Set())
   const placeholderRef = useRef<string | null>(null)
@@ -68,6 +69,7 @@ export function useMessages(notebook_id: string | undefined) {
         'assistant',
         textRef.current,
         sourcesRef.current,
+        artifactsRef.current,
       )
       localStorage.setItem(persistedKey(nb), runId)
       localStorage.removeItem(activeKey(nb))
@@ -177,10 +179,17 @@ export function useMessages(notebook_id: string | undefined) {
         }
         case 'artifacts': {
           const artEvt = evt as Extract<RunEvent, { type: 'artifacts' }>
+          artifactsRef.current = [...artifactsRef.current, ...artEvt.artifacts]
+          const accumulated = artifactsRef.current
           setActiveRun((r) =>
             r && r.runId === runId
               ? { ...r, artifacts: [...r.artifacts, ...artEvt.artifacts] }
               : r,
+          )
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId ? { ...m, artifacts: accumulated } : m,
+            ),
           )
           break
         }
@@ -209,6 +218,7 @@ export function useMessages(notebook_id: string | undefined) {
       seenRef.current = new Set()
       textRef.current = initialText
       sourcesRef.current = []
+      artifactsRef.current = []
       placeholderRef.current = messageId
       localStorage.setItem(activeKey(nb), runId)
       setActiveRun({

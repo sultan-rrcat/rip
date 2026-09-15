@@ -24,11 +24,19 @@ export interface Source {
   section: string
 }
 
+export interface MessageArtifact {
+  artifact_id: string
+  kind: string
+  filename: string
+  url: string
+}
+
 export interface Message {
   id: string
   role: MessageRole
   text: string
   sources: Source[]
+  artifacts?: MessageArtifact[]
   created_at?: string
   status?: MessageStatus
 }

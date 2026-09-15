@@ -8,6 +8,7 @@ import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import type { Message, Source } from '@/types'
 import type { Artifact, PlanStep, RunView } from '@/types/runs'
+import ArtifactItem, { stripSvgFromText } from '@/components/notebook/ChartArtifact'
 
 interface ChatAreaProps {
   messages: Message[]
@@ -77,6 +78,17 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
         const runView =
           activeRun && activeRun.messageId === message.id ? activeRun : null
         if (message.role === 'assistant') {
+          // Merge persisted message artifacts (reload-safe) with the
+          // in-flight run's artifacts, deduped by artifact_id.
+          const seen = new Set<string>()
+          const artifacts: Artifact[] = [
+            ...(message.artifacts ?? []),
+            ...(runView?.artifacts ?? []),
+          ].filter((a) => {
+            if (seen.has(a.artifact_id)) return false
+            seen.add(a.artifact_id)
+            return true
+          })
           return (
             <AssistantMessage
               key={message.id}
@@ -84,7 +96,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
               sources={message.sources}
               plan={runView?.plan ?? null}
               goal={runView?.goal ?? null}
-              artifacts={runView?.artifacts ?? []}
+              artifacts={artifacts}
             />
           )
         }
@@ -143,7 +155,7 @@ function AssistantMessage({
               remarkPlugins={[remarkGfm]}
               components={markdownComponents}
             >
-              {text}
+              {stripSvgFromText(text)}
             </ReactMarkdown>
           )}
 
@@ -169,17 +181,10 @@ function AssistantMessage({
               <p className="text-[11px] font-semibold text-gray-500 mb-1">
                 Artifacts
               </p>
-              <ul className="space-y-0.5">
+              <ul className="space-y-2">
                 {artifacts.map((a) => (
                   <li key={a.artifact_id} className="text-[11px]">
-                    <a
-                      className="text-blue-600 hover:underline"
-                      href={a.url}
-                      download={a.filename}
-                    >
-                      {a.filename}
-                    </a>
-                    <span className="text-gray-400"> · {a.kind}</span>
+                    <ArtifactItem artifact={a} />
                   </li>
                 ))}
               </ul>
