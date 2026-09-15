@@ -68,6 +68,7 @@ class OrchestrationState(TypedDict):
     request_text: str
     notebook_id: str | None
     context: str | None
+    notebook_context: str | None
     trace_id: str
     plan: Plan | None
     plan_error: str | None
@@ -92,7 +93,11 @@ def _make_plan_node(
             input=truncate(state["request_text"], 2000),
         ) as plan_obs:
             try:
-                plan = planner.plan(state["request_text"], context=state["context"])
+                plan = planner.plan(
+                    state["request_text"],
+                    context=state["context"],
+                    notebook_context=state.get("notebook_context"),
+                )
                 validator.validate(plan)
                 if plan.is_trivial():
                     # Defensive fallback: the planner prompt forbids empty

@@ -83,6 +83,7 @@ class Orchestrator:
         on_event: Callable[[dict], None] | None = None,
         context: str | None = None,
         cancel_event: threading.Event | None = None,
+        notebook_context: str | None = None,
     ) -> OrchestrationResult:
         logger.info("run started notebook=%s text=%.120s", notebook_id, request_text)
         trace_id = str(uuid.uuid4())
@@ -108,6 +109,7 @@ class Orchestrator:
                 "request_text": request_text,
                 "notebook_id": notebook_id,
                 "context": context,
+                "notebook_context": notebook_context,
                 "trace_id": trace_id,
                 "plan": None,
                 "plan_error": None,

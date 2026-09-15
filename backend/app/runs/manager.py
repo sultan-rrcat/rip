@@ -284,7 +284,7 @@ class RunManager:
     def _run_traced(self, record: RunRecord, run_obs) -> None:
         """Worker body inside the trace root (split for readability)."""
         try:
-            context, summary_update = self._load_memory(record)
+            context, summary_update, notebook_context = self._load_memory(record)
             try:
                 result = self._orchestrator.run(
                     record.message,
@@ -292,6 +292,7 @@ class RunManager:
                     on_event=lambda d: self._on_event(record, d),
                     context=context,
                     cancel_event=record.cancel_event,
+                    notebook_context=notebook_context,
                 )
             except OrchestrationError as e:
                 if record.cancel_event.is_set():
@@ -393,11 +394,16 @@ class RunManager:
             )
             return cur.fetchone() is not None
 
-    def _load_memory(self, record: RunRecord) -> tuple[str | None, tuple | None]:
-        """Read summary + messages; return (prompt context, persist update).
+    def _load_memory(self, record: RunRecord) -> tuple[str | None, tuple | None, str | None]:
+        """Read summary + messages + file inventory.
 
-        The update is `(new_summary, new_count, old_summary, old_count)` for
-        `_persist_memory`, or None when folding failed / nothing changed.
+        Returns (prompt context, persist update, notebook file snapshot).
+        The snapshot is e.g. "2 file(s): a.pdf (ready), b.pdf (processing)"
+        or "(no documents)". Snapshot failures degrade to None, never kill
+        the run.
+
+        The update is `(new_summary, new_count)` for `_persist_memory`, or
+        None when folding failed / nothing changed.
         The user's just-sent message is NOT appended here: the frontend POSTs
         it before creating the run, and re-adding it would double-count on
         the race where that POST already landed.
@@ -420,18 +426,40 @@ class RunManager:
         stored = nb["conversation_summary"] if nb else None
         folded = int(nb["summary_message_count"] or 0) if nb else 0
         messages = [{"role": r["role"], "content": r["text"]} for r in rows]
+        notebook_context = self._load_file_snapshot(record.notebook_id)
         try:
             memory, new_summary, new_count = build_memory_context(
                 self._provider, stored, messages, folded_count=folded
             )
         except Exception:
             logger.exception("run %s: memory fold failed, continuing bare", record.run_id)
-            return None, None
+            return None, None, notebook_context
         prompt = memory.as_prompt() or None
         update = None
         if new_summary != stored or new_count != folded:
             update = (new_summary, new_count)
-        return prompt, update
+        return prompt, update, notebook_context
+
+    def _load_file_snapshot(self, notebook_id: str) -> str | None:
+        """Best-effort file inventory string for the planner (None on failure)."""
+        try:
+            with pg_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT file_id, file_name, file_status FROM files "
+                    "WHERE notebook_id = %s ORDER BY created_at ASC",
+                    (str(notebook_id),),
+                )
+                rows = cur.fetchall()
+        except Exception:
+            logger.exception("file snapshot failed, continuing without it")
+            return None
+        if not rows:
+            return "(no documents)"
+        parts = []
+        for r in rows:
+            fid, name, status = str(r[0]), r[1] or "?", r[2] or "?"
+            parts.append(f"{name} [{status}] id={fid}")
+        return f"{len(parts)} file(s): " + "; ".join(parts)
 
     def _persist_memory(self, record: RunRecord, update: tuple | None) -> None:
         if not update:
