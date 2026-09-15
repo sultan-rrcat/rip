@@ -64,8 +64,10 @@ def get_default_tool_registry(
     # Local imports: keeps `app.tools.registry` importable without pulling
     # tool modules (and their settings/deps) until the factory runs.
     from app.tools.code_sandbox import CodeSandboxTool
+    from app.tools.doc_convert import DocConvertTool
     from app.tools.doc_generate import DocGenerateTool
     from app.tools.image_generate import ImageGenerateTool
+    from app.tools.notebook_inspect import NotebookInspectTool
     from app.tools.plot_chart import PlotChartTool
     from app.tools.rag_query import RagQueryTool
 
@@ -73,6 +75,8 @@ def get_default_tool_registry(
     registry.register(RagQueryTool(rag=rag))
     registry.register(PlotChartTool())
     registry.register(DocGenerateTool())
+    registry.register(DocConvertTool())
+    registry.register(NotebookInspectTool())
     registry.register(CodeSandboxTool())
     registry.register(ImageGenerateTool(provider=provider))
     return registry
