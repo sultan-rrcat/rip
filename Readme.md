@@ -42,11 +42,11 @@ docs/          ARCHITECTURE.md, SETUP.md, CAVEATS.md, ADR.md, AGENT.md,
 ## Quickstart
 
 1. Read `docs/SETUP.md` (environment, database, Ollama, compose).
-2. `copy .env.example .env`, then `docker compose up postgres backend frontend`.
+2. `copy .env.example .env`, edit `OLLAMA_BASE_URL` for your run mode (see SETUP §4), then `docker compose up --build postgres backend frontend` (`--build` required: `VITE_API_URL` is baked at image build).
 3. Frontend dev: `cd frontend && npm install && npm run dev`.
 4. Backend dev: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`.
 
-Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}`.
+Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (`HOST_BACKEND_PORT` when remapped).
 
 ---
 
