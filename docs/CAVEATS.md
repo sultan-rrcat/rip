@@ -36,17 +36,43 @@ Environment traps and behavioral gotchas verified against the live system. Each 
 - **Cause:** torch/CUDA teardown on Windows; process still exits 0.
 - **Fix:** ignore when exit code is 0 and all tests report pass.
 
-### In-container PDF ingest needs Java
+### In-container PDF ingest needed Java (resolved in image)
 
-- **Symptom:** PDF uploads stall in `processing` inside compose while host-local works.
-- **Cause:** the Docling path needs a Java runtime absent from the image.
-- **Fix:** install a JRE in `backend/Dockerfile` or pre-process PDFs host-side.
+- **Symptom (pre-fix images):** PDF uploads stall in `processing` inside compose while host-local works.
+- **Cause:** the Docling path needs a Java runtime, absent from older images.
+- **Fix:** the image now installs `default-jre-headless` (`backend/Dockerfile`, `JAVA_HOME` set, `java -version` verified at build). No action needed on current builds — if uploads still stall, check BGE weights and Ollama reachability first.
 
 ### Compose Postgres init runs once
 
 - **Symptom:** `backend/schema.sql` changes have no effect after `docker compose up`.
 - **Cause:** the `./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro` mount runs only on an empty `pgdata` volume.
 - **Fix:** re-apply via `psql "host=127.0.0.1 port=<HOST_PG_PORT> ..."` or `docker compose down -v` for a fresh bootstrap (deletes data).
+
+### Stale shell `DB_*` exports shadow `.env` for Postgres init
+
+- **Symptom:** `FATAL: database "trainee" does not exist` every 5s, or the backend can't connect though `.env` says `rip/rip/rippass`.
+- **Cause:** `POSTGRES_*` in `docker-compose.yml` interpolate from the *shell* (`${DB_USER:-rip}`), where prototype-era `DB_*` exports win over the project `.env`. The backend instead reads `.env` via `env_file`, so the two sides disagree. The healthcheck now probes `$POSTGRES_USER`/`$POSTGRES_DB` (immune), but init still needs a clean shell.
+- **Fix:** in the terminal you run compose from, drop the leftovers (session-only): `Remove-Item Env:DB_HOST, Env:DB_NAME, Env:DB_USER, Env:DB_PASSWORD, Env:DB_PORT`. Then `docker compose down -v` + `up` for a fresh init. Durable fix: remove them from `$PROFILE`/activate scripts.
+
+### Host port already allocated (demo box runs many stacks)
+
+- **Symptom:** `Bind for 0.0.0.0:8000 failed: port is already allocated` (firewatch holds 8000; athena holds 5173).
+- **Fix:** container ports stay fixed; remap the host side only: `$env:HOST_BACKEND_PORT=8005; $env:HOST_FRONTEND_PORT=5174; docker compose up -d`.
+
+### Container healthchecks (what probes what)
+
+| Service | Probe | Timing |
+|---|---|---|
+| `postgres` | `pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"` (container env, immune to shell `DB_*` shadow) | `interval 5s`, `retries 10`, no `start_period` |
+| `backend` | stdlib `urllib` `GET http://127.0.0.1:8000/api/health` (no curl in slim image) | `interval 10s`, `retries 8`, `start_period 180s` — lifespan blocks serving until BGE weights load, so the grace is generous |
+| `frontend` | `wget --spider http://127.0.0.1/healthz` | `interval 15s`, `retries 3`, `start_period 30s` |
+
+Gating chains `postgres → backend → frontend`. Probes use `127.0.0.1`, never `localhost`: BusyBox `wget` resolves `::1` first and nginx would refuse (same IPv6-first trap as Postgres on Windows). The backend probe targets the fixed container port `8000` — compose pins `PORT=8000`, so they agree by construction.
+
+### `OLLAMA_BASE_URL` interpolates, `LANGFUSE_HOST` is pinned
+
+- `OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}` — your `.env` value flows into the container; the gateway is only the fallback. Host Ollama vs LAN remote is a `.env` edit, not a compose edit.
+- `LANGFUSE_HOST: http://host.docker.internal:3002` is hard-pinned — the `.env` value (`http://localhost:3002`, correct for host-local runs) is ignored in compose. Asymmetry is intentional (Langfuse UI address is host-published; see SETUP §4) but easy to misread.
 
 ### Frontend is same-origin only
 
