@@ -35,8 +35,16 @@ The single retrieval path: vector similarity + Postgres full-text search combine
 _Avoid_: GraphRAG, AgenticRAG, retrieval pipeline
 
 **rag.query**:
-The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=8)` reusing the lifespan `VectorRAG` singleton. On completion, the run worker emits an SSE `sources` event (Q32).
+The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=8)` reusing the lifespan `VectorRAG` singleton. On completion, the run worker emits an SSE `sources` event (Q32). Never used for verbatim file conversion.
 _Avoid_: Search, retrieve, lookup
+
+**notebook.inspect**:
+The tool that lists a notebook's files (`{file_id, file_name, file_size, file_status}`). `notebook_id` injected like `rag.query`; called when the request refers to "this document" or the planner's file snapshot may be stale.
+_Avoid_: files.list
+
+**doc.convert**:
+The tool that converts one uploaded PDF byte-for-byte to md, docx or pdf (lossless, no LLM, no search). Called as `doc.convert(file_id, target_format)`; `file_id` comes from the notebook snapshot or `notebook.inspect`, never invented. Distinct from `doc.generate` (report synthesis).
+_Avoid_: convert, export
 
 **Chunk**:
 A segment of a parsed document, split on Markdown headers (`#/##/###`). Each chunk carries metadata (source file, H1/H2/H3 heading) and a vector.
@@ -57,7 +65,7 @@ A named capability (reasoning, coding, vision). Agents execute steps that requir
 _Avoid_: AgentPlugin, model, brain
 
 **Tool**:
-A named function that performs a specific action: `rag.query` (search documents), `plot.chart` (make charts), `doc.generate` (make documents), `code.sandbox` (run code), `image.generate` (make images). Tools receive structured input and return structured output.
+A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `doc.generate` (make reports from answer text), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless), `code.sandbox` (run code), `image.generate` (make images). Tools receive structured input and return structured output.
 _Avoid_: ToolPlugin, function, capability
 
 **Plan DAG**:

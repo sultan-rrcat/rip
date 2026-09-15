@@ -22,8 +22,8 @@ routes/notebooks.py, files.py, messages.py
 services/chat.py, file_processor.py
 providers/base.py, ollama.py, streaming.py, tracing.py
 agents/base.py, registry.py, reasoning.py, coding.py, vision.py
-tools/base.py, registry.py, executor.py, rag_query.py, plot_chart.py,
-  doc_generate.py, code.sandbox.py, image_generate.py
+tools/base.py, registry.py, executor.py, rag_query.py, notebook_inspect.py,
+  plot_chart.py, doc_generate.py, doc_convert.py, code.sandbox.py, image_generate.py
 orchestration/plan.py, planner.py, validator.py, aggregator.py,
   engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
 store/runs.py        Postgres CRUD for runs + run_events (no deltas)

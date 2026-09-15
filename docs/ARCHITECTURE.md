@@ -21,9 +21,10 @@ Offline, single-codebase research assistant: document RAG + multi-agent orchestr
 │  │ Docling → chunk   │◄───│ Plan → Execute DAG → Aggregate │  │
 │  │ BGE-M3 embed +    │    │ Agents: reasoning, coding,     │  │
 │  │ hybrid search +   │    │   vision                       │  │
-│  │ BGE rerank        │    │ Tools: rag.query, plot.chart,  │  │
-│  └──────────────────┘    │   doc.generate, code.sandbox,  │  │
-│                           │   image.generate               │  │
+│  │ BGE rerank        │    │ Tools: rag.query, notebook.inspect,│  │
+│  └──────────────────┘    │   doc.generate, doc.convert,     │  │
+│                           │   plot.chart, code.sandbox,      │  │
+│                           │   image.generate                 │  │
 │                           │ Provider: Ollama (direct)      │  │
 │                           └────────────────────────────────┘  │
 │                                                               │
@@ -55,8 +56,8 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `providers/base.py`, `ollama.py`, `streaming.py` | `ModelProvider` contract, Ollama OpenAI-compat client, `<think>` filtering |
 | `providers/tracing.py` | `wrap_provider()` — records `llm.generate[.stream|_structured]` generations (no-op when Langfuse off) |
 | `agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` | Agent contract + fixed 3-agent set |
-| `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 5-tool set, direct execution (no approval gate) |
-| `tools/rag_query.py`, `plot_chart.py`, `doc_generate.py`, `code_sandbox.py`, `image_generate.py` | The five tools |
+| `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 7-tool set, direct execution (no approval gate) |
+| `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py`, `code_sandbox.py`, `image_generate.py` | The seven tools |
 | `orchestration/plan.py`, `results.py` | Plan DAG models, step/execution results |
 | `orchestration/planner.py` | Sole planning LLM call (`generate_structured` vs `PLAN_SCHEMA`) |
 | `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget |
@@ -91,7 +92,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 
 1. Frontend persists the user message: `POST /api/notebooks/{id}/messages`.
 2. Frontend creates the run: `POST /v1/runs {notebook_id, message}` → `202 {run_id}` (bare JSON, no envelope).
-3. Worker loads `conversation_summary` + messages → `build_memory_context()` → `orchestrator.run(..., context=...)`.
+3. Worker loads `conversation_summary` + messages + file snapshot → `build_memory_context()` → `orchestrator.run(..., context=..., notebook_context=...)`.
 4. **Planner** emits `{goal, steps}`; **Validator** checks it. Empty plans are repaired to a single `reasoning` step (ADR-026); malformed plans fail honestly via `plan_error → END`.
 5. **Engine** executes the DAG (`notebook_id` injected into tool inputs, never LLM-generated). `rag.query` completions emit SSE `sources`.
 6. **Aggregator** assembles the answer deterministically: 1 success → verbatim (chart/SVG outputs → placeholder `Chart generated — see Artifacts below.`); N successes → labeled concat (same placeholder per chart step); clarification → verbatim; all-failed → joined errors.
