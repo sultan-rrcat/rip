@@ -69,10 +69,10 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-019: File-based artifacts
 
-- **Status:** Accepted
+- **Status:** Accepted (path + rendering amended — chart SVG fix)
 - **Context:** Tool outputs must survive refresh as downloadable files scoped to notebooks.
-- **Decision:** Write to `{upload_dir}/{notebook_id}/artifacts/{artifact_id}/{filename}`; SSE `artifacts` carries download URLs, never inline base64.
-- **Consequences:** Durable downloads; requires a download route under `/api/`.
+- **Decision:** Write to `{upload_dir}/{notebook_id}/artifacts/{run_id}/{step_id}/{filename}` plus per-run `index.json`; SSE `artifacts` carries download URLs, never inline base64. Served by `GET /v1/runs/{id}/artifacts/{artifact_id}`.
+- **Consequences:** Durable downloads. Charts (`kind: "chart"`, `image/svg+xml`) render inline in chat as `<img>` over the same URL — raw SVG markup is never injected into the DOM. Chart refs are persisted on the assistant `messages.artifacts` (frontend-owned) so previews survive reload.
 
 ## ADR-020: Structural SSE persistence (no delta replay)
 
@@ -97,10 +97,10 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-023: Deterministic aggregator (no LLM synthesis)
 
-- **Status:** Accepted
+- **Status:** Accepted (SVG exception — chart fix)
 - **Context:** LLM synthesis per run costs latency/money and is hard to test.
-- **Decision:** 1 success → verbatim; N successes → labeled concatenation; clarification → verbatim; all-failed → joined errors.
-- **Consequences:** Predictable and testable; less polish on multi-step synthesis.
+- **Decision:** 1 success → verbatim; N successes → labeled concatenation; clarification → verbatim; all-failed → joined errors. Exception: step outputs carrying chart SVG (`<svg`) aggregate to the placeholder `Chart generated — see Artifacts below.` — the SVG bytes stay on `StepResult.output` and travel via the SSE `artifacts` event.
+- **Consequences:** Predictable and testable; less polish on multi-step synthesis. Chat and persisted messages never store multi-KB raw SVG.
 
 ## ADR-024: Admin health stub
 

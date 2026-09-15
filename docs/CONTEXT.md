@@ -81,7 +81,7 @@ Coordinator for the full run lifecycle: Planner → Engine → Aggregator → Me
 _Avoid_: Coordinator, conductor, manager
 
 **Artifact**:
-A file produced by a tool that persists beyond the chat response (chart, document, image). Stored at `{UPLOAD_DIR}/{notebook_id}/artifacts/{artifact_id}/{filename}`; surfaced via SSE `artifacts` event as download URLs (Q34). Distinct from `File` (user upload).
+A file produced by a tool that persists beyond the chat response (chart, document, image). Stored at `{UPLOAD_DIR}/{notebook_id}/artifacts/{run_id}/{step_id}/{filename}` (plus per-run `index.json`); surfaced via SSE `artifacts` event as download URLs (Q34). Charts (`kind: "chart"`, `image/svg+xml`) render inline in chat as `<img>` over the same URL — raw SVG markup is never injected into the DOM and never stored in the user-visible summary. Chart refs are also persisted on the assistant `messages.artifacts` by the frontend so previews survive reload. Distinct from `File` (user upload).
 _Avoid_: Output, result, file
 
 **File**:
@@ -139,9 +139,9 @@ _Avoid_: Tracing, monitoring, analytics
 3. Run worker loads `conversation_summary` + messages → `build_memory_context()` → starts orchestration with `context=`
 4. **Planner** generates a **goal** and plan; **Engine** executes **steps** (parallel where possible)
 5. `rag.query` receives `notebook_id` from the Run; worker emits SSE **sources** on completion
-6. **Aggregator** assembles step outputs (deterministic, Q36)
+6. **Aggregator** assembles step outputs (deterministic, Q36); chart/SVG step outputs aggregate to a short placeholder — the SVG bytes travel via the SSE **artifacts** event only
 7. Worker persists updated `conversation_summary` if memory folded new turns
-8. SSE **summary** (final answer) + **run_completed**; frontend persists assistant **message** with sources
+8. SSE **artifacts** (download URLs; charts render inline as `<img>`) + **summary** (final answer) + **run_completed**; frontend persists assistant **message** with sources + artifacts
 9. Structural SSE events persisted to `run_events`; `delta` tokens live-only
 
 ### conversation_summary Generation

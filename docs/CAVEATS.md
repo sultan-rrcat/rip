@@ -46,7 +46,7 @@ Environment traps and behavioral gotchas verified against the live system. Each 
 
 - **Symptom:** `backend/schema.sql` changes have no effect after `docker compose up`.
 - **Cause:** the `./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro` mount runs only on an empty `pgdata` volume.
-- **Fix:** re-apply via `psql "host=127.0.0.1 port=<HOST_PG_PORT> ..."` or `docker compose down -v` for a fresh bootstrap (deletes data).
+- **Fix:** re-apply via `psql "host=127.0.0.1 port=<HOST_PG_PORT> ..."` or `docker compose down -v` for a fresh bootstrap (deletes data). For additive column changes the backend also self-heals: lifespan runs idempotent `ADD COLUMN IF NOT EXISTS` migrations (fail-soft), and the messages routes serve the legacy shape when the column is absent — so chat survives even before the DDL lands.
 
 ### Stale shell `DB_*` exports shadow `.env` for Postgres init
 

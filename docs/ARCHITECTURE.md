@@ -81,7 +81,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `notebooks` | `notebook_id`, `name`, `conversation_summary` (internal memory), `summary_message_count` |
 | `files` | `file_id`, `notebook_id`, `file_status` (`uploading/processing/ready/error`) |
 | `embeddings` | `file_id`, `chunk_text`, `embedding vector(1024)` + HNSW, `metadata`, `text_search tsvector` + GIN |
-| `messages` | `notebook_id`, `role` (`user/assistant/error`), `text`, `sources` — **frontend-owned, backend never writes** |
+| `messages` | `notebook_id`, `role` (`user/assistant/error`), `text`, `sources`, `artifacts` (chart/file refs for inline preview) — **frontend-owned, backend never writes** |
 | `runs` | `id`, `notebook_id`, `status` (`pending/running/completed/failed/cancelled`), `goal`, `plan`, `result` |
 | `run_events` | `run_id`, `seq` (gap-free, structural only), `event_type`, `payload` |
 
@@ -94,8 +94,8 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 3. Worker loads `conversation_summary` + messages → `build_memory_context()` → `orchestrator.run(..., context=...)`.
 4. **Planner** emits `{goal, steps}`; **Validator** checks it. Empty plans are repaired to a single `reasoning` step (ADR-026); malformed plans fail honestly via `plan_error → END`.
 5. **Engine** executes the DAG (`notebook_id` injected into tool inputs, never LLM-generated). `rag.query` completions emit SSE `sources`.
-6. **Aggregator** assembles the answer deterministically: 1 success → verbatim; N successes → labeled concat; clarification → verbatim; all-failed → joined errors.
-7. Worker persists updated memory, writes the terminal run row, emits `summary` + `run_completed`. Frontend persists the assistant message once.
+6. **Aggregator** assembles the answer deterministically: 1 success → verbatim (chart/SVG outputs → placeholder `Chart generated — see Artifacts below.`); N successes → labeled concat (same placeholder per chart step); clarification → verbatim; all-failed → joined errors.
+7. Worker persists updated memory, writes the terminal run row, emits `artifacts` (download URLs; charts render inline as `<img>`) + `summary` + `run_completed`. Frontend persists the assistant message once, with sources + artifacts.
 8. `GET /v1/runs/{id}/events` replays persisted events (`id:<seq>`, dedupe by `seq`); `delta` frames are live-only with fractional seqs. `POST /v1/runs/{id}/cancel` cooperatively cancels.
 
 SSE vocabulary: `run_started · plan · step_started · delta · step_completed · sources · summary · artifacts · run_completed · error · cancelled`.

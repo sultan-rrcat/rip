@@ -56,20 +56,40 @@ only on an empty `pgdata` volume; re-apply via `psql` after DDL changes.
 
 ## 4. Run (Required: Postgres + Ollama. Optional: Langfuse)
 
+Use the lifecycle scripts (`scripts/rip.ps1` on Windows, `scripts/rip.sh`
+on Linux/macOS — same commands). On first run the script copies
+`.env.example → .env` for you; edit it for your run mode (host-local
+Ollama stays `OLLAMA_BASE_URL=http://localhost:11434`; for compose point
+it at the host gateway or a LAN remote — the `.env` value flows into the
+container, gateway is only the fallback when unset), then run again:
+
 ```powershell
-# After `copy .env.example .env` (§2), edit .env for your run mode: host-local Ollama stays
-# OLLAMA_BASE_URL=http://localhost:11434; for compose point it at the
-# host gateway (http://host.docker.internal:11434) or a LAN remote
-# (e.g. http://10.10.30.77:21434) — the .env value flows into the
-# container, gateway is only the fallback when .env leaves it unset.
-docker compose up --build postgres backend frontend
-# --build matters: VITE_API_URL is baked at image build; plain `up`
-# reuses the old bake. Langfuse runs as a separate stack (see CAVEATS);
-# backend reaches it via host gateway
-# (`extra_hosts: host.docker.internal:host-gateway`, portable Windows/Linux).
-# Compose pins PORT=8000 (do not override); health gating chains
-# postgres → backend → frontend (frontend starts only when backend is healthy).
+scripts/rip.ps1 up
+# scripts/rip.sh up   (Linux/macOS)
 ```
+
+| Command | Effect |
+|---|---|
+| `up [services]` | `up -d --build` + wait healthy + URLs (`--build` is the default: `VITE_API_URL` is baked at image build, so plain `up` reuses the old bake) |
+| `down` | Stop/remove containers (volumes kept) |
+| `fresh [-y]` | **Wipe `pgdata` + `uploads`** (`down -v`), then `up --build` (asks unless `-y`) |
+| `restart [service]` | Bounce without rebuild |
+| `rebuild [service]` | `up -d --build` scoped (default: all) |
+| `logs [service] [--tail N]` | Follow logs |
+| `ps` / `status` | Service table |
+| `migrate` | Re-apply `backend/schema.sql` to the running postgres (no host `psql` needed) |
+| `health` | Probe backend `/api/health`, frontend `/healthz`, postgres; print URLs |
+| `help` | Usage |
+
+The scripts clear stale shell `DB_*` exports before every compose call
+(they shadow `.env` for `POSTGRES_*` interpolation — see CAVEATS), probe
+`127.0.0.1` (never bare `localhost`), and read host ports from
+`HOST_*_PORT` in `.env`. Langfuse runs as a separate stack (see CAVEATS);
+backend reaches it via host gateway
+(`extra_hosts: host.docker.internal:host-gateway`, portable Windows/Linux).
+Compose pins container `PORT=8000` (do not override; `.env` `PORT` only
+affects host-local runs); health gating chains
+postgres → backend → frontend (frontend starts only when backend is healthy).
 
 Local alternative:
 
@@ -85,9 +105,10 @@ Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see `vite.config.
 
 ## 5. Smoke test
 
+0. `scripts/rip.ps1 health` — backend, frontend, postgres all OK.
 1. Create notebook, upload PDF → `ready`.
 2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.
-3. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta* (live)→step_completed→sources?→summary→run_completed`.
+3. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta* (live)→step_completed→sources?→artifacts?→summary→run_completed`.
 4. Confirm `rag.query` chunks + Ollama answer + `sources` SSE event; notebook `conversation_summary` updates when context window ~70% full.
 
 ## 6. Tests & lint
@@ -100,7 +121,7 @@ Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see `vite.config.
 
 ## Troubleshooting
 
-- **DB connect fail** → check `DB_*`, pgvector extension, `schema.sql` applied.
+- **DB connect fail** → check `DB_*`, pgvector extension, `scripts/rip.ps1 migrate` to re-apply `schema.sql` (compose init runs once — see CAVEATS).
 - **Ollama empty** → `OLLAMA_BASE_URL` reachable (host-local: `http://localhost:11434`; in-compose: your `.env` value — host gateway or LAN remote, gateway is the fallback), planner model pulled.
 - **Startup crash (models)** → BGE paths wrong; fix env.
 - **Upload stuck `processing`** → background `run_rag_pipeline` has no retry; re-`POST /process`.

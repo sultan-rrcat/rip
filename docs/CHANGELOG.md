@@ -4,6 +4,16 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — compose lifecycle scripts
+
+- New `scripts/rip.ps1` (+ `scripts/rip.sh` mirror): `up` (always `--build`, waits healthy), `down`, `fresh` (wipes `pgdata` + `uploads` with confirm), `restart`, `rebuild`, `logs`, `ps`/`status`, `migrate` (re-applies `schema.sql` to running postgres, no host `psql` needed), `health`. Scripts clear stale shell `DB_*`, probe `127.0.0.1`, and read host ports from `.env`. Documented in `docs/SETUP.md` §4–5; `docs/AGENT.md` §5 points at them as canonical.
+
+## Unreleased — chart rendering fix
+
+- Charts (`plot.chart`) now render inline in chat as images over the artifact download URL instead of raw `<svg>` code. The run summary carries a short placeholder; the SVG bytes travel via the SSE `artifacts` event only.
+- Chart previews persist on assistant messages (`messages.artifacts`) so they survive page reload. DB: re-apply `backend/schema.sql` via `psql` on existing databases (compose init runs once).
+- Docs: corrected artifact disk path to `{upload_dir}/{notebook_id}/artifacts/{run_id}/{step_id}/{filename}` + download route `GET /v1/runs/{id}/artifacts/{artifact_id}` (ADR-019, CONTEXT, ARCHITECTURE); documented the aggregator SVG-placeholder exception (ADR-023).
+
 ## Unreleased — container/deploy hardening
 
 - Compose: backend + frontend healthchecks (`/api/health`, `/healthz`),

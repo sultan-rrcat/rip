@@ -60,7 +60,7 @@ frontend/src/
 | Backend tests | `pytest` | root |
 | Backend lint | `ruff` | root |
 | Frontend install/dev/lint/build | `npm install` / `npm run dev` / `npm run lint` / `npm run build` | `frontend/` |
-| Compose up | `docker compose up --build [services]` (host remaps via `HOST_BACKEND_PORT`/`HOST_FRONTEND_PORT` when defaults taken) | root |
+| Compose lifecycle | `scripts/rip.ps1 <up\|down\|fresh\|restart\|rebuild\|logs\|ps\|migrate\|health>` (`.sh` mirror on Linux/macOS; host remaps via `HOST_*_PORT`) — canonical; raw `docker compose` only for one-offs | root |
 
 ### 5.1 Host environments (`agent_env` vs `ml_env`)
 
