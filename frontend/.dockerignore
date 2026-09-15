@@ -1,4 +1,16 @@
 node_modules
 dist
+# Local dev URL (e.g. LAN IP) must never bake into the image; the build
+# uses ARG VITE_API_URL (empty default) + .env.production instead.
 .env
 npm-debug.log
+# Explicitly kept: build inputs below (negations guard against future `*`).
+!package.json
+!package-lock.json
+!vite.config.ts
+!tsconfig*.json
+!index.html
+!.env.production
+!nginx.conf
+!public/
+!src/
