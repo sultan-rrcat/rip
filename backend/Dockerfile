@@ -42,12 +42,18 @@ COPY backend ./backend
 
 WORKDIR /app/backend
 RUN mkdir -p /app/uploads
+# Fallback when UPLOAD_DIR is unset: keeps uploads on the /app/uploads
+# volume target (compose always overrides to /app/uploads explicitly).
+ENV UPLOAD_DIR=/app/uploads
 
+# Compose pins PORT=8000 (ports mapping + probes assume it); the default
+# here only covers bare `docker run` without an env file.
 EXPOSE 8000
 
 # Stdlib-only liveness (no curl in slim image); compose gates frontend on it.
-HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=60s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
+# Generous start-period: lifespan blocks serving until BGE weights load.
+HEALTHCHECK --interval=10s --timeout=5s --retries=8 --start-period=180s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"
 
 # Shell form so $PORT is honored (default 8000, see core/config.py + .env).
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
