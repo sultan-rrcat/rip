@@ -265,7 +265,7 @@ export function useMessages(notebook_id: string | undefined) {
         {
           id: messageId,
           role: 'assistant',
-          text: 'resuming…',
+          text: '',
           status: 'streaming',
           sources: [],
         },

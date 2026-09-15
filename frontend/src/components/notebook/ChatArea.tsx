@@ -9,14 +9,11 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import type { Message, Source } from '@/types'
 import type { Artifact, PlanStep, RunView } from '@/types/runs'
 import ArtifactItem, { stripSvgFromText } from '@/components/notebook/ChartArtifact'
+import TypingDots from '@/components/notebook/TypingDots'
 
 interface ChatAreaProps {
   messages: Message[]
   activeRun?: RunView | null
-}
-
-interface ChatAreaProps {
-  messages: Message[]
 }
 
 const markdownComponents: Components = {
@@ -89,6 +86,22 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
             seen.add(a.artifact_id)
             return true
           })
+          // Thinking gap: streaming placeholder with no tokens yet shows
+          // the 3-dot indicator; it hides on the first delta/summary.
+          const isThinking =
+            message.status === 'streaming' && !message.text?.trim()
+          if (isThinking) {
+            return (
+              <AssistantMessage
+                key={message.id}
+                plan={runView?.plan ?? null}
+                goal={runView?.goal ?? null}
+                artifacts={artifacts}
+              >
+                <TypingDots />
+              </AssistantMessage>
+            )
+          }
           return (
             <AssistantMessage
               key={message.id}
@@ -106,7 +119,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
         if (message.role === 'loading') {
           return (
             <AssistantMessage key={message.id}>
-              <TypingIndicator />
+              <TypingDots />
             </AssistantMessage>
           )
         }
@@ -241,25 +254,6 @@ function ErrorMessage({ text }: TextMessageProps) {
           {text}
         </div>
       </div>
-    </div>
-  )
-}
-
-function TypingIndicator() {
-  return (
-    <div className="flex gap-1 items-center h-5">
-      <span
-        className="w-1 h-1 bg-gray-700 rounded-full animate-bounce"
-        style={{ animationDelay: '0ms' }}
-      />
-      <span
-        className="w-1 h-1 bg-gray-700 rounded-full animate-bounce"
-        style={{ animationDelay: '150ms' }}
-      />
-      <span
-        className="w-1 h-1 bg-gray-700 rounded-full animate-bounce"
-        style={{ animationDelay: '300ms' }}
-      />
     </div>
   )
 }
