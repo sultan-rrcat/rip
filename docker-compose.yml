@@ -7,8 +7,14 @@ services:
     build:
       context: .
       dockerfile: ./backend/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY}
+        HTTPS_PROXY: ${HTTPS_PROXY}
+        NO_PROXY: ${NO_PROXY}
     ports:
-      - "8000:8000"
+      # Internal port is fixed at 8000 (PORT=8000 below, Dockerfile EXPOSE,
+      # health probes). Host side is adjustable when 8000 is taken.
+      - "${HOST_BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -23,9 +29,15 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: 5432  # container-side; .env HOST_PG_PORT is host-only
+      # Internal port is fixed at 8000: EXPOSE, ports mapping, and both
+      # health probes assume it (see backend/Dockerfile). Do not override.
+      PORT: 8000
       NO_PROXY: postgres,backend,host.docker.internal,127.0.0.1,localhost
       no_proxy: postgres,backend,host.docker.internal,127.0.0.1,localhost
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # .env-owned: host Ollama (default gateway) vs remote endpoint varies
+      # per machine (e.g. .env points at a LAN Ollama). Hard-pinning here
+      # would silently ignore .env, so interpolate with gateway fallback.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       # Container-path facts (not machine-local): relative ./backend/*
       # defaults assume CWD=rip/, but the image runs from /app/backend.
       BGE_M3_MODEL_PATH: /app/backend/models/bge-m3
@@ -40,22 +52,38 @@ services:
       - uploads:/app/uploads
     healthcheck:
       # stdlib-only probe: image has no curl/wget; /api/health is trivial ok.
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
+      # Lifespan blocks serving until BGE weights load: cold first-pull +
+      # model load can exceed 60s, so grace is generous (frontend gates on
+      # backend healthy and would never start after a false unhealthy).
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')\""]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 60s
+      retries: 8
+      start_period: 180s
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY}
+        HTTPS_PROXY: ${HTTPS_PROXY}
+        NO_PROXY: ${NO_PROXY}
+        # Empty = same-origin relative URLs (prod nginx proxies /api/ + /v1/).
+        # Retarget without editing files:
+        # `VITE_API_URL=http://host:8000 docker compose up --build`.
+        VITE_API_URL: ${VITE_API_URL:-}
     ports:
-      - "5173:80"
+      # Host side adjustable (demo stacks often hold 5173, e.g. athena).
+      - "${HOST_FRONTEND_PORT:-5173}:80"
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost/healthz || exit 1"]
+      # 127.0.0.1, not localhost: wget resolves ::1 first and nginx would
+      # refuse (same IPv6-first trap as the Postgres localhost CAVEAT).
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -77,7 +105,11 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-rip}"]
+      # Probe via the container's own POSTGRES_* (immune to stale shell
+      # DB_* exports shadowing .env interpolation): -U alone defaults the
+      # dbname to the user and spams FATAL when they differ. ($$ escapes
+      # compose interpolation so the container shell expands the vars.)
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 10
