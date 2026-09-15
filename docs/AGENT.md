@@ -60,25 +60,43 @@ frontend/src/
 | Backend tests | `pytest` | root |
 | Backend lint | `ruff` | root |
 | Frontend install/dev/lint/build | `npm install` / `npm run dev` / `npm run lint` / `npm run build` | `frontend/` |
+| Compose up | `docker compose up --build [services]` (host remaps via `HOST_BACKEND_PORT`/`HOST_FRONTEND_PORT` when defaults taken) | root |
 
 ### 5.1 Host environments (`agent_env` vs `ml_env`)
 
-- **Canonical host env is `ml_env`** at `C:\Users\offic\venvs\ml_env`
-  (probed 2026-09-14: Python 3.12.0, torch 2.14.0+cpu). Use its interpreter
-  for host-side work:
-  `C:\Users\offic\venvs\ml_env\Scripts\python.exe -m pytest`.
-- **`agent_env` is legacy / absent.** Old paths (`..\ENV\agent_env`,
-  `C:\Users\offic\ENV\agent_env`) no longer exist; `C:\Users\offic\venvs`
-  contains only `ml_env`. Do not reference `agent_env` in new docs/tests —
-  `docs/archive/SESSION_LOG.md:130` already records its removal.
-- Either env name may be passed for host work ("use agent_env or ml_env,
-  whatever available"): prefer `ml_env` when present, fall back to
-  `agent_env` only on machines where it still exists. Verify with
-  `Test-Path C:\Users\offic\venvs\ml_env` before documenting further.
+- **Two machine-specific host envs, not interchangeable by preference:**
+  - **Office system → `agent_env`**
+  - **Home system → `ml_env`** at `C:\Users\offic\venvs\ml_env`
+    (probed 2026-09-14: Python 3.12.0, torch 2.14.0+cpu)
+- Use whichever interpreter matches the machine you're actually on:
+  - Home: `C:\Users\offic\venvs\ml_env\Scripts\python.exe -m pytest`
+  - Office: `agent_env`'s interpreter (path TBD — confirm on that machine)
+- Old paths (`..\ENV\agent_env`, `C:\Users\offic\ENV\agent_env`) no longer
+  resolve on the home machine — `C:\Users\offic\venvs` there contains only
+  `ml_env`. This does **not** mean `agent_env` is deprecated; it simply
+  doesn't exist on this machine. `docs/archive/SESSION_LOG.md:130` records
+  its removal from the home machine specifically.
+- When docs/scripts need to reference "the host env" generically, name
+  both and let the reader pick based on which machine they're on, rather
+  than defaulting to one. Verify presence with
+  `Test-Path C:\Users\offic\venvs\ml_env` (home) or the equivalent check
+  for `agent_env` (office) before documenting further.
 - Host-local DB rule: `DB_HOST=127.0.0.1` (never bare `localhost` on
-  Windows) + `DB_PORT` synced to `HOST_PG_PORT`; host-local Ollama at
-  `OLLAMA_BASE_URL=http://localhost:11434` (in-compose backend uses
-  `http://host.docker.internal:11434` via `extra_hosts`).
+  Windows) + `DB_PORT` synced to `HOST_PG_PORT`.
+- **Host-local Ollama differs by machine:**
+  - Home:
+```dotenv
+    OLLAMA_BASE_URL=http://localhost:11434
+```
+  - Office:
+```dotenv
+    OLLAMA_BASE_URL=http://10.10.30.77:21434
+```
+  - In-compose backend uses `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}`
+    via `extra_hosts`: your `.env` value flows into the container, so the
+    office LAN remote works with no `extra_hosts`/port adjustment — the
+    gateway default is only the fallback when `.env` leaves it unset.
+    (Prior open question about the office `21434` mapping: resolved.)
 
 ## 6. Standing rules (do not break)
 
