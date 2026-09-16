@@ -62,41 +62,28 @@ frontend/src/
 | Frontend install/dev/lint/build | `npm install` / `npm run dev` / `npm run lint` / `npm run build` | `frontend/` |
 | Compose lifecycle | `scripts/rip.ps1 <up\|down\|fresh\|restart\|rebuild\|logs\|ps\|migrate\|health>` (`.sh` mirror on Linux/macOS; host remaps via `HOST_*_PORT`) — canonical; raw `docker compose` only for one-offs | root |
 
-### 5.1 Host environments (`agent_env` vs `ml_env`)
+## 5.1 Host environments (`agent_env` vs `ml_env`)
 
-- **Two machine-specific host envs, not interchangeable by preference:**
-  - **Office system → `agent_env`**
-  - **Home system → `ml_env`** at `C:\Users\offic\venvs\ml_env`
-    (probed 2026-09-14: Python 3.12.0, torch 2.14.0+cpu)
-- Use whichever interpreter matches the machine you're actually on:
-  - Home: `C:\Users\offic\venvs\ml_env\Scripts\python.exe -m pytest`
-  - Office: `agent_env`'s interpreter (path TBD — confirm on that machine)
-- Old paths (`..\ENV\agent_env`, `C:\Users\offic\ENV\agent_env`) no longer
-  resolve on the home machine — `C:\Users\offic\venvs` there contains only
-  `ml_env`. This does **not** mean `agent_env` is deprecated; it simply
-  doesn't exist on this machine. `docs/archive/SESSION_LOG.md:130` records
-  its removal from the home machine specifically.
-- When docs/scripts need to reference "the host env" generically, name
-  both and let the reader pick based on which machine they're on, rather
-  than defaulting to one. Verify presence with
-  `Test-Path C:\Users\offic\venvs\ml_env` (home) or the equivalent check
-  for `agent_env` (office) before documenting further.
-- Host-local DB rule: `DB_HOST=127.0.0.1` (never bare `localhost` on
-  Windows) + `DB_PORT` synced to `HOST_PG_PORT`.
-- **Host-local Ollama differs by machine:**
-  - Home:
-```dotenv
-    OLLAMA_BASE_URL=http://localhost:11434
+Two machine-specific host envs — not interchangeable by preference. Use whichever exists on the machine you're on.
+
+- **Office** → `agent_env` at `C:\Users\trainee\ENV\agent_env\`
+- **Home** → `ml_env` at `C:\Users\offic\venvs\ml_env` (probed 2026-09-14: Python 3.12.0, torch 2.14.0+cpu)
+
+**Interpreters:**
 ```
-  - Office:
-```dotenv
-    OLLAMA_BASE_URL=http://10.10.30.77:21434
+Office: C:\Users\trainee\ENV\agent_env\Scripts\python.exe -m pytest
+Home: C:\Users\offic\venvs\ml_env\Scripts\python.exe -m pytest
 ```
-  - In-compose backend uses `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}`
-    via `extra_hosts`: your `.env` value flows into the container, so the
-    office LAN remote works with no `extra_hosts`/port adjustment — the
-    gateway default is only the fallback when `.env` leaves it unset.
-    (Prior open question about the office `21434` mapping: resolved.)
+
+**Ollama (host-local, per machine):**
+```dotenv
+# Home
+OLLAMA_BASE_URL=http://localhost:11434
+
+# Office
+OLLAMA_BASE_URL=http://10.10.30.77:21434
+```
+
 
 ## 6. Standing rules (do not break)
 
