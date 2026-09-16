@@ -37,6 +37,7 @@ from app.orchestration.planner import Planner
 from app.orchestration.results import ExecutionResult, StepResult
 from app.orchestration.validator import PlanValidationError, PlanValidator
 from app.providers.base import ModelProvider
+from app.tools.base import Tool, ToolRequest, ToolResponse
 from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 
@@ -89,6 +90,21 @@ class FakeAgent(Agent):
         return DelegationResponse(
             step_id=request.step_id, status=StepStatus.SUCCESS, output=self.output
         )
+
+
+class FakeTool(Tool):
+    """Deterministic recording tool for input-scoping assertions."""
+
+    tool_id = "fake.tool"
+    name = "FakeTool"
+    description = "test tool"
+
+    def __init__(self):
+        self.seen: list[dict] = []
+
+    def execute(self, request: ToolRequest) -> ToolResponse:
+        self.seen.append(dict(request.input))
+        return ToolResponse(tool_id=self.tool_id, ok=True, output="tool-out")
 
 
 class FakeRAG:
@@ -192,6 +208,86 @@ class TestValidator:
         with pytest.raises(PlanValidationError):
             PlanValidator(agents, tools, max_steps=2).validate(plan)
 
+    def test_dependent_plot_without_placeholder_rejected(self):
+        # Run 4efaec2b shape: dependent plot, hardcoded literals, no {{id}}.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake", input={"message": "summarize {{1}}"},
+                         depends_on=["1"], expected_output_type="summary"),
+                PlanStep(step_id="3", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["Class 0", "Class 1"],
+                                "values": [50, 50]},
+                         depends_on=["2"], expected_output_type="chart"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="placeholder"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_plot_referencing_non_numbers_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["a"], "values": ["{{1}}"]},
+                         depends_on=["1"], expected_output_type="chart"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="numbers-producing"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_standalone_plot_with_literals_passes(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["a", "b"], "values": [1, 2]},
+                         expected_output_type="chart"),
+            ],
+        )
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_grounded_plot_pattern_passes(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake", input={"message": "numbers {{1}}"},
+                         depends_on=["1"], expected_output_type="numbers"),
+                PlanStep(step_id="3", agent_id="fake", input={"message": "summarize {{1}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+                PlanStep(step_id="4", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["Fire", "Smoke"],
+                                "values": ["{{2}}"]},
+                         depends_on=["2"], expected_output_type="chart"),
+            ],
+        )
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_ungrounded_doc_generate_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", tool_id="doc.generate",
+                         input={"title": "t", "sections": []},
+                         depends_on=["1"], expected_output_type="document"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="answer/summary/text"):
+            PlanValidator(agents, tools).validate(plan)
+
 
 # --- Aggregator (Q36 deterministic rules) ---
 
@@ -258,6 +354,88 @@ class TestAggregator:
             ),
         )
         assert agg.summary == "Which file?" and agg.needs_clarification
+
+    def test_answer_plus_chart_shows_text_and_placeholder(self):
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="reasoning", input={},
+                         depends_on=["1"], expected_output_type="answer"),
+                PlanStep(step_id="3", tool_id="plot.chart", input={},
+                         depends_on=["2"], expected_output_type="chart"),
+            ],
+        )
+        agg = Aggregator().aggregate(
+            plan,
+            ExecutionResult(
+                trace_id="t",
+                step_results=[
+                    _ok("1", "raw chunks", executor="rag.query"),
+                    _ok("2", "Fire 62pct, Smoke 38pct"),
+                    StepResult(
+                        step_id="3", agent_id="plot.chart",
+                        status=StepStatus.SUCCESS,
+                        output="<svg>chart</svg>",
+                    ),
+                ],
+            ),
+        )
+        assert agg.status == "success"
+        assert "Fire 62pct" in agg.summary
+        assert "Chart generated" in agg.summary
+        assert "raw chunks" not in agg.summary
+
+    def test_numbers_plus_chart_hides_numbers(self):
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="reasoning", input={},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", tool_id="plot.chart", input={},
+                         depends_on=["1"], expected_output_type="chart"),
+            ],
+        )
+        agg = Aggregator().aggregate(
+            plan,
+            ExecutionResult(
+                trace_id="t",
+                step_results=[
+                    _ok("1", "88518, 52770"),
+                    StepResult(
+                        step_id="2", agent_id="plot.chart",
+                        status=StepStatus.SUCCESS,
+                        output="<SVG>chart</SVG>",
+                    ),
+                ],
+            ),
+        )
+        assert agg.summary == "Chart generated — see Artifacts below."
+
+    def test_answer_plus_failed_chart_keeps_answer(self):
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="reasoning", input={},
+                         expected_output_type="answer"),
+                PlanStep(step_id="2", tool_id="plot.chart", input={},
+                         depends_on=["1"], expected_output_type="chart"),
+            ],
+        )
+        agg = Aggregator().aggregate(
+            plan,
+            ExecutionResult(
+                trace_id="t",
+                step_results=[
+                    _ok("1", "the summary"),
+                    _fail("2", "bad values", executor="plot.chart"),
+                ],
+            ),
+        )
+        assert agg.status == "partial"
+        assert "the summary" in agg.summary
+        assert "Step 2 (plot.chart) failed: bad values" in agg.summary
 
 
 # --- Memory (Q28) ---
@@ -370,6 +548,48 @@ class TestPlanGraph:
         )
         assert result.step_results[0].error == "run cancelled"
 
+    def test_context_scoped_to_terminal_answer(self):
+        agent = FakeAgent(output="done")
+        agents, tools = _registries(agent, rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="fake", input={"message": "numbers"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", agent_id="fake", input={"message": "answer {{1}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        result = run_plan_graph(
+            plan, agents, tool_registry=tools, trace_id="t",
+            context="CTX", fallback_message="FB",
+        )
+        assert result.step_results[0].status is StepStatus.SUCCESS
+        assert "context" not in agent.seen[0]  # intermediate: task + upstream only
+        assert agent.seen[1].get("context") == "CTX"  # terminal prose: full context
+
+    def test_tool_steps_get_no_context_or_fallback(self):
+        tool = FakeTool()
+        tools = ToolRegistry()
+        tools.register(tool)
+        agents, _ = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="fake.tool",
+                         input={"query": "x", "context": "stale", "history": []}),
+            ],
+        )
+        result = run_plan_graph(
+            plan, agents, tool_registry=tools, trace_id="t", notebook_id="nb-1",
+            context="CTX", fallback_message="FB",
+        )
+        assert result.step_results[0].status is StepStatus.SUCCESS
+        seen = tool.seen[0]
+        assert "context" not in seen and "history" not in seen
+        assert "message" not in seen  # no fallback prose for tools
+        assert seen.get("notebook_id") == "nb-1"  # run truth still injected
+
     def test_trivial_plan_empty(self):
         agents, tools = _registries(FakeAgent(), rag=FakeRAG())
         result = run_plan_graph(
@@ -431,9 +651,10 @@ class TestOrchestrator:
             on_event=events.append, context="prior chat",
         )
         assert result.status == "success"
-        # Q36: two successes → labeled concatenation, not the bare answer.
-        assert "Step 2 (fake): final answer" in (result.summary or "")
-        assert "Step 1 (rag.query)" in (result.summary or "")
+        # Type-aware aggregation (ADR-023 as amended): intermediate chunks
+        # are hidden, so the terminal answer surfaces verbatim.
+        assert result.summary == "final answer"
+        assert "Step 1 (rag.query)" not in (result.summary or "")
         assert result.goal == "answer from docs"
         types = [e["type"] for e in events]
         assert "step_started" in types and "step_completed" in types

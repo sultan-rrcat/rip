@@ -144,10 +144,13 @@ class Planner:
            IMPORTANT: When a tool step (e.g. plot.chart) depends on upstream
            steps, you MUST use {{{{<step_id>}}}} placeholders for dynamic
            text values — NEVER hardcode placeholder numeric values like 1
-           or 2. Because placeholders cannot address structured data,
+           or 2. A dependent plot with literal values and no placeholder
+           is rejected by the validator (fail-honest, no fake chart).
+           Because placeholders cannot address structured data,
            NEVER chain notebook.inspect into doc.convert (or any tool
            needing a file id): use literal snapshot ids or "*" instead
-           (rule 8).
+           (rule 8). Standalone plots with user-given literal numbers
+           (no depends_on) stay legal.
         6. If the request is trivial/conversational and needs no tools or
            multi-step work, return EXACTLY ONE step with agent_id="reasoning"
            and input={{"message": "<the user's request verbatim>"}}.
@@ -175,6 +178,17 @@ class Planner:
            - "As a report / in report format" → answer/synthesize first
              (rag.query + reasoning when document-grounded), then
              doc.generate with title/sections/tables. NEVER doc.convert.
+             doc.generate with depends_on must reference an upstream
+             answer/summary step (validator-enforced).
+           - "Summarize + plot" (e.g. "summarize the class distribution
+             and show me the plot") → FOUR steps, never three: rag.query
+             chunks, then numbers-only reasoning + answer reasoning IN
+             PARALLEL off the chunks, then plot.chart depending ONLY on
+             the numbers step (values [{{{{numbers-step}}}}], concrete
+             labels from the chunks — never "Class 0/1"). One reasoning
+             step can NEVER feed both prose and plot values because a
+             placeholder carries whole text the plot cannot parse as
+             numbers (see Example E).
            - Ambiguous convert (singular "convert it / the document" with
              several ready files, or no target format stated, or the file
              is still processing) → return EXACTLY ONE reasoning step
@@ -229,7 +243,28 @@ class Planner:
               "input": {{"message": "Which document should I convert, and to which format: md, docx or pdf?"}},
               "depends_on": [], "expected_output_type": "clarification"}}
         ]}}
+
+        Example E (document summary + plot — split numbers and answer):
+        {{"goal": "Summarize the class distribution and plot it", "steps": [
+            {{"step_id": "1", "tool_id": "rag.query",
+              "input": {{"query": "class distribution", "top_k": 8}},
+              "depends_on": [], "expected_output_type": "chunks"}},
+            {{"step_id": "2", "agent_id": "reasoning",
+              "input": {{"message": "Extract the class counts for charting from {{{{1}}}}. "
+                        "Return ONLY the raw numbers, comma-separated, no words."}},
+              "depends_on": ["1"], "expected_output_type": "numbers"}},
+            {{"step_id": "3", "agent_id": "reasoning",
+              "input": {{"message": "Summarize the class distribution using {{{{1}}}}. "
+                        "Return ONLY the summary prose: no plot talk, no code fences, "
+                        "no follow-up questions."}},
+              "depends_on": ["1"], "expected_output_type": "answer"}},
+            {{"step_id": "4", "tool_id": "plot.chart",
+              "input": {{"chart_type": "bar", "labels": ["Fire", "Smoke"],
+                         "values": [{{{{2}}}}], "title": "Class distribution"}},
+              "depends_on": ["2"], "expected_output_type": "chart"}}
+        ]}}
         """
+
         if context:
             system_prompt += f"\n\nConversation context:\n{context}"
         system_prompt += (

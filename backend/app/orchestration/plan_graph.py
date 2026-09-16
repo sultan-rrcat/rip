@@ -14,8 +14,11 @@ step_id behind a merge reducer so parallel siblings write disjoint keys.
 
 Semantics:
   - {{step_id}} placeholder resolution BEFORE the step executes
-  - fallback message injection when a step has no `message`
-  - short-term-memory `context` injection into every step
+  - fallback message injection for AGENT steps lacking `message` only
+    (tool steps never receive it — e.g. plot.chart ignores prose)
+  - scoped short-term-memory `context`: terminal prose AGENT steps only
+    (intermediates get task + upstream outputs; the Planner threads
+    follow-up references into subtask messages). TOOL steps never get it.
   - `notebook_id` injection into every TOOL step input (Q30): the run's
     notebook id comes from Run.notebook_id, never the LLM — the closure
     overwrites any planner-emitted value
@@ -57,6 +60,11 @@ logger = logging.getLogger("orchestration.plan_graph")
 
 # Matches {{step_id}} placeholders inside a step's input values.
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
+
+#: Machine outputs that never need conversation context even when terminal
+#: (a lone numbers/chunks step is shown via the aggregator's anti-blank
+#: fallback, but the step itself runs on task + upstream data alone).
+_MACHINE_OUTPUT_TYPES = frozenset({"chunks", "numbers"})
 
 # Athena default kept as a code constant (no new Settings key): attempts
 # beyond the first only help flaky steps; honest failure follows.
@@ -318,12 +326,14 @@ def _make_step_node(
     node_ctx: contextvars.Context,
     on_event: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
+    is_terminal: bool = False,
 ) -> Callable[[PlanGraphState], dict]:
     """Node factory: closure captures everything constant for this run.
 
     The returned node takes the graph state (upstream step_results so far),
     resolves its input against it, delegates, and returns its OWN key as a
-    partial state update.
+    partial state update. `is_terminal` marks sink steps (nothing depends on
+    them) — only terminal prose agent steps receive memory `context`.
     """
 
     def node(state: PlanGraphState) -> dict:
@@ -354,10 +364,25 @@ def _make_step_node(
             resolved_input = _resolve_input(
                 step.input, _outputs_from(state["step_results"])
             )
-            if "message" not in resolved_input and fallback_message:
-                resolved_input["message"] = fallback_message
-            if context and "context" not in resolved_input:
-                resolved_input["context"] = context
+            is_tool = bool(step.tool_id)
+            if is_tool:
+                # Deterministic utilities run on schema inputs alone:
+                # drop any planner-emitted chatter keys (the run's
+                # notebook_id is injected below). The rag.query `message`
+                # alias is a first-class schema field, so it stays.
+                resolved_input.pop("context", None)
+                resolved_input.pop("history", None)
+            else:
+                if "message" not in resolved_input and fallback_message:
+                    resolved_input["message"] = fallback_message
+                eot = (step.expected_output_type or "text").lower()
+                if (
+                    context
+                    and "context" not in resolved_input
+                    and is_terminal
+                    and eot not in _MACHINE_OUTPUT_TYPES
+                ):
+                    resolved_input["context"] = context
             if step.expected_output_type and "expected_output_type" not in resolved_input:
                 resolved_input["expected_output_type"] = step.expected_output_type
             if step.tool_id and notebook_id is not None:
@@ -435,6 +460,11 @@ def build_plan_graph(
     base_ctx = contextvars.copy_context()
     node_ctxs = {s.step_id: base_ctx.run(contextvars.copy_context) for s in plan.steps}
 
+    # Sink steps (nothing depends on them) are terminal: only terminal
+    # prose agent steps receive memory context (scoped-context contract).
+    depended_upon = {dep for s in plan.steps for dep in s.depends_on}
+    terminal_ids = {s.step_id for s in plan.steps} - depended_upon
+
     graph = StateGraph(PlanGraphState)
     for s in plan.steps:
         graph.add_node(
@@ -452,6 +482,7 @@ def build_plan_graph(
                 node_ctx=node_ctxs[s.step_id],
                 on_event=on_event,
                 cancel_event=cancel_event,
+                is_terminal=s.step_id in terminal_ids,
             ),
             # Explicit input_schema: LangGraph's add_node is generically typed
             # over the node's input; mypy cannot solve that inference from a

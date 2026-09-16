@@ -11,6 +11,7 @@ single-user, so tools execute directly with no approval gate.
 from __future__ import annotations
 
 import logging
+import re
 
 from app.agents.registry import AgentRegistry
 from app.core.config import settings
@@ -18,6 +19,22 @@ from app.orchestration.plan import Plan
 from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger("orchestration.validator")
+
+#: Placeholder references inside step inputs, e.g. "{{2}}". Same shape as
+#: plan_graph._PLACEHOLDER (kept local: the validator must not import the
+#: execution graph).
+_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
+
+#: Known expected_output_type vocabulary. "summary" is a legacy/planner
+#: variant of "answer" (both are terminal prose). Unknown types are allowed
+#: (forward-compatible — the aggregator treats them as SHOW) but logged.
+_KNOWN_OUTPUT_TYPES = frozenset({
+    "chunks", "answer", "numbers", "chart", "document", "text",
+    "clarification", "summary",
+})
+
+#: Terminal prose types that can ground a doc.generate report.
+_ANSWER_TYPES = frozenset({"answer", "summary", "text"})
 
 
 class PlanValidationError(ValueError):
@@ -42,6 +59,7 @@ class PlanValidator:
         self._check_executors_exist(plan) # -> PlanValidationError on unknown agent/tool
         self._check_no_cycles(plan)       # -> PlanValidationError on a cycle
         self._check_budget(plan)          # -> PlanValidationError if too many steps
+        self._check_dataflow_grounding(plan)  # -> PlanValidationError on ungrounded plot/report
         logger.info("plan %s validated (%d steps)", plan.plan_id, len(plan.steps))
         return plan
 
@@ -103,3 +121,96 @@ class PlanValidator:
     def _check_budget(self, plan: Plan) -> None:
         if len(plan.steps) > self._max_steps:
             raise PlanValidationError(f"plan has {len(plan.steps)}")
+
+    def _check_dataflow_grounding(self, plan: Plan) -> None:
+        """Reject ungrounded plot/report steps (fail-honest, no fake charts).
+
+        - plot.chart with dependencies must reference upstream via a
+          {{{id}}} placeholder in `values` (literals + deps = hallucinated
+          chart). Standalone plots with literal numbers stay legal.
+        - plot.chart `values` placeholders must resolve to a numbers-type
+          step: prose/chunks cannot parse as floats at runtime. Direct
+          dependence on rag.query chunks is rejected for the same reason.
+        - doc.generate with dependencies must have an upstream
+          answer/summary/text step; standalone reports with full sections
+          stay legal.
+        """
+        by_id = {s.step_id: s for s in plan.steps}
+        for step in plan.steps:
+            eot = (step.expected_output_type or "text").lower()
+            if eot not in _KNOWN_OUTPUT_TYPES:
+                logger.warning(
+                    "plan %s step %s has unknown expected_output_type %r",
+                    plan.plan_id, step.step_id, step.expected_output_type,
+                )
+
+        def upstream(step_id: str) -> set[str]:
+            seen: set[str] = set()
+            stack = list(by_id[step_id].depends_on)
+            while stack:
+                dep = stack.pop()
+                if dep in seen or dep not in by_id:
+                    continue
+                seen.add(dep)
+                stack.extend(by_id[dep].depends_on)
+            return seen
+
+        def placeholders_in(value: object) -> set[str]:
+            found: set[str] = set()
+            if isinstance(value, str):
+                found.update(_PLACEHOLDER.findall(value))
+            elif isinstance(value, dict):
+                for v in value.values():
+                    found.update(placeholders_in(v))
+            elif isinstance(value, list):
+                for v in value:
+                    found.update(placeholders_in(v))
+            return found
+
+        for step in plan.steps:
+            if step.tool_id == "plot.chart":
+                values = step.input.get("values") if isinstance(step.input, dict) else None
+                refs = placeholders_in(values)
+                if step.depends_on:
+                    if not refs:
+                        raise PlanValidationError(
+                            f"step {step.step_id} (plot.chart) depends on "
+                            f"{sorted(step.depends_on)} but its values carry no "
+                            "{{{id}}} placeholder — dependent plots must reference "
+                            "upstream numbers, never hardcoded literals"
+                        )
+                    for ref in refs:
+                        target = by_id.get(ref)
+                        if target is None:
+                            continue  # unknown dep: _check_no_cycles already rejects
+                        target_eot = (target.expected_output_type or "text").lower()
+                        if target_eot != "numbers":
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) values reference "
+                                f"step {ref} ({target_eot or 'text'}), but plot values "
+                                "must reference a numbers-producing step"
+                            )
+                    direct = [by_id[d] for d in step.depends_on if d in by_id]
+                    if any(
+                        d.tool_id == "rag.query"
+                        and (d.expected_output_type or "").lower() == "chunks"
+                        for d in direct
+                    ):
+                        raise PlanValidationError(
+                            f"step {step.step_id} (plot.chart) depends directly on "
+                            "rag.query chunks — route through a numbers-producing "
+                            "reasoning step instead"
+                        )
+            elif step.tool_id == "doc.generate":
+                if step.depends_on:
+                    ups = upstream(step.step_id)
+                    if not any(
+                        (by_id[u].expected_output_type or "text").lower() in _ANSWER_TYPES
+                        for u in ups
+                    ):
+                        raise PlanValidationError(
+                            f"step {step.step_id} (doc.generate) depends on "
+                            f"{sorted(step.depends_on)} with no upstream "
+                            "answer/summary/text step — reports must be grounded "
+                            "in an answer step"
+                        )

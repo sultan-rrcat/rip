@@ -3,14 +3,20 @@
 Turns a plan's per-step outputs into ONE final answer with NO LLM synthesis
 step (merge decision: cuts cost and latency; predictable and testable).
 
-Q36 locked rules:
-- exactly one successful step → its output verbatim, EXCEPT chart/SVG
-  outputs which aggregate to a short placeholder (the SVG bytes travel via
-  the SSE `artifacts` event as a download URL and render inline as <img>);
-- multiple successes → final step output only; step internals are exposed via
-  `step_completed` events and UI collapsible, not in the summary;
+Type-aware deterministic rules (ADR-023 as amended):
+- HIDE intermediate outputs (`expected_output_type` in chunks/numbers, or
+  the `notebook.inspect` freshness probe) unless they are the only output
+  (anti-blank fallback);
+- SHOW terminal outputs (answer/summary/text/document/chart/clarification,
+  plus any unknown type — fail-visible, never fail-blank); chart/SVG
+  outputs aggregate to a short placeholder (the SVG bytes travel via the
+  SSE `artifacts` event as a download URL and render inline as <img>);
+- single SHOW → verbatim (no `Step N` prefix, preserves chat tone);
+  multi-SHOW → labeled concatenation (`Step <id> (<executor>): ...`,
+  same placeholder per chart step);
 - a step needing clarification → its question verbatim (never mangled);
-- all steps failed (or nothing executed) → the joined error strings.
+- all steps failed (or nothing executed) → the joined error strings;
+- partial runs append every failure line so successes never mask failures.
 
 `conflicts` is always empty (no LLM to detect contradictions).
 """
@@ -96,37 +102,49 @@ class Aggregator:
                 status="failed", plan_incomplete=True, summary=summary
             )
 
-        # Final step output only: use the last step in plan order as the user-facing answer.
-        # Step internals remain available via step_completed events for the UI collapsible.
-        last_step = plan.steps[-1] if plan.steps else None
-        last_result = None
-        if last_step:
-            last_result = next((r for r in result.step_results if r.step_id == last_step.step_id), None)
+        # Type-aware assembly: hide intermediates, show terminals in plan
+        # order. Step internals remain available via step_completed events
+        # for the UI collapsible; the summary is the persisted answer.
+        step_meta = {s.step_id: s for s in plan.steps} if plan.steps else {}
+        ordered = (
+            [next((r for r in result.step_results if r.step_id == s.step_id), None)
+             for s in plan.steps]
+            if plan.steps else list(result.step_results)
+        )
+        ordered_successful = [r for r in ordered if r is not None and r.status is StepStatus.SUCCESS]
 
-        if last_result and last_result.status is StepStatus.SUCCESS:
-            summary = _summarizable(last_result.output)
-        elif last_result and last_result.status is StepStatus.FAILURE:
-            # If final step failed, surface its error honestly.
-            summary = f"Step {last_result.step_id} ({last_result.agent_id}) failed: {last_result.error or 'unknown error'}"
-        elif successful:
-            # Fallback: last successful step in plan order
-            result_by_id = {r.step_id: r for r in result.step_results}
-            for step in reversed(plan.steps):
-                r = result_by_id.get(step.step_id)
-                if r and r.status is StepStatus.SUCCESS:
-                    summary = _summarizable(r.output)
-                    break
+        def _hidden(step_id: str) -> bool:
+            meta = step_meta.get(step_id)
+            if meta is None:
+                return False  # unknown step: fail-visible, never fail-blank
+            eot = (meta.expected_output_type or "text").lower()
+            if eot in ("chunks", "numbers"):
+                return True
+            return meta.executor_id == "notebook.inspect"
+
+        shown = [r for r in ordered_successful if not _hidden(r.step_id)]
+        if shown:
+            if len(shown) == 1:
+                summary = _summarizable(shown[0].output)
             else:
-                summary = ""
+                summary = "\n\n".join(
+                    f"Step {r.step_id} ({r.agent_id}): {_summarizable(r.output)}"
+                    for r in shown
+                )
+        elif ordered_successful:
+            # Anti-blank fallback: every success was intermediate (e.g. a
+            # lone rag.query or numbers step) — surface the last one.
+            summary = _summarizable(ordered_successful[-1].output)
         else:
             summary = ""
 
-        # Append failures for partial runs to keep honesty, but keep them separate from main answer.
-        if failed and summary:
-            if not (last_result and last_result.status is StepStatus.FAILURE):
-                summary += "\n\n" + "\n".join(
-                    f"Step {r.step_id} ({r.agent_id}) failed: {r.error}" for r in failed
-                )
+        # Partial runs must not hide failures behind successes (e.g. an
+        # inspect listing masking failed converts) — append them honestly.
+        if failed:
+            failures = "\n".join(
+                f"Step {r.step_id} ({r.agent_id}) failed: {r.error}" for r in failed
+            )
+            summary = f"{summary}\n\n{failures}" if summary.strip() else failures
 
         logger.info(
             "aggregated plan=%s status=%s successes=%d",
