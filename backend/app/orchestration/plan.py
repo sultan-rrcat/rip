@@ -8,9 +8,12 @@ contract — keep them in one place.
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger("orchestration.plan")
 
 
 class PlanStep(BaseModel):
@@ -37,6 +40,38 @@ class PlanStep(BaseModel):
         return self.tool_id or self.agent_id
 
 
+def _hoist_nested_executor(step: dict, plan_id: str, step_id: str) -> None:
+    """Hoist executor ids buried in `input` to top-level step fields.
+
+    Mutates `step` in place. Only fires when the top level names NO
+    executor (empty agent_id and empty/None tool_id) and `input` holds
+    exactly one truthy string under "agent_id"/"tool_id" — that key is
+    moved up and deleted from input (no tool/agent schema uses those keys,
+    so the move is lossless). Anything else (both present, non-strings,
+    top level already set) is left for the Validator to reject.
+    """
+    if step.get("agent_id") or step.get("tool_id"):
+        return
+    raw_input = step.get("input")
+    if not isinstance(raw_input, dict):
+        return
+    nested_agent = raw_input.get("agent_id")
+    nested_tool = raw_input.get("tool_id")
+    has_agent = isinstance(nested_agent, str) and bool(nested_agent.strip())
+    has_tool = isinstance(nested_tool, str) and bool(nested_tool.strip())
+    if has_agent == has_tool:  # both or neither: not our repair shape
+        return
+    if has_agent:
+        step["agent_id"] = nested_agent.strip()
+    else:
+        step["tool_id"] = nested_tool.strip()
+    del raw_input["agent_id" if has_agent else "tool_id"]
+    logger.info(
+        "plan %s step %s: hoisted nested %s to top level",
+        plan_id, step_id, "agent_id" if has_agent else "tool_id",
+    )
+
+
 class Plan(BaseModel):
     plan_id: str
     goal: str
@@ -48,7 +83,13 @@ class Plan(BaseModel):
     @classmethod
     def from_model(cls, plan_id: str, goal: str, raw_steps: list[dict]) -> Plan:
         """Build a Plan from the Planner's raw JSON, deterministically fixing
-        three common LLM slips:
+        four common LLM slips:
+          - executor ids nested inside `input` ({"input": {"tool_id": ...}})
+            instead of top-level step fields: hoisted when exactly one is
+            present and the top level has neither (observed live: the model
+            buries tool_id/agent_id in input, validator then rejects the
+            step — hoisting turns a fail-honest abort into an executable
+            plan; both-present stays rejected);
           - duplicate step_ids: first occurrence keeps its id, later ones get
             a numeric suffix;
           - exact-duplicate steps (same agent_id + same input): the later copy
@@ -89,6 +130,9 @@ class Plan(BaseModel):
 
             step = dict(raw)
             step["step_id"] = new
+            if isinstance(step.get("input"), dict):
+                step["input"] = dict(step["input"])  # hoist mutates; don't touch caller's dict
+            _hoist_nested_executor(step, plan_id, new)
             step["depends_on"] = [
                 resolved.get(canon_dep(d), canon_dep(d))
                 for d in step.get("depends_on", [])

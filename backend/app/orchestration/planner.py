@@ -118,7 +118,8 @@ class Planner:
 
         Rules:
         1. Every step sets EXACTLY ONE of agent_id (delegate reasoning work)
-           or tool_id (deterministic utility work). Never set both, never
+           or tool_id (deterministic utility work) as TOP-LEVEL step keys —
+           NEVER nested inside "input". Never set both, never
            neither. Use ONLY the listed agent_ids and tool_ids.
         2. Assign each step a unique step_id.
         3. Use depends_on to specify ordering and dependencies between steps.
@@ -166,7 +167,10 @@ class Planner:
              → rag.query FIRST (query=<search terms>, top_k=8), then a
              reasoning step answering ONLY from {{{{1}}}} chunks. Say "not
              in the documents" when chunks are empty. NEVER answer from
-             parametric knowledge when ready documents exist.
+             parametric knowledge when ready documents exist. Generating
+             questions/quiz/MCQs from documents is content work like any
+             QA → rag.query + reasoning, NEVER doc.convert (verbatim file
+             conversion only, no LLM question-writing).
            - Convert ALL / plural ("convert the uploaded documents / all
              files to pdf", no names) → EXACTLY ONE doc.convert step with
              {{"file_id": "*", "target_format": "<format>"}}. No inspect,
@@ -207,6 +211,15 @@ class Planner:
              should I convert, and to which format: md, docx or pdf?").
              The aggregator returns it verbatim as a clarification
              question.
+        9. PARALLELISM BUDGET (local single-model backend): steps with no
+           depends_on run AT THE SAME TIME against one Ollama server.
+           NEVER fan out more than 2 long-text reasoning steps in parallel
+           (e.g. three "write 5 MCQs" steps off one rag.query will time
+           out — observed 25–77s per write against a 30s+ budget). Chain
+           long writes SEQUENTIALLY instead (2 depends_on ["1"],
+           3 depends_on ["2"], ...) so each gets the model to itself.
+           Short branches (numbers + answer in Example E) and cheap
+           deterministic tools may stay parallel.
 
         Examples:
         Example A (document question answering):

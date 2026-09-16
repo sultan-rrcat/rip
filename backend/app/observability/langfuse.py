@@ -6,10 +6,11 @@ Usage:
     identity decorator when tracing is disabled — so decorated code paths
     cost nothing and change nothing when Langfuse is off.
   - manual_span(...) is a context manager that opens a span and becomes a
-    no-op when tracing is disabled; it relies on the CURRENT Langfuse context
-    (which the plan graph propagates into its nodes via one contextvars copy
-    per node, taken in the run worker thread) so nested spans/generations
-    auto-parent under the per-run trace.
+    no-op when tracing is disabled; pass trace_context=... for explicit
+    parenting across LangGraph thread hops, or omit it to parent to the
+    CURRENT Langfuse span in this thread. get_trace_context() captures the
+    current {"trace_id", "parent_span_id"} for forwarding via graph
+    state/config — this is how step:{id} spans nest INSIDE the plan span.
   - TracingProvider (app/providers/tracing.py) wraps the ModelProvider so
     every LLM call is recorded as a generation.
   - truncate(v, n) caps inputs/outputs before they reach Langfuse.
@@ -98,6 +99,29 @@ def tracing_enabled() -> bool:
     return settings.langfuse_enabled and _client is not None
 
 
+def get_trace_context() -> dict[str, str] | None:
+    """Capture the current Langfuse trace context for explicit parenting.
+
+    Returns {"trace_id", "parent_span_id"} for the current observation,
+    or None when tracing is disabled / no active span. The dict is
+    JSON-serializable, so it can ride in LangGraph state/config across
+    threads where contextvars alone would be lost (outer nodes scheduled
+    on pool threads). Pass it as `trace_context` to `manual_span` to
+    parent a new span under the captured one.
+    """
+    if not tracing_enabled():
+        return None
+    assert _client is not None, "tracing_enabled() guarantees a configured client"
+    try:
+        trace_id = _client.get_current_trace_id()
+        parent_span_id = _client.get_current_observation_id()
+    except Exception:  # pragma: no cover - defensive; never break runs
+        return None
+    if not trace_id or not parent_span_id:
+        return None
+    return {"trace_id": trace_id, "parent_span_id": parent_span_id}
+
+
 @contextmanager
 def manual_span(
     name: str,
@@ -106,14 +130,19 @@ def manual_span(
     input: Any = None,
     output: Any = None,
     metadata: Any = None,
+    trace_context: dict[str, str] | None = None,
     **extra: Any,
 ) -> Iterator[_DisabledObservation]:
     """Open a span as the *current* observation, ending it on block exit.
 
-    Uses no explicit trace_context, so it parents to whatever Langfuse span is
-    current in this thread. The run worker opens the trace root; the plan
-    graph copies the worker's contextvars per node, so step spans nest
-    correctly.
+    Parenting is explicit when `trace_context` is given (survives thread
+    hops / LangGraph pool scheduling); otherwise it parents to whatever
+    Langfuse span is current in this thread. The run worker opens the
+    trace root; the orchestrator captures its context into config, the
+    plan node captures the plan span context into graph state, and step
+    spans parent explicitly under the plan span — so `step:{id}` nest
+    inside `plan` in Langfuse instead of sitting beside it as siblings
+    under `run`.
     """
     if not tracing_enabled():
         yield _DisabledObservation()
@@ -126,6 +155,7 @@ def manual_span(
         output=output,
         metadata=metadata,
         end_on_exit=True,
+        trace_context=trace_context,
         **extra,
     ) as obs:
         yield obs  # type: ignore[misc]

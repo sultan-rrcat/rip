@@ -22,8 +22,16 @@ Per-request state that must NOT live in graph state:
   injected into tool inputs) travel via RunnableConfig["configurable"] —
   config is per-invocation and never checkpointed, unlike state.
 
-RIP port: approvals, reflection, Langfuse spans, and correlation helpers
-removed; cooperative cancel kept.
+Langfuse parenting (explicit, thread-safe): the orchestrator captures the
+run-span context into config["configurable"]["trace_context"]; plan and
+aggregate spans parent explicitly under it. The plan node captures its own
+span context into state["plan_span_ctx"]; the execute node forwards it to
+the inner plan graph so `step:{id}` spans nest INSIDE `plan`
+(run → plan → step, aggregate sibling of plan). Plain-string IDs only —
+checkpoint-safe, no contextvars dependence across LangGraph threads.
+
+RIP port: approvals, reflection, and correlation helpers removed;
+cooperative cancel kept.
 """
 
 from __future__ import annotations
@@ -40,7 +48,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.base import StepStatus
 from app.agents.registry import AgentRegistry
-from app.observability.langfuse import manual_span, truncate
+from app.observability.langfuse import get_trace_context, manual_span, truncate
 from app.orchestration.aggregator import AggregationResult, Aggregator
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.plan_graph import run_plan_graph
@@ -54,6 +62,10 @@ logger = logging.getLogger("orchestration.engine")
 _ON_EVENT = "on_event"
 _NOTEBOOK_ID = "notebook_id"
 _CANCEL_EVENT = "cancel_event"
+#: Captured run-span context ({"trace_id", "parent_span_id"}) injected by
+#: the orchestrator so outer nodes parent under `run` even when LangGraph
+#: schedules them on pool threads without the worker's contextvars.
+_TRACE_CTX = "trace_context"
 
 
 def _cancel_event(config: RunnableConfig) -> threading.Event | None:
@@ -84,6 +96,11 @@ class OrchestrationState(TypedDict):
     aggregation: AggregationResult | None
     attempt: int
     planner_feedback: str | None
+    #: Explicit Langfuse parent for `step:{id}` spans: the current attempt's
+    #: plan-span context ({"trace_id", "parent_span_id"}), captured inside
+    #: the plan span. None when tracing is off or the plan failed. Lets
+    #: steps nest INSIDE `plan` instead of sitting beside it under `run`.
+    plan_span_ctx: dict[str, str] | None
 
 
 def _configurable(config: RunnableConfig) -> dict:
@@ -123,6 +140,7 @@ def _make_plan_node(
             return {"plan": None, "plan_error": "run cancelled"}
         attempt = int(state.get("attempt") or 0) + 1
         feedback_in = state.get("planner_feedback")
+        run_ctx = _configurable(config).get(_TRACE_CTX)
         with manual_span(
             "plan", as_type="span",
             input={
@@ -130,6 +148,7 @@ def _make_plan_node(
                 "attempt": attempt,
                 "feedback": truncate(feedback_in, 800),
             },
+            trace_context=run_ctx,
         ) as plan_obs:
             rejected: Plan | None = None
             try:
@@ -203,6 +222,11 @@ def _make_plan_node(
                 "executors": [s.executor_id for s in plan.steps],
                 "attempt": attempt,
             })
+            # Capture this attempt's plan-span context while it is current so
+            # the execute node can parent step:{id} spans explicitly under it.
+            # Stored in graph state (plain strings) — survives checkpointing
+            # and thread hops where contextvars would be lost.
+            plan_span_ctx = get_trace_context()
         # The worker persists + streams this as the SSE `plan` event. Emitted
         # here (plan-time, before any step runs) so live subscribers and the
         # persisted replay both see run_started -> plan -> step_* in order.
@@ -230,6 +254,7 @@ def _make_plan_node(
             "plan_error": None,
             "attempt": attempt,
             "planner_feedback": None,
+            "plan_span_ctx": plan_span_ctx,
         }
 
     return plan_node
@@ -257,6 +282,7 @@ def _make_execute_node(
             fallback_message=state["request_text"],
             on_event=on_event,
             cancel_event=_cancel_event(config),
+            parent_span_ctx=state.get("plan_span_ctx"),
         )
         results = {r.step_id: r for r in exec_result.step_results}
         return {"step_results": results}
@@ -274,13 +300,31 @@ def _make_aggregate_node(aggregator: Aggregator) -> Callable:
             trace_id=state["trace_id"],
             step_results=[state["step_results"][s.step_id] for s in plan.steps],
         )
+        run_ctx = _configurable(config).get(_TRACE_CTX)
         with manual_span(
-            "aggregate", as_type="span", input={"goal": truncate(plan.goal, 500)}
+            "aggregate", as_type="span", input={"goal": truncate(plan.goal, 500)},
+            trace_context=run_ctx,
         ) as agg_obs:
             agg = aggregator.aggregate(plan, exec_result)
+            # One execution retry: partial/failed runs replan with the step
+            # errors as feedback. Clarifications never replan (the question IS
+            # the answer); successes, cancellations and capped attempts end.
+            if _cancelled(config):
+                agg_obs.update(output={
+                    "status": agg.status,
+                    "summary": truncate(agg.summary, 2000),
+                })
+                return {"aggregation": agg, "planner_feedback": None}
+            attempt = int(state.get("attempt") or 0)
+            retry_armed = (
+                agg.status in ("partial", "failed")
+                and not agg.needs_clarification
+                and attempt < _MAX_PLAN_ATTEMPTS
+            )
             agg_obs.update(output={
                 "status": agg.status,
                 "summary": truncate(agg.summary, 2000),
+                "retry_armed": retry_armed,
             })
         # One execution retry: partial/failed runs replan with the step
         # errors as feedback. Clarifications never replan (the question IS
@@ -293,7 +337,6 @@ def _make_aggregate_node(aggregator: Aggregator) -> Callable:
             and not agg.needs_clarification
             and attempt < _MAX_PLAN_ATTEMPTS
         )
-        agg_obs.update(output={"retry_armed": retry_armed})
         if retry_armed:
             failed = [r for r in exec_result.step_results if r.status is not StepStatus.SUCCESS]
             logger.info(

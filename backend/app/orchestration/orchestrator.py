@@ -93,12 +93,19 @@ class Orchestrator:
         # cancel_event (nodes poll it cooperatively — threads cannot preempt
         # each other) — and thread_id, which keys the checkpointer's
         # snapshots for THIS run.
+        # trace_context is the Langfuse run-span context captured HERE in the
+        # worker thread (inside manager's `run` span): outer nodes use it for
+        # explicit parenting so plan/aggregate land under `run` even when
+        # LangGraph schedules them on pool threads.
+        from app.observability.langfuse import get_trace_context
+
         config = {
             "configurable": {
                 "thread_id": trace_id,
                 "notebook_id": notebook_id,
                 "on_event": on_event,
                 "cancel_event": cancel_event,
+                "trace_context": get_trace_context(),
             }
         }
         # Same add_node-style overload limitation as plan_graph.py: the
@@ -117,6 +124,7 @@ class Orchestrator:
                 "aggregation": None,
                 "attempt": 0,
                 "planner_feedback": None,
+                "plan_span_ctx": None,
             },
             config=config,  # type: ignore[call-overload]
         )

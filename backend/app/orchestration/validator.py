@@ -77,8 +77,13 @@ class PlanValidator:
             has_agent = bool(step.agent_id)
             has_tool = bool(step.tool_id)
             if has_agent == has_tool:  # both or neither
+                hint = ""
+                if isinstance(step.input, dict) and (
+                    "agent_id" in step.input or "tool_id" in step.input
+                ):
+                    hint = " (agent_id/tool_id are TOP-LEVEL step fields, not input keys — move them up)"
                 raise PlanValidationError(
-                    f"step {step.step_id} must set exactly one of agent_id/tool_id"
+                    f"step {step.step_id} must set exactly one of agent_id/tool_id{hint}"
                 )
             if has_agent and step.agent_id not in known_agent:
                 raise PlanValidationError(f"step {step.step_id} references unknown agent")

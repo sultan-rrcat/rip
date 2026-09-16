@@ -25,12 +25,20 @@ Semantics:
   - status-driven retry loop (agents never raise; LangGraph RetryPolicy is
     exception-driven and therefore does NOT apply to our contract)
   - per-step wall-clock timeout (reports FAILURE; cannot preempt a hung
-    worker — pre-existing thread limitation)
+    worker — pre-existing thread limitation; the span lifecycle lives in
+    the node thread so a late background finish can no longer flip the
+    span or emit late events, and the orphan aborts between attempts)
+  - per-executor deadlines: agent (LLM) steps get the provider budget
+    (`ollama_timeout_ms`), deterministic tool steps stay on the tight
+    default — one global 30s starves multi-paragraph writes on a 14B model
   - no approval gate (local single-user: tools execute directly)
 
-RIP port: approvals, Langfuse spans, and correlation helpers removed;
-step lifecycle is reported through the opaque `on_event` callback as
-plain dicts (the run worker maps these onto SSE in Phase 4).
+RIP port: approvals and correlation helpers removed; step lifecycle is
+reported through the opaque `on_event` callback as plain dicts (the run
+worker maps these onto SSE in Phase 4). Each step opens a `step:{id}`
+Langfuse span parented explicitly under the plan span via
+`parent_span_ctx` (engine forwards state["plan_span_ctx"]) so steps nest
+INSIDE `plan` even across thread hops.
 """
 
 from __future__ import annotations
@@ -159,10 +167,11 @@ def _resolve_input(raw: dict, outputs: dict[str, str]) -> dict:
 
 def _invoke_with_wall_clock(
     step: PlanStep,
-    node_ctx: contextvars.Context,
+    ctx: contextvars.Context,
     body: Callable[[], StepResult],
     timeout_ms: int,
     cancel_event: threading.Event | None = None,
+    expired: threading.Event | None = None,
 ) -> StepResult:
     """Run one step's full body under a wall-clock deadline.
 
@@ -171,14 +180,19 @@ def _invoke_with_wall_clock(
     context-managed executor would block the node until the hung body
     finished, silently turning the reported timeout into a longer stall.
     Cooperative cancel: checked before submit and again on result.
+    On timeout `expired` is set so the orphaned background body stays
+    side-effect free (no span updates, no late deltas/events — the span
+    lifecycle lives in the node thread, not the body).
     """
     if is_cancelled(cancel_event):
         return _cancelled_result(step)
     executor = ThreadPoolExecutor(max_workers=1)
     try:
-        future: Future = executor.submit(node_ctx.run, body)
+        future: Future = executor.submit(ctx.run, body)
         return future.result(timeout=timeout_ms / 1000)
     except FuturesTimeoutError:
+        if expired is not None:
+            expired.set()
         return StepResult(
             step_id=step.step_id,
             agent_id=step.executor_id,
@@ -215,6 +229,7 @@ def _run_step_body(
     cancel_event: threading.Event | None = None,
     on_delta: Callable[[str], None] | None = None,
     tool_registry: ToolRegistry | None = None,
+    expired: threading.Event | None = None,
 ) -> StepResult:
     """Delegation + status-driven retry loop.
 
@@ -222,6 +237,8 @@ def _run_step_body(
     the tool executor (no approval gate — local single-user). All paths
     share the retry loop and the StepResult shape (StepResult.agent_id
     carries the executor identity — agent_id or tool_id).
+    `expired` aborts the orphaned background body between attempts after
+    the wall clock already reported a timeout (sparing the Ollama server).
     """
     import json as _json
 
@@ -247,6 +264,13 @@ def _run_step_body(
     for attempt in range(max_retries + 1):
         if is_cancelled(cancel_event):
             return _cancelled_result(step)
+        if expired is not None and expired.is_set():
+            return StepResult(
+                step_id=step.step_id,
+                agent_id=executor_id,
+                status=StepStatus.FAILURE,
+                error="step timed out",
+            )
         if is_tool:
             assert step.tool_id is not None  # narrowed by is_tool
             tools = tool_registry or ToolRegistry()
@@ -312,6 +336,19 @@ def _run_step_body(
     )
 
 
+def _step_timeout_ms(step: PlanStep, default_ms: int) -> int:
+    """Per-step wall-clock deadline.
+
+    Agent steps stream long text out of a single local Ollama server
+    (observed 25–77s for a 5-MCQ write on qwen2.5:14b); they get the
+    provider budget (`ollama_timeout_ms`, 120s). Deterministic tool steps
+    (rag.query, plot.chart, …) stay on the tight default (30s).
+    """
+    if step.tool_id:
+        return default_ms
+    return settings.ollama_timeout_ms
+
+
 def _make_step_node(
     step: PlanStep,
     *,
@@ -327,6 +364,7 @@ def _make_step_node(
     on_event: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
     is_terminal: bool = False,
+    parent_span_ctx: dict[str, str] | None = None,
 ) -> Callable[[PlanGraphState], dict]:
     """Node factory: closure captures everything constant for this run.
 
@@ -350,7 +388,46 @@ def _make_step_node(
                 }
             )
 
+        # Resolve placeholders BEFORE executing so the step sees the
+        # resolved, self-descriptive input. Cheap and synchronous: done
+        # HERE in the node thread (not the background body) so the span
+        # input is accurate even when the body times out.
+        resolved_input = _resolve_input(
+            step.input, _outputs_from(state["step_results"])
+        )
+        is_tool = bool(step.tool_id)
+        if is_tool:
+            # Deterministic utilities run on schema inputs alone:
+            # drop any planner-emitted chatter keys (the run's
+            # notebook_id is injected below). The rag.query `message`
+            # alias is a first-class schema field, so it stays.
+            resolved_input.pop("context", None)
+            resolved_input.pop("history", None)
+        else:
+            if "message" not in resolved_input and fallback_message:
+                resolved_input["message"] = fallback_message
+            eot = (step.expected_output_type or "text").lower()
+            if (
+                context
+                and "context" not in resolved_input
+                and is_terminal
+                and eot not in _MACHINE_OUTPUT_TYPES
+            ):
+                resolved_input["context"] = context
+        if step.expected_output_type and "expected_output_type" not in resolved_input:
+            resolved_input["expected_output_type"] = step.expected_output_type
+        if step.tool_id and notebook_id is not None:
+            # Run-scoped truth wins over anything the planner emitted.
+            resolved_input["notebook_id"] = notebook_id
+
+        step_timeout = _step_timeout_ms(step, timeout_ms)
+        expired = threading.Event()
+
         def _emit_delta(text: str) -> None:
+            # Live-only deltas from an already-timed-out body would stream
+            # into chat AFTER the failure was recorded — suppress them.
+            if expired.is_set():
+                return
             if on_event is not None:
                 on_event(
                     {"type": "delta", "step_id": step.step_id, "content": text}
@@ -359,67 +436,52 @@ def _make_step_node(
         delta_sink = _emit_delta if on_event is not None else None
 
         def body() -> StepResult:
-            # Resolve placeholders BEFORE executing so the step sees the
-            # resolved, self-descriptive input.
-            resolved_input = _resolve_input(
-                step.input, _outputs_from(state["step_results"])
+            # Side-effect free by contract: no span updates, no step_completed
+            # events. If the wall clock already fired, the result is discarded
+            # and only compute is wasted — never a trace lie. Abort between
+            # attempts when possible to spare the single Ollama server.
+            if expired.is_set() or is_cancelled(cancel_event):
+                return _cancelled_result(step) if is_cancelled(cancel_event) else StepResult(
+                    step_id=step.step_id,
+                    agent_id=step.executor_id,
+                    status=StepStatus.FAILURE,
+                    error="step timed out",
+                )
+            return _run_step_body(
+                step, trace_id, resolved_input, registry, max_retries, step_timeout,
+                cancel_event, delta_sink, tool_registry, expired,
             )
-            is_tool = bool(step.tool_id)
-            if is_tool:
-                # Deterministic utilities run on schema inputs alone:
-                # drop any planner-emitted chatter keys (the run's
-                # notebook_id is injected below). The rag.query `message`
-                # alias is a first-class schema field, so it stays.
-                resolved_input.pop("context", None)
-                resolved_input.pop("history", None)
-            else:
-                if "message" not in resolved_input and fallback_message:
-                    resolved_input["message"] = fallback_message
-                eot = (step.expected_output_type or "text").lower()
-                if (
-                    context
-                    and "context" not in resolved_input
-                    and is_terminal
-                    and eot not in _MACHINE_OUTPUT_TYPES
-                ):
-                    resolved_input["context"] = context
-            if step.expected_output_type and "expected_output_type" not in resolved_input:
-                resolved_input["expected_output_type"] = step.expected_output_type
-            if step.tool_id and notebook_id is not None:
-                # Run-scoped truth wins over anything the planner emitted.
-                resolved_input["notebook_id"] = notebook_id
-            with manual_span(
-                f"step:{step.step_id}", as_type="span",
-                input=truncate(resolved_input, 2000),
-                metadata={"executor": step.executor_id},
-            ) as step_obs:
-                result = _run_step_body(
-                    step, trace_id, resolved_input, registry, max_retries, timeout_ms,
-                    cancel_event, delta_sink, tool_registry,
-                )
-                step_obs.update(output={
-                    "status": result.status.value,
-                    "output": truncate(result.output, 2000),
-                    "error": truncate(result.error, 500),
-                })
-            if on_event is not None:
-                on_event(
-                    {
-                        "type": "step_completed",
-                        "step_id": step.step_id,
-                        "status": result.status.value,
-                        "output": _trunc(result.output),
-                    }
-                )
-            return result
 
-        return {
-            "step_results": {
-                step.step_id: _invoke_with_wall_clock(
-                    step, node_ctx, body, timeout_ms, cancel_event
-                )
-            }
-        }
+        # Span lifecycle lives HERE in the node thread (not the background
+        # body): exactly one update, exactly one end — at success OR at the
+        # wall-clock timeout. A late background finish can no longer flip a
+        # timed-out span to success. The background thread inherits the span
+        # via a context copied INSIDE it so generations still nest under it.
+        with manual_span(
+            f"step:{step.step_id}", as_type="span",
+            input=truncate(resolved_input, 2000),
+            metadata={"executor": step.executor_id},
+            trace_context=parent_span_ctx,
+        ) as step_obs:
+            run_ctx = contextvars.copy_context()
+            result = _invoke_with_wall_clock(
+                step, run_ctx, body, step_timeout, cancel_event, expired
+            )
+            step_obs.update(output={
+                "status": result.status.value,
+                "output": truncate(result.output, 2000),
+                "error": truncate(result.error, 500),
+            })
+        if on_event is not None:
+            on_event(
+                {
+                    "type": "step_completed",
+                    "step_id": step.step_id,
+                    "status": result.status.value,
+                    "output": _trunc(result.output),
+                }
+            )
+        return {"step_results": {step.step_id: result}}
 
     return node
 
@@ -437,6 +499,7 @@ def build_plan_graph(
     timeout_ms: int | None = None,
     on_event: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
+    parent_span_ctx: dict[str, str] | None = None,
 ) -> tuple[CompiledStateGraph, dict[str, contextvars.Context]]:
     """Compile a StateGraph from a validated Plan — per request, at runtime.
 
@@ -456,7 +519,9 @@ def build_plan_graph(
 
     # One contextvars copy per node, made HERE (calling thread, sequentially —
     # a Context cannot be entered concurrently, and copy_context() only copies
-    # the CURRENT thread's context).
+    # the CURRENT thread's context). Kept for the return contract; span
+    # propagation is explicit (parent_span_ctx) plus a fresh copy taken
+    # INSIDE each step span so generations nest under it.
     base_ctx = contextvars.copy_context()
     node_ctxs = {s.step_id: base_ctx.run(contextvars.copy_context) for s in plan.steps}
 
@@ -483,6 +548,7 @@ def build_plan_graph(
                 on_event=on_event,
                 cancel_event=cancel_event,
                 is_terminal=s.step_id in terminal_ids,
+                parent_span_ctx=parent_span_ctx,
             ),
             # Explicit input_schema: LangGraph's add_node is generically typed
             # over the node's input; mypy cannot solve that inference from a
@@ -515,6 +581,7 @@ def run_plan_graph(
     timeout_ms: int | None = None,
     on_event: Callable[[dict], None] | None = None,
     cancel_event: threading.Event | None = None,
+    parent_span_ctx: dict[str, str] | None = None,
 ) -> ExecutionResult:
     """Build + stream the plan graph, emitting events as super-steps complete.
 
@@ -522,6 +589,9 @@ def run_plan_graph(
     events AS they finish. Within a parallel super-step, LangGraph may batch
     sibling updates — cross-super-step ordering (upstream before downstream)
     is guaranteed, intra-wave order is not.
+
+    `parent_span_ctx` is the current attempt's plan-span context: step spans
+    parent explicitly under it so they nest INSIDE `plan` in Langfuse.
     """
     if plan.is_trivial():
         return ExecutionResult(trace_id=trace_id, step_results=[])
@@ -539,6 +609,7 @@ def run_plan_graph(
         timeout_ms=timeout_ms,
         on_event=on_event,
         cancel_event=cancel_event,
+        parent_span_ctx=parent_span_ctx,
     )
 
     results: dict[str, StepResult] = {}

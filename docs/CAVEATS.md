@@ -100,10 +100,9 @@ Gating chains `postgres → backend → frontend`. Probes use `127.0.0.1`, never
 
 - Enabling requires `LANGFUSE_ENABLED=true` + keys **and a backend restart** (`init_langfuse` runs at boot). Disabled path is behavior-identical.
 
-### Outer spans are fragile (no parent-context re-entry)
+### Outer spans are explicitly parented (fixed)
 
-- The engine opens `plan`/`aggregate` spans directly in LangGraph node bodies without re-entering the worker thread's context (Athena had `_with_parent_ctx`; RIP dropped it — the "spans removed" docstring in `engine.py` is stale, the spans exist).
-- If LangGraph ever schedules outer nodes on pool threads, `plan`/`aggregate` detach into orphan traces. Inner `step:{id}` spans are safe (per-node context copies). If plan spans go missing, this is the first suspect.
+- The engine parents `plan`/`aggregate` spans explicitly via `trace_context` captured in the worker thread (`Orchestrator.run` → `config["configurable"]["trace_context"]`), and `step:{id}` spans parent explicitly under the plan span (`state["plan_span_ctx"]` → `run_plan_graph(parent_span_ctx=…)`). This replaces the old contextvars-only chain (Athena `_with_parent_ctx` pattern RIP had dropped) and survives LangGraph pool-thread scheduling. If spans ever detach into orphan traces again, check that `get_trace_context()` returns non-None inside the `run` span and that the IDs flow through config/state.
 
 ---
 
@@ -118,7 +117,7 @@ Gating chains `postgres → backend → frontend`. Probes use `127.0.0.1`, never
 
 ## Planner behavior
 
-- **Validator is strict `exactly-one-of`.** Every step needs precisely one of `agent_id`/`tool_id` from the known sets; `depends_on` must reference exact `step_id`s (no `step_` prefixes); max 10 steps. Violations fail the run honestly before execution.
+- **Validator is strict `exactly-one-of`.** Every step needs precisely one of `agent_id`/`tool_id` from the known sets **as top-level step keys — never nested inside `input`** (the model sometimes buries them there; `Plan.from_model` hoists exactly-one nested id automatically, and the validator error names the fix when it can't); `depends_on` must reference exact `step_id`s (no `step_` prefixes); max 10 steps. Violations fail the run honestly before execution.
 - **Small planner models underperform.** A 2B planner was observed emitting executor-less steps (validation failure) and empty plans. Default to `qwen2.5:14b`; if a smaller override is used, expect planning-quality loss. Trivial requests are covered by the ADR-026 fallback (single `reasoning` step).
 - **`notebook_id` is injected, never generated.** The planner must never emit it; the engine overwrites tool inputs from the run. Same holds for `notebook.inspect` and `doc.convert` (`file_id` comes only from the `Notebook documents:` snapshot or `"*"` for convert-all; never invented, never a `{{step}}` placeholder).
 - **Placeholder hygiene.** Placeholders only carry whole step output text (`{{1}}`). Dotted forms like `{{1.files[0].id}}` do not exist and must never be emitted; structured data from `notebook.inspect` cannot be chained to `doc.convert`. `notebook.inspect` is a freshness probe only (single step, never feed another step).
@@ -126,3 +125,5 @@ Gating chains `postgres → backend → frontend`. Probes use `127.0.0.1`, never
 - **Plot grounding is enforced.** Dependent `plot.chart` values must carry a lone `{{id}}` placeholder to a numbers step (literals + deps = rejected, no fake chart; garbled `",{{2}}"` and multi-source values rejected — fan into one merging numbers step); `rag → plot` direct is rejected — route through numbers reasoning; summarize+plot splits numbers + answer branches; one number per label in label order (CSV strings from placeholders are split back into points). Standalone literal plots stay legal.
 - **Context is scoped per step.** Terminal prose agents get memory context; intermediates run on task + upstream outputs (planner threads follow-ups); tools get `notebook_id` only. The Steps panel is live-only; the main bubble always converges to the persisted summary.
 - **Planner recall is bounded (ADR-028).** One retry max: rejected plans and partial/failed runs replan once with short feedback, then fail honestly. Failure-path planning latency roughly doubles; execution retries re-spend RAG + step LLMs; attempt-1 artifact files orphan on disk (`index.json` is written once at completion). Clarifications and cancellations never replan.
+- **Step timeouts are per-executor.** Agent (LLM) steps get the provider budget (`ollama_timeout_ms`); tool steps stay on the tight `default_timeout_ms` (30s). A timeout reports FAILURE but cannot preempt the worker — the orphaned thread is side-effect free (span ends once in the node thread, late deltas/events suppressed, retry loop aborts between attempts). Never trust a `success` span whose `endTime` is after its run's `aggregate`: that's a late orphan, the engine saw a timeout.
+- **Parallelism budget.** Steps with no `depends_on` run simultaneously against one Ollama server. The planner fans out at most 2 long-text reasoning writes in parallel (rule 9); longer writes chain sequentially. Three parallel 5-MCQ writes were observed timing out at 25–77s each.

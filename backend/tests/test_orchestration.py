@@ -947,3 +947,94 @@ class TestOrchestrator:
         result = orch.run("plot it", "nb-1")
         assert plans == [1, 1]
         assert result.status == "failed" and result.plan_incomplete
+
+
+# --- Nested executor ids (live trace: model buries agent_id/tool_id in input) ---
+
+
+class TestNestedExecutorHoist:
+    def test_from_model_hoists_tool_id(self):
+        plan = Plan.from_model(
+            "p", "g",
+            [{"step_id": "1", "input": {"tool_id": "rag.query", "query": "x"}}],
+        )
+        assert plan.steps[0].tool_id == "rag.query"
+        assert "tool_id" not in plan.steps[0].input
+        assert plan.steps[0].input["query"] == "x"
+
+    def test_from_model_hoists_agent_id(self):
+        plan = Plan.from_model(
+            "p", "g",
+            [{"step_id": "1", "input": {"agent_id": "fake", "message": "hi"}}],
+        )
+        assert plan.steps[0].agent_id == "fake"
+        assert "agent_id" not in plan.steps[0].input
+        assert plan.steps[0].input["message"] == "hi"
+
+    def test_from_model_leaves_top_level_set(self):
+        plan = Plan.from_model(
+            "p", "g",
+            [{"step_id": "1", "agent_id": "fake",
+              "input": {"message": "hi", "tool_id": "rag.query"}}],
+        )
+        assert plan.steps[0].agent_id == "fake"
+        assert plan.steps[0].tool_id is None
+        assert plan.steps[0].input["tool_id"] == "rag.query"
+
+    def test_from_model_leaves_both_nested_for_validator(self):
+        plan = Plan.from_model(
+            "p", "g",
+            [{"step_id": "1",
+              "input": {"agent_id": "fake", "tool_id": "rag.query"}}],
+        )
+        assert plan.steps[0].agent_id == "" and plan.steps[0].tool_id is None
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        with pytest.raises(PlanValidationError, match="TOP-LEVEL"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_validator_hint_names_top_level(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[PlanStep(step_id="1", input={"tool_id": "rag.query"})],
+        )
+        with pytest.raises(PlanValidationError, match="TOP-LEVEL"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_validator_without_nesting_has_no_hint(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g", steps=[PlanStep(step_id="1", input={})]
+        )
+        with pytest.raises(PlanValidationError) as exc:
+            PlanValidator(agents, tools).validate(plan)
+        assert "TOP-LEVEL" not in str(exc.value)
+
+    def test_e2e_nested_ids_execute(self):
+        provider = FakeProvider(
+            structured={
+                "goal": "g",
+                "steps": [
+                    {
+                        "step_id": "1",
+                        "input": {"tool_id": "rag.query", "query": "hello"},
+                        "depends_on": [], "expected_output_type": "chunks",
+                    },
+                    {
+                        "step_id": "2",
+                        "input": {"agent_id": "fake", "message": "answer {{1}}"},
+                        "depends_on": ["1"], "expected_output_type": "answer",
+                    },
+                ],
+            }
+        )
+        agents = AgentRegistry()
+        agents.register(FakeAgent(output="final"))
+        tools = get_default_tool_registry(rag=FakeRAG())
+        orch = Orchestrator(
+            Planner(provider, agents, tools),
+            PlanValidator(agents, tools),
+            Aggregator(), agents, tools,
+        )
+        result = orch.run("hi", "nb-1")
+        assert result.status == "success" and result.summary == "final"
