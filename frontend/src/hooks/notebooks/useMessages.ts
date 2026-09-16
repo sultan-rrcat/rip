@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { getMessagesAPI, createMessageAPI } from '@/services/messages'
 import { createRun, subscribeToRunEvents, cancelRun } from '@/services/runs'
-import type { Message, MessageArtifact, Source } from '@/types'
-import type { RunEvent, RunView, PlanStep } from '@/types/runs'
+import type { Artifact, Message, Source } from '@/types'
+import type { RunEvent, RunView, PlanStep, StepResultView } from '@/types/runs'
 
 const DEFAULT_MESSAGES: Message[] = [
   {
@@ -18,9 +18,12 @@ const activeKey = (notebookId: string) => `rip:activeRun:${notebookId}`
 const persistedKey = (notebookId: string) => `rip:persistedRun:${notebookId}`
 
 // Backend payload extras outside the locked RunEvent union (see
-// types/runs.ts header): step_started carries executor_id, error carries
-// message. Read once at the boundary, with fallbacks — never spread.
-type WireEvent = RunEvent & Record<string, unknown>
+// types/runs.ts header): plan carries `attempt`, error carries `message`.
+// Read once at the boundary, with fallbacks — never spread.
+type WirePlanEvent = Extract<RunEvent, { type: 'plan' }> & { attempt?: number }
+type WireErrorEvent = Extract<RunEvent, { type: 'error' }> & {
+  message?: string
+}
 
 function eventText(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -32,15 +35,15 @@ export function useMessages(notebook_id: string | undefined) {
   const [isRunning, setIsRunning] = useState(false)
 
   // Mutable run mirrors (refs avoid stale closures in the SSE callback):
-  // accumulated text, sources, unsubscribe, dedupe set, placeholder id.
+  // accumulated text, sources, artifacts, unsubscribe, dedupe set, placeholder id.
   const textRef = useRef('')
   const sourcesRef = useRef<Source[]>([])
-  const artifactsRef = useRef<MessageArtifact[]>([])
+  const artifactsRef = useRef<Artifact[]>([])
   const unsubscribeRef = useRef<(() => void) | null>(null)
   const seenRef = useRef<Set<string>>(new Set())
   const placeholderRef = useRef<string | null>(null)
   // Step results for collapsible steps view
-  const stepResultsRef = useRef<Record<string, {executor:string,status:string,output:string,delta:string}>>({})
+  const stepResultsRef = useRef<Record<string, StepResultView>>({})
   const planStepsRef = useRef<PlanStep[] | null>(null)
   // Notebook owning the current subscription. Written in effects/handlers
   // only (never during render) so the SSE callbacks can't go stale.
@@ -69,20 +72,31 @@ export function useMessages(notebook_id: string | undefined) {
         setMessages((prev) => prev.filter((m) => m.id !== messageId))
         return
       }
-      const saved = await createMessageAPI(
-        nb,
-        'assistant',
-        textRef.current,
-        sourcesRef.current,
-        artifactsRef.current,
-      )
-      localStorage.setItem(persistedKey(nb), runId)
-      localStorage.removeItem(activeKey(nb))
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId ? { ...saved, status: 'done' as const } : m,
-        ),
-      )
+      try {
+        const saved = await createMessageAPI(
+          nb,
+          'assistant',
+          textRef.current,
+          sourcesRef.current,
+          artifactsRef.current,
+        )
+        localStorage.setItem(persistedKey(nb), runId)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId ? { ...saved, status: 'done' as const } : m,
+          ),
+        )
+      } catch {
+        // Persist failed: keep the accumulated answer on screen rather than
+        // leaving the placeholder stuck in a streaming state.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId ? { ...m, status: 'done' as const } : m,
+          ),
+        )
+      } finally {
+        localStorage.removeItem(activeKey(nb))
+      }
     },
     [detach],
   )
@@ -94,10 +108,21 @@ export function useMessages(notebook_id: string | undefined) {
       detach()
       if (!nb || !messageId) return
       localStorage.removeItem(activeKey(nb))
-      const errorMessage = await createMessageAPI(nb, 'error', text)
-      setMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? errorMessage : m)),
-      )
+      try {
+        const errorMessage = await createMessageAPI(nb, 'error', text)
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? errorMessage : m)),
+        )
+      } catch {
+        // Persisting the error failed too: show it locally.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? { ...m, role: 'error' as const, text, status: 'done' as const }
+              : m,
+          ),
+        )
+      }
     },
     [detach],
   )
@@ -112,9 +137,7 @@ export function useMessages(notebook_id: string | undefined) {
     if (messageId) {
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === messageId
-            ? { ...m, status: 'done' as const }
-            : m,
+          m.id === messageId ? { ...m, status: 'done' as const } : m,
         ),
       )
     }
@@ -122,24 +145,23 @@ export function useMessages(notebook_id: string | undefined) {
 
   const handleEvent = useCallback(
     (runId: string, event: RunEvent) => {
-      const evt = event as WireEvent
       // Dedupe by seq across replay + live (Q35): String() covers the
       // fractional live-only delta seqs ("3.1").
-      const key = String(evt.seq)
+      const key = String(event.seq)
       if (seenRef.current.has(key)) return
       seenRef.current.add(key)
       const messageId = placeholderRef.current
       if (!messageId) return
 
-      switch (evt.type) {
+      switch (event.type) {
         case 'plan': {
-          const planEvt = evt as Extract<RunEvent, { type: 'plan' }>
+          const planEvt = event as WirePlanEvent
           // Planner recall: a second plan for the same run means attempt 1
           // failed. Its tokens/sources/artifacts belong to the dead attempt
           // and must not pollute the retry — reset every accumulator.
           // Detected via the additive `attempt` field, with prior-plan
           // presence as fallback (replay-safe: attach() clears the ref).
-          const attempt = typeof evt.attempt === 'number' ? evt.attempt : 1
+          const attempt = planEvt.attempt ?? 1
           if (attempt > 1 || planStepsRef.current !== null) {
             textRef.current = ''
             sourcesRef.current = []
@@ -154,20 +176,32 @@ export function useMessages(notebook_id: string | undefined) {
           }
           planStepsRef.current = planEvt.steps
           // initialise step results map
-          const initSteps: Record<string, {executor:string,status:string,output:string,delta:string}> = {}
+          const initSteps: Record<string, StepResultView> = {}
           for (const s of planEvt.steps) {
-            initSteps[s.step_id] = { executor: s.executor, status: 'pending', output: '', delta: '' }
+            initSteps[s.step_id] = {
+              executor: s.executor,
+              status: 'pending',
+              output: '',
+              delta: '',
+            }
           }
           stepResultsRef.current = initSteps
           setActiveRun((r) =>
             r && r.runId === runId
-              ? { ...r, goal: planEvt.goal, plan: planEvt.steps, sources: [], artifacts: [], stepResults: initSteps }
+              ? {
+                  ...r,
+                  goal: planEvt.goal,
+                  plan: planEvt.steps,
+                  sources: [],
+                  artifacts: [],
+                  stepResults: initSteps,
+                }
               : r,
           )
           break
         }
         case 'delta': {
-          const text = eventText(evt.content)
+          const text = eventText(event.content)
           if (!text) break
           // Stream every delta into the main bubble (matches the
           // concatenated summary); mirror into the Steps panel when the
@@ -181,13 +215,17 @@ export function useMessages(notebook_id: string | undefined) {
                 : m,
             ),
           )
-          const stepId = (evt as any).step_id as string | undefined
+          const stepId = event.step_id
           if (stepId) {
             const step = stepResultsRef.current[stepId]
             if (step) {
-              step.delta += text
-              stepResultsRef.current[stepId] = { ...step, delta: step.delta }
-              setActiveRun(r => r && r.runId === runId ? { ...r, stepResults: { ...stepResultsRef.current } } : r)
+              const updated = { ...step, delta: step.delta + text }
+              stepResultsRef.current[stepId] = updated
+              setActiveRun((r) =>
+                r && r.runId === runId
+                  ? { ...r, stepResults: { ...stepResultsRef.current } }
+                  : r,
+              )
             }
           }
           break
@@ -195,20 +233,18 @@ export function useMessages(notebook_id: string | undefined) {
         case 'summary': {
           // Authoritative full text — replaces token accumulation so a
           // resumed replay (no deltas, Q35) still renders the answer.
-          const summaryEvt = evt as Extract<RunEvent, { type: 'summary' }>
-          textRef.current = summaryEvt.content
+          textRef.current = event.content
           setMessages((prev) =>
             prev.map((m) =>
               m.id === messageId
-                ? { ...m, text: summaryEvt.content, status: 'streaming' as const }
+                ? { ...m, text: event.content, status: 'streaming' as const }
                 : m,
             ),
           )
           break
         }
         case 'sources': {
-          const sourcesEvt = evt as Extract<RunEvent, { type: 'sources' }>
-          sourcesRef.current = [...sourcesRef.current, ...sourcesEvt.sources]
+          sourcesRef.current = [...sourcesRef.current, ...event.sources]
           const accumulated = sourcesRef.current
           setActiveRun((r) =>
             r && r.runId === runId ? { ...r, sources: accumulated } : r,
@@ -221,12 +257,11 @@ export function useMessages(notebook_id: string | undefined) {
           break
         }
         case 'artifacts': {
-          const artEvt = evt as Extract<RunEvent, { type: 'artifacts' }>
-          artifactsRef.current = [...artifactsRef.current, ...artEvt.artifacts]
+          artifactsRef.current = [...artifactsRef.current, ...event.artifacts]
           const accumulated = artifactsRef.current
           setActiveRun((r) =>
             r && r.runId === runId
-              ? { ...r, artifacts: [...r.artifacts, ...artEvt.artifacts] }
+              ? { ...r, artifacts: [...r.artifacts, ...event.artifacts] }
               : r,
           )
           setMessages((prev) =>
@@ -239,30 +274,41 @@ export function useMessages(notebook_id: string | undefined) {
         case 'run_completed':
           void finalizeCompleted(runId)
           break
-        case 'error':
+        case 'error': {
+          const errorEvt = event as WireErrorEvent
           void finalizeError(
-            `Something went wrong. Error: ${eventText(evt.error) || eventText(evt.message) || 'unknown'}`,
+            `Something went wrong. Error: ${eventText(errorEvt.error) || eventText(errorEvt.message) || 'unknown'}`,
           )
           break
+        }
         case 'step_started': {
-          const sEvt = evt as any
-          const stepId = sEvt.step_id as string
+          const stepId = event.step_id
           if (stepId && stepResultsRef.current[stepId]) {
-            stepResultsRef.current[stepId] = { ...stepResultsRef.current[stepId], status: 'running' }
-            setActiveRun(r => r && r.runId === runId ? { ...r, stepResults: { ...stepResultsRef.current } } : r)
+            stepResultsRef.current[stepId] = {
+              ...stepResultsRef.current[stepId],
+              status: 'running',
+            }
+            setActiveRun((r) =>
+              r && r.runId === runId
+                ? { ...r, stepResults: { ...stepResultsRef.current } }
+                : r,
+            )
           }
           break
         }
         case 'step_completed': {
-          const sEvt = evt as any
-          const stepId = sEvt.step_id as string
+          const stepId = event.step_id
           if (stepId && stepResultsRef.current[stepId]) {
             stepResultsRef.current[stepId] = {
               ...stepResultsRef.current[stepId],
-              status: sEvt.status || 'done',
-              output: sEvt.output || stepResultsRef.current[stepId].delta
+              status: event.status || 'done',
+              output: event.output || stepResultsRef.current[stepId].delta,
             }
-            setActiveRun(r => r && r.runId === runId ? { ...r, stepResults: { ...stepResultsRef.current } } : r)
+            setActiveRun((r) =>
+              r && r.runId === runId
+                ? { ...r, stepResults: { ...stepResultsRef.current } }
+                : r,
+            )
           }
           break
         }
@@ -300,12 +346,18 @@ export function useMessages(notebook_id: string | undefined) {
       })
       setIsRunning(true)
       unsubscribeRef.current?.()
-      const unsubscribe = subscribeToRunEvents(runId, (event) =>
-        handleEvent(runId, event),
+      const unsubscribe = subscribeToRunEvents(
+        runId,
+        (event) => handleEvent(runId, event),
+        () => {
+          // The stream dropped before a terminal event: surface it instead
+          // of leaving the UI stuck in a running state.
+          void finalizeError('Connection to the run was lost.')
+        },
       )
       unsubscribeRef.current = unsubscribe
     },
-    [handleEvent],
+    [handleEvent, finalizeError],
   )
 
   // Load persisted messages on mount; resume an in-flight run if the page
@@ -359,37 +411,72 @@ export function useMessages(notebook_id: string | undefined) {
     async (text: string) => {
       if (!notebook_id || isRunning) return
       nbRef.current = notebook_id
-      // 1. Persist the user message (frontend owns messages, Q22)
-      const userMessage = await createMessageAPI(notebook_id, 'user', text)
-
-      // 2. Optimistic user message + streaming placeholder
       const assistantTempId = uuidv4()
-      setMessages((prev) => [
-        ...prev,
-        userMessage,
-        {
-          id: assistantTempId,
-          role: 'assistant',
-          text: '',
-          status: 'streaming',
-          sources: [],
-        },
-      ])
+      let placeholderAdded = false
 
       try {
+        // 1. Persist the user message (frontend owns messages, Q22)
+        const userMessage = await createMessageAPI(notebook_id, 'user', text)
+
+        // 2. Optimistic user message + streaming placeholder
+        setMessages((prev) => [
+          ...prev,
+          userMessage,
+          {
+            id: assistantTempId,
+            role: 'assistant',
+            text: '',
+            status: 'streaming',
+            sources: [],
+          },
+        ])
+        placeholderAdded = true
+
         // 3. Create the run, then stream its events (plan collapsible,
         // deltas/summary as tokens, sources/artifacts accumulated)
         const runId = await createRun(notebook_id, text)
         attach(runId, assistantTempId, '')
       } catch (err) {
-        const errorMessage = await createMessageAPI(
-          notebook_id,
-          'error',
-          `Something went wrong. Error: ${err}`,
-        )
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantTempId ? errorMessage : m)),
-        )
+        const errorText = `Something went wrong. Error: ${err}`
+        try {
+          const errorMessage = await createMessageAPI(
+            notebook_id,
+            'error',
+            errorText,
+          )
+          setMessages((prev) =>
+            placeholderAdded
+              ? prev.map((m) =>
+                  m.id === assistantTempId ? errorMessage : m,
+                )
+              : [...prev, errorMessage],
+          )
+        } catch {
+          // Persisting the error failed too: surface it locally.
+          setMessages((prev) =>
+            placeholderAdded
+              ? prev.map((m) =>
+                  m.id === assistantTempId
+                    ? {
+                        ...m,
+                        role: 'error' as const,
+                        text: errorText,
+                        status: 'done' as const,
+                      }
+                    : m,
+                )
+              : [
+                  ...prev,
+                  {
+                    id: assistantTempId,
+                    role: 'error' as const,
+                    text: errorText,
+                    sources: [],
+                    status: 'done' as const,
+                  },
+                ],
+          )
+        }
       }
     },
     [notebook_id, isRunning, attach],

@@ -1,15 +1,23 @@
 import Card from '@/components/home/Card'
 import { useState, useEffect } from 'react'
-import { API } from '@/config'
+import { getNotebooksAPI } from '@/services/notebooks'
 import type { Notebook } from '@/types'
 
 export default function Home() {
   const [notebooks, setNotebooks] = useState<Notebook[]>([])
 
   useEffect(() => {
-    fetch(`${API}/api/notebooks`)
-      .then((res) => res.json())
-      .then((data: Notebook[]) => setNotebooks(data))
+    let cancelled = false
+    getNotebooksAPI()
+      .then((data) => {
+        if (!cancelled && Array.isArray(data)) setNotebooks(data)
+      })
+      .catch((err) => {
+        console.error('Failed to load notebooks:', err)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   return (

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import type { ChangeEvent } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import type { NotebookFile } from '@/types'
 import {
   getFilesAPI,
   deleteFileAPI,
   uploadFileAPI,
+  processFileAPI,
 } from '@/services/files'
-import { API } from '@/config'
 
 export function useFiles(notebook_id: string | undefined) {
   const [files, setFiles] = useState<NotebookFile[]>([])
@@ -34,12 +35,13 @@ export function useFiles(notebook_id: string | undefined) {
     }
   }, [notebook_id])
 
-  // Poll while any file is still processing
+  // Poll while any file is still processing. Keyed on the derived boolean
+  // (not the array) so a poll response doesn't tear down and recreate the
+  // interval on every tick.
+  const hasProcessing = files.some((f) => f.status === 'processing')
   useEffect(() => {
-    if (!notebook_id) return
+    if (!notebook_id || !hasProcessing) return
     const id = notebook_id
-    const isProcessing = files.some((f) => f.status === 'processing')
-    if (!isProcessing) return
 
     const interval = setInterval(async () => {
       try {
@@ -51,24 +53,30 @@ export function useFiles(notebook_id: string | undefined) {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [notebook_id, files])
+  }, [notebook_id, hasProcessing])
 
   async function uploadFile(file: File): Promise<void> {
     if (!notebook_id) return
+    const tempId = `temp-${uuidv4()}`
+    setFiles((prev) => [
+      ...prev,
+      { id: tempId, name: file.name, size: file.size, status: 'uploading' },
+    ])
+
     let newFile: NotebookFile
     try {
       newFile = await uploadFileAPI(notebook_id, file)
-      if (!newFile) return
-      setFiles((prev) => [...prev, newFile])
+      setFiles((prev) => prev.map((f) => (f.id === tempId ? newFile : f)))
     } catch (err) {
       console.error('Failed to upload file:', err)
+      setFiles((prev) =>
+        prev.map((f) => (f.id === tempId ? { ...f, status: 'error' } : f)),
+      )
       return
     }
 
     try {
-      await fetch(`${API}/api/files/${newFile.id}/process`, {
-        method: 'POST',
-      })
+      await processFileAPI(newFile.id)
     } catch (err) {
       console.error('Failed to process file:', err)
       setFiles((prev) =>

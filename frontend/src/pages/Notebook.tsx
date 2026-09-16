@@ -8,7 +8,6 @@ import { useMessages } from '@/hooks/notebooks/useMessages'
 
 export default function Notebook() {
   const { notebook_id } = useParams()
-  // console.log(`NID: ${notebook_id}`)
   const { notebookName, renameNotebook } = useNotebook(notebook_id)
   const { files, handleUpload, handleDelete } = useFiles(notebook_id)
   const { messages, activeRun, isRunning, handleSendMessage, handleCancelRun } =

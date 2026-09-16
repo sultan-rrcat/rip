@@ -1,35 +1,19 @@
-import { API } from '@/config'
-import type { Message, MessageArtifact, MessageRole, Source } from '@/types'
+import { request, jsonInit } from '@/services/http'
+import type { Artifact, Message, MessageRole, Source } from '@/types'
 
-export async function getMessagesAPI(
-  notebookId: string,
-): Promise<Message[]> {
-  console.log(`[messages] GET /api/notebooks/${notebookId}/messages`)
-  const res = await fetch(`${API}/api/notebooks/${notebookId}/messages`)
-  const data: Message[] = await res.json()
-  console.log(`[messages] GET /api/notebooks/${notebookId}/messages →`, data)
-  return data
+export function getMessagesAPI(notebookId: string): Promise<Message[]> {
+  return request<Message[]>(`/api/notebooks/${notebookId}/messages`)
 }
 
-export async function createMessageAPI(
+export function createMessageAPI(
   notebookId: string,
   role: MessageRole,
   text: string,
   sources?: Source[],
-  artifacts?: MessageArtifact[],
+  artifacts?: Artifact[],
 ): Promise<Message> {
-  console.log(`[messages] POST /api/notebooks/${notebookId}/messages`, {
-    role,
-    text,
-    sources,
-    artifacts,
-  })
-  const res = await fetch(`${API}/api/notebooks/${notebookId}/messages`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, text, sources, artifacts }),
-  })
-  const data: Message = await res.json()
-  console.log(`[messages] POST /api/notebooks/${notebookId}/messages →`, data)
-  return data
+  return request<Message>(
+    `/api/notebooks/${notebookId}/messages`,
+    jsonInit('POST', { role, text, sources, artifacts }),
+  )
 }

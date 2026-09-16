@@ -3,7 +3,7 @@ import LocalLibraryIcon from '@mui/icons-material/LocalLibrary'
 import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import DeleteIcon from '@mui/icons-material/Delete'
-import { useEffect, useState, memo } from 'react'
+import { useState, memo } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import type { NotebookFile } from '@/types'
 
@@ -35,14 +35,10 @@ const LeftSidebar = memo(function LeftSidebar({
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') handleRenameSave()
     if (e.key === 'Escape') {
-      onRenameNotebook(notebookName)
+      setTempName(notebookName)
       setIsRenaming(false)
     }
   }
-
-  useEffect(() => {
-    setTempName(notebookName)
-  }, [notebookName])
 
   return (
     <div className="flex flex-col h-full">
@@ -59,7 +55,10 @@ const LeftSidebar = memo(function LeftSidebar({
           />
         ) : (
           <div
-            onClick={() => setIsRenaming(true)}
+            onClick={() => {
+              setTempName(notebookName)
+              setIsRenaming(true)
+            }}
             className="cursor-pointer text-md font-medium hover:bg-gray-200 px-2 py-1 rounded"
           >
             {notebookName}

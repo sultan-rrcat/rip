@@ -8,7 +8,8 @@ import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import type { Message, Source } from '@/types'
 import type { Artifact, PlanStep, RunView } from '@/types/runs'
-import ArtifactItem, { stripSvgFromText } from '@/components/notebook/ChartArtifact'
+import ArtifactItem from '@/components/notebook/ChartArtifact'
+import { stripSvgFromText } from '@/components/notebook/artifact'
 import TypingDots from '@/components/notebook/TypingDots'
 
 interface ChatAreaProps {
@@ -62,13 +63,29 @@ const markdownComponents: Components = {
 
 const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // Only stick to the bottom while the user is already near it, so scrolling
+  // up to read mid-stream isn't yanked back on every token.
+  const stickToBottomRef = useRef(true)
+
+  function handleScroll() {
+    const el = scrollRef.current
+    if (!el) return
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+    stickToBottomRef.current = distance < 80
+  }
 
   useEffect(() => {
+    if (!stickToBottomRef.current) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [messages, activeRun])
 
   return (
-    <div className="m-1 space-y-6 flex-1 overflow-y-auto px-8 py-10 bg-white border border-gray-400 rounded-xl shadow-sm">
+    <div
+      ref={scrollRef}
+      onScroll={handleScroll}
+      className="m-1 space-y-6 flex-1 overflow-y-auto px-8 py-10 bg-white border border-gray-400 rounded-xl shadow-sm"
+    >
       {messages.map((message) => {
         // The in-flight run renders its plan + artifacts inside the run's
         // placeholder bubble; finished messages render from their rows.
@@ -117,13 +134,6 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
         }
         if (message.role === 'user') {
           return <UserMessage key={message.id} text={message.text} />
-        }
-        if (message.role === 'loading') {
-          return (
-            <AssistantMessage key={message.id}>
-              <TypingDots />
-            </AssistantMessage>
-          )
         }
         if (message.role === 'error') {
           return <ErrorMessage key={message.id} text={message.text} />

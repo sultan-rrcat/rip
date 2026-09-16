@@ -22,7 +22,7 @@ import {
 } from '@/services/notebooks'
 import type { Notebook } from '@/types'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import type {
   Dispatch,
   KeyboardEvent,
@@ -47,7 +47,6 @@ type CardProps = NewCardProps | ExistingCardProps
 
 export default function Card(props: CardProps) {
   const { isNew, title } = props
-  // console.log(`Notebook-Properties: id: ${id} - title: ${title} - isNew: ${isNew}`)
 
   const [openEdit, setOpenEdit] = useState(false)
   const [openDelete, setOpenDelete] = useState(false)
@@ -65,7 +64,6 @@ export default function Card(props: CardProps) {
   function handleMenuOpen(event: MouseEvent<HTMLDivElement>) {
     event.stopPropagation()
     setAnchorEl(event.currentTarget)
-    console.log('clicked 3 dot')
   }
 
   function handleMenuClose() {
@@ -111,9 +109,10 @@ export default function Card(props: CardProps) {
     }
   }
 
-  useEffect(() => {
+  function handleEditOpen() {
     setNewTitle(title)
-  }, [title])
+    setOpenEdit(true)
+  }
 
   if (!isNew) {
     const { id } = props
@@ -147,8 +146,7 @@ export default function Card(props: CardProps) {
             <MenuItem
               onClick={() => {
                 handleMenuClose()
-                console.log('Edit Clicked')
-                setOpenEdit(true)
+                handleEditOpen()
               }}
             >
               <EditIcon fontSize="small" style={{ marginRight: 8 }} />
@@ -158,7 +156,6 @@ export default function Card(props: CardProps) {
             <MenuItem
               onClick={() => {
                 handleMenuClose()
-                console.log('Delete Clicked')
                 setOpenDelete(true)
               }}
             >

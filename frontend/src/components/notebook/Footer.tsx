@@ -35,7 +35,9 @@ const Footer = memo(function Footer({
   }, [inputText])
 
   function handleSend() {
-    if (!inputText.trim()) return
+    // Don't consume the draft while a run is in flight: the placeholder is
+    // replaced by the Stop button, but Enter must not discard typed text.
+    if (isLoading || !inputText.trim()) return
     onSendMessage(inputText)
     setInputText('')
     setIsCode(false)
@@ -74,7 +76,6 @@ const Footer = memo(function Footer({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder="Enter your query"
-              disabled={isLoading}
               className={`w-full bg-transparent border-none outline-none text-gray-700 placeholder:text-gray-400 resize-none overflow-y-auto leading-relaxed py-1.5
                             [&::-webkit-scrollbar]:w-1.5
                             [&::-webkit-scrollbar-track]:bg-transparent
