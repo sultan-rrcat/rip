@@ -4,6 +4,12 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — grounded multi-step answers (ADR-023/027/020 amendments, run `4efaec2b`)
+
+- "Summarize + plot" no longer loses the summary: the final answer keeps terminal text plus the chart placeholder (intermediate chunks/numbers stay hidden), and every live token streams into the main bubble.
+- Ungrounded charts are refused instead of rendered: plans where a dependent `plot.chart` carries hardcoded values (or reads prose/chunks as numbers) fail honestly with a clear error; summarize+plot plans split numbers and answer branches.
+- Per-step detail lives in the live-only Steps panel (no raw SVG dumps); tool steps no longer receive conversation history they ignore.
+
 ## Unreleased — dynamic document awareness (ADR-027)
 
 - Planner now sees notebook files: factual questions over uploaded docs route to `rag.query` first instead of answering from parametric knowledge.

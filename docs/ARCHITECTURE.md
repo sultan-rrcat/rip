@@ -60,11 +60,11 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py`, `code_sandbox.py`, `image_generate.py` | The seven tools |
 | `orchestration/plan.py`, `results.py` | Plan DAG models, step/execution results |
 | `orchestration/planner.py` | Sole planning LLM call (`generate_structured` vs `PLAN_SCHEMA`) |
-| `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget |
+| `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget, plot/report grounding |
 | `orchestration/engine.py` | Outer LangGraph: `plan → execute → aggregate` (+ `plan_error → END`) |
-| `orchestration/plan_graph.py` | Inner per-request DAG: edges = `depends_on`, parallel siblings, placeholder resolution, retry, timeout, cancel |
+| `orchestration/plan_graph.py` | Inner per-request DAG: edges = `depends_on`, parallel siblings, placeholder resolution, scoped memory context (terminal prose agents only; tools get none), retry, timeout, cancel |
 | `orchestration/orchestrator.py` | Façade: trace id, per-request config, `OrchestrationError` contract |
-| `orchestration/aggregator.py` | Deterministic answer assembly (no LLM) |
+| `orchestration/aggregator.py` | Deterministic type-aware answer assembly (no LLM): terminal text shown, intermediates hidden |
 | `orchestration/memory.py` | Context-window summary + recent window |
 | `store/runs.py` | Postgres CRUD for `runs` + gap-free `run_events` seq |
 | `runs/manager.py` | Thread-per-run worker: memory load/persist, `sources`/`artifacts` events, terminal states |
@@ -93,11 +93,11 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 1. Frontend persists the user message: `POST /api/notebooks/{id}/messages`.
 2. Frontend creates the run: `POST /v1/runs {notebook_id, message}` → `202 {run_id}` (bare JSON, no envelope).
 3. Worker loads `conversation_summary` + messages + file snapshot → `build_memory_context()` → `orchestrator.run(..., context=..., notebook_context=...)`.
-4. **Planner** emits `{goal, steps}`; **Validator** checks it. Empty plans are repaired to a single `reasoning` step (ADR-026); malformed plans fail honestly via `plan_error → END`.
-5. **Engine** executes the DAG (`notebook_id` injected into tool inputs, never LLM-generated). `rag.query` completions emit SSE `sources`.
-6. **Aggregator** assembles the answer deterministically: 1 success → verbatim (chart/SVG outputs → placeholder `Chart generated — see Artifacts below.`); N successes → labeled concat (same placeholder per chart step); clarification → verbatim; all-failed → joined errors.
+4. **Planner** emits `{goal, steps}` (summarize+plot uses split numbers + answer branches, plot depending on numbers only); **Validator** checks it, including plot/report grounding. Empty plans are repaired to a single `reasoning` step (ADR-026); malformed or ungrounded plans fail honestly via `plan_error → END`.
+5. **Engine** executes the DAG (`notebook_id` injected into tool inputs, never LLM-generated; memory `context` scoped to terminal prose agent steps, tools get none). `rag.query` completions emit SSE `sources`.
+6. **Aggregator** assembles the answer deterministically (ADR-023, type-aware): single terminal output → verbatim (chart/SVG outputs → placeholder `Chart generated — see Artifacts below.`); multiple → labeled concat (same placeholder per chart step); intermediates (`chunks`/`numbers`/`notebook.inspect`) hidden unless sole output; clarification → verbatim; all-failed → joined errors; partial failures always appended.
 7. Worker persists updated memory, writes the terminal run row, emits `artifacts` (download URLs; charts render inline as `<img>`) + `summary` + `run_completed`. Frontend persists the assistant message once, with sources + artifacts.
-8. `GET /v1/runs/{id}/events` replays persisted events (`id:<seq>`, dedupe by `seq`); `delta` frames are live-only with fractional seqs. `POST /v1/runs/{id}/cancel` cooperatively cancels.
+8. `GET /v1/runs/{id}/events` replays persisted events (`id:<seq>`, dedupe by `seq`); `delta` frames are live-only with fractional seqs and stream into the main bubble (Steps panel is mirror-only, ephemeral). `POST /v1/runs/{id}/cancel` cooperatively cancels.
 
 SSE vocabulary: `run_started · plan · step_started · delta · step_completed · sources · summary · artifacts · run_completed · error · cancelled`.
 

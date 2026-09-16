@@ -73,11 +73,11 @@ Ordered list of steps with dependencies the engine executes. Produced by the Pla
 _Avoid_: Execution graph, workflow
 
 **Validator**:
-Deterministic check that agents/tools exist, dependencies have no cycles, and step budget is respected before execution. No approval gate — tools run directly.
+Deterministic check that agents/tools exist, dependencies have no cycles, step budget is respected, and plot/report steps are grounded (dependent plots need a `{{id}}` placeholder to a numbers step; reports need an upstream answer step) before execution. No approval gate — tools run directly.
 _Avoid_: Checker, pre-validator
 
 **Aggregator**:
-Component that assembles step outputs into a final answer. Deterministic only (Q36) — no LLM synthesis step.
+Component that assembles step outputs into a final answer. Deterministic only (Q36, type-aware per ADR-023) — hides intermediate `chunks`/`numbers`, shows terminal text + chart placeholder; no LLM synthesis step.
 _Avoid_: Synthesizer, combiner
 
 **Engine**:
@@ -147,7 +147,7 @@ _Avoid_: Tracing, monitoring, analytics
 3. Run worker loads `conversation_summary` + messages → `build_memory_context()` → starts orchestration with `context=`
 4. **Planner** generates a **goal** and plan; **Engine** executes **steps** (parallel where possible)
 5. `rag.query` receives `notebook_id` from the Run; worker emits SSE **sources** on completion
-6. **Aggregator** assembles step outputs (deterministic, Q36); chart/SVG step outputs aggregate to a short placeholder — the SVG bytes travel via the SSE **artifacts** event only
+6. **Aggregator** assembles step outputs (deterministic, type-aware per ADR-023: terminal text shown, intermediates hidden); chart/SVG step outputs aggregate to a short placeholder — the SVG bytes travel via the SSE **artifacts** event only. Every live `delta` streams into the main bubble; the Steps panel is a mirror-only, ephemeral view.
 7. Worker persists updated `conversation_summary` if memory folded new turns
 8. SSE **artifacts** (download URLs; charts render inline as `<img>`) + **summary** (final answer) + **run_completed**; frontend persists assistant **message** with sources + artifacts
 9. Structural SSE events persisted to `run_events`; `delta` tokens live-only

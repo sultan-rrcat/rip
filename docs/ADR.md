@@ -76,10 +76,10 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-020: Structural SSE persistence (no delta replay)
 
-- **Status:** Accepted
-- **Context:** Persisting per-token `delta` frames would bloat `run_events` and flood reconnects.
-- **Decision:** Persist structural events + final text only. Reconnect rebuilds text from `step_completed`/`summary`.
-- **Consequences:** Small DB footprint; frontend must never expect delta replay.
+- **Status:** Accepted (amended — streaming + context tiers, run `4efaec2b`)
+- **Context:** Persisting per-token `delta` frames would bloat `run_events` and flood reconnects. Final-step-only delta routing additionally stalled the main bubble on multi-step runs (early-step tokens hidden in a side panel, then a summary jump).
+- **Decision:** Persist structural events + final text only. Reconnect rebuilds text from `step_completed`/`summary`. Live, every `delta` streams into the main bubble (which matches the concatenated summary); the Steps collapsible is a mirror-only, ephemeral view cleared on `run_completed` — never a routing target deltas can be dropped into. Memory `context` is scoped per step tier: planner + terminal prose agent steps get full context; intermediate agent steps get task + resolved upstream placeholders only (the planner threads follow-up references into subtask messages); tool steps get none (`notebook_id` only); `fallback_message` injects into agent steps lacking `message`, never tools.
+- **Consequences:** Small DB footprint; frontend must never expect delta replay. Main-bubble text always converges to the persisted summary; per-step detail is live-only.
 
 ## ADR-021: Run worker contract
 
@@ -97,10 +97,10 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-023: Deterministic aggregator (no LLM synthesis)
 
-- **Status:** Accepted (SVG exception — chart fix)
-- **Context:** LLM synthesis per run costs latency/money and is hard to test.
-- **Decision:** 1 success → verbatim; N successes → labeled concatenation; clarification → verbatim; all-failed → joined errors. Exception: step outputs carrying chart SVG (`<svg`) aggregate to the placeholder `Chart generated — see Artifacts below.` — the SVG bytes stay on `StepResult.output` and travel via the SSE `artifacts` event.
-- **Consequences:** Predictable and testable; less polish on multi-step synthesis. Chat and persisted messages never store multi-KB raw SVG.
+- **Status:** Accepted (amended — type-aware concat, run `4efaec2b`)
+- **Context:** LLM synthesis per run costs latency/money and is hard to test. Final-step-only summaries additionally drop terminal text (a `rag → reasoning → plot` run persisted only the chart placeholder, losing a correct summary), while blind concatenation leaks intermediate machine outputs (chunk dumps, `numbers` feeds) into chat.
+- **Decision:** Type-aware assembly over `expected_output_type`: HIDE intermediates (`chunks`/`numbers`, `notebook.inspect` probe) unless the sole output (anti-blank fallback to last success); SHOW terminals (`answer`/`summary`/`text`/`document`/`chart`/`clarification`, plus unknown types — fail-visible, never fail-blank; `summary` normalizes to answer). Single SHOW → verbatim (no `Step N` prefix); multi-SHOW → labeled concatenation (`Step <id> (<executor>): ...`); clarification → verbatim; all-failed/empty → joined errors; partial runs append every failure line. Exception: step outputs carrying chart SVG (`<svg`) aggregate to the placeholder `Chart generated — see Artifacts below.` — the SVG bytes stay on `StepResult.output` and travel via the SSE `artifacts` event.
+- **Consequences:** Predictable and testable; less polish on multi-step synthesis. Chat and persisted messages never store multi-KB raw SVG. A future LLM Synthesizer stays **deferred opt-in** behind a flag (deterministic remains default); revisit only if polish proves insufficient after v2.
 
 ## ADR-024: Admin health stub
 
@@ -129,6 +129,7 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Context:** The planner was blind to uploads: `Planner.plan()` received only the user text + memory, so factual questions over uploaded docs were answered from parametric knowledge (single `reasoning` step) and "convert to docx" had no discovery path — `doc.generate` synthesizes reports from answer text and cannot read files.
 - **Decision:** (1) New read-only `notebook.inspect` tool listing `{file_id, file_name, file_size, file_status}` for the run's notebook (`notebook_id` injected, never LLM-generated). (2) New sandboxed `doc.convert(file_id, target_format=md|docx|pdf)` tool for exact file conversion via the ingest loaders (Docling Markdown export for PDF/DOCX → markdown, then lossless render to md/docx/pdf). `file_id: "*"` converts every ready file in one step; `file_name` alias supported. (3) Thread a static file snapshot (`manager._load_memory` → `orchestrator.run(notebook_context=)` → planner prompt `Notebook documents:` section) plus routing rules: factual/QA with ready docs → `rag.query` first; plural convert-all or single named convert → single `doc.convert` with literal `file_id` from snapshot (or `"*"`) — never placeholders, never `notebook.inspect` chain; `notebook.inspect` is a freshness probe only (single step, output not chained); report-format → `doc.generate`; ambiguous convert or missing format → single `reasoning` counter-question (`needs_clarification`). Placeholder rule hardened: placeholders only carry whole-text step output; dotted access like `{{1.files[0].id}}` is forbidden. `doc.generate` vs `doc.convert` stay separate tools by intent.
 - **Consequences:** Tool set grows 5→7. `doc.convert` v2 supports DOCX→markdown and convert-all via `"*"`, returns per-file `conversions` list; artifacts writer emits stem-named files (`{stepid}_{stem}.md`) and iterates conversions. Aggregator surfaces failures on partial runs. No schema change; File→Artifact only (never mutates `files`).
+- **Amended (plot/report grounding, run `4efaec2b`):** a planner once emitted `plot.chart` with `depends_on` but hardcoded `values: [50, 50]` (no `{{id}}` placeholder), rendering a hallucinated 50/50 chart over real 62/38 data. Contract now: dependent plots MUST reference upstream numbers via `{{id}}` in `values` (literals + deps = rejected, fail-honest `plan_error`, never a fake chart); plot `values` refs must target `numbers`-type steps (prose/chunks cannot parse as floats); direct `rag.query(chunks) → plot.chart` edges must route through a numbers-producing reasoning step; `doc.generate` with dependencies needs an upstream `answer`/`summary`/`text` step. Standalone plots with user-given literals and standalone reports with full sections stay legal. Summarize+plot uses split branches: `rag → numbers + answer` in parallel, `plot` depending on numbers only (one reasoning step can never feed both prose and plot values). `expected_output_type` vocabulary: `chunks|answer|numbers|chart|document|text|clarification|summary` (`summary` ≡ answer; unknown types allowed-but-logged, aggregator treats them as SHOW).
 
 ---
 
