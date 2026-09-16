@@ -242,6 +242,56 @@ class TestValidator:
         with pytest.raises(PlanValidationError, match="numbers-producing"):
             PlanValidator(agents, tools).validate(plan)
 
+    def test_garbled_placeholder_in_values_rejected(self):
+        # Run 66fd4ec3 shape: text glued around placeholders.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="fake", input={"message": "numbers"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["a", "b"],
+                                "values": [",{{1}}", ",{{1}}"]},
+                         depends_on=["1"], expected_output_type="chart"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="lone"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_multi_source_plot_values_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="fake", input={"message": "n1"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", agent_id="fake", input={"message": "n2"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="3", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["a", "b"],
+                                "values": ["{{1}}", "{{2}}"]},
+                         depends_on=["1", "2"], expected_output_type="chart"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="merging numbers step"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_mixed_literal_and_single_placeholder_passes(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="fake", input={"message": "n"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["a", "b"],
+                                "values": [0.5, "{{1}}"]},
+                         depends_on=["1"], expected_output_type="chart"),
+            ],
+        )
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
     def test_standalone_plot_with_literals_passes(self):
         agents, tools = _registries(FakeAgent(), rag=FakeRAG())
         plan = Plan(
@@ -412,6 +462,32 @@ class TestAggregator:
             ),
         )
         assert agg.summary == "Chart generated — see Artifacts below."
+
+    def test_all_hidden_plus_failure_shows_failures_only(self):
+        # Run 66fd4ec3 shape: hidden numbers + failed plot must not dump
+        # the raw numbers CSV as the visible answer.
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="reasoning", input={},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", tool_id="plot.chart", input={},
+                         depends_on=["1"], expected_output_type="chart"),
+            ],
+        )
+        agg = Aggregator().aggregate(
+            plan,
+            ExecutionResult(
+                trace_id="t",
+                step_results=[
+                    _ok("1", "0.88, 0.87"),
+                    _fail("2", "'values' must all be numbers", executor="plot.chart"),
+                ],
+            ),
+        )
+        assert agg.status == "partial"
+        assert "0.88" not in agg.summary
+        assert "Step 2 (plot.chart) failed" in agg.summary
 
     def test_answer_plus_failed_chart_keeps_answer(self):
         plan = Plan(

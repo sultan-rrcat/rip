@@ -129,7 +129,29 @@ class PlotChartTool(Tool):
                 output=None,
                 error="'labels' and 'values' must be non-empty arrays",
             )
-        if len(labels) != len(values):
+        # Placeholder-originated CSV strings: the engine resolves a whole
+        # upstream text output (e.g. a numbers step returning "0.82, 0.88")
+        # into ONE string element. Split comma-separated strings back into
+        # points so one placeholder can fill a whole series; empties are
+        # dropped (covers stray leading/trailing commas from templates).
+        # Length is checked AFTER the split, not against raw elements.
+        flat: list[object] = []
+        for v in values:
+            if isinstance(v, str) and "," in v:
+                flat.extend(part.strip() for part in v.split(","))
+                continue
+            flat.append(v)
+        flat = [v for v in flat if not (isinstance(v, str) and v == "")]
+        try:
+            numbers = [float(v) for v in flat]  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=False,
+                output=None,
+                error="'values' must all be numbers",
+            )
+        if len(labels) != len(numbers):
             return ToolResponse(
                 tool_id=self.tool_id,
                 ok=False,
@@ -142,15 +164,6 @@ class PlotChartTool(Tool):
                 ok=False,
                 output=None,
                 error=f"at most {_MAX_POINTS} points per chart",
-            )
-        try:
-            numbers = [float(v) for v in values]
-        except (TypeError, ValueError):
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'values' must all be numbers",
             )
         str_labels = [str(label) for label in labels]
         svg = render_svg(str(chart_type), str_labels, numbers, title=title)

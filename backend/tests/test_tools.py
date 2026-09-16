@@ -217,6 +217,39 @@ class TestPlotChart:
         )
         assert not resp.ok
 
+    def test_csv_string_values_split(self):
+        # Placeholder-resolved whole-text output arrives as ONE string.
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a", "b"], "values": ["0.82, 0.88"]},
+        )
+        assert resp.ok and resp.data["point_count"] == 2
+
+    def test_stray_commas_tolerated(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a", "b"], "values": [",0.82,", "0.88,"]},
+        )
+        assert resp.ok and resp.data["point_count"] == 2
+
+    def test_garbage_values_still_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a"], "values": ["not a number"]},
+        )
+        assert not resp.ok and "must all be numbers" in (resp.error or "")
+
+    def test_length_checked_after_split(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a", "b"], "values": ["1, 2, 3"]},
+        )
+        assert not resp.ok and "same length" in (resp.error or "")
+
 
 # --- doc.generate (live libs) ---
 

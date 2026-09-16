@@ -179,6 +179,21 @@ class PlanValidator:
                             "{{{id}}} placeholder — dependent plots must reference "
                             "upstream numbers, never hardcoded literals"
                         )
+                    if isinstance(values, list):
+                        for v in values:
+                            if isinstance(v, str) and _PLACEHOLDER.search(v) and not _PLACEHOLDER.fullmatch(v.strip()):
+                                raise PlanValidationError(
+                                    f"step {step.step_id} (plot.chart) values element "
+                                    f"{v!r} mixes a placeholder with surrounding text — "
+                                    "each values element must be a number or a lone "
+                                    "{{{id}}} placeholder"
+                                )
+                    if len(refs) > 1:
+                        raise PlanValidationError(
+                            f"step {step.step_id} (plot.chart) values reference "
+                            f"multiple upstream steps {sorted(refs)} — fan them into "
+                            "ONE merging numbers step first, then reference only it"
+                        )
                     for ref in refs:
                         target = by_id.get(ref)
                         if target is None:

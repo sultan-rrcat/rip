@@ -184,11 +184,21 @@ class Planner:
              and show me the plot") → FOUR steps, never three: rag.query
              chunks, then numbers-only reasoning + answer reasoning IN
              PARALLEL off the chunks, then plot.chart depending ONLY on
-             the numbers step (values [{{{{numbers-step}}}}], concrete
+             the numbers step (values [{{numbers-step}}], concrete
              labels from the chunks — never "Class 0/1"). One reasoning
              step can NEVER feed both prose and plot values because a
              placeholder carries whole text the plot cannot parse as
              numbers (see Example E).
+           - Comparison plots (A vs B, one value per label): the numbers
+             step MUST return exactly one number per label, in label
+             order, as a flat comma-separated list with no words.
+             Multiple sources fan into ONE merging numbers-only step
+             (e.g. "combine {{2}} and {{4}} into one comma-separated
+             list, one value per label") — plot.chart depends ONLY on
+             the merge step with values [{{merge-step}}]. NEVER put two
+             placeholders (",{{2}}", ",{{4}}") or text around a
+             placeholder inside values: each values element is a number
+             or a lone {{id}} (validator-enforced).
            - Ambiguous convert (singular "convert it / the document" with
              several ready files, or no target format stated, or the file
              is still processing) → return EXACTLY ONE reasoning step

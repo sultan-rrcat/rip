@@ -131,9 +131,11 @@ class Aggregator:
                     f"Step {r.step_id} ({r.agent_id}): {_summarizable(r.output)}"
                     for r in shown
                 )
-        elif ordered_successful:
+        elif ordered_successful and not failed:
             # Anti-blank fallback: every success was intermediate (e.g. a
-            # lone rag.query or numbers step) — surface the last one.
+            # lone rag.query or numbers step) and nothing failed — surface
+            # the last one. With failures present the errors below are the
+            # honest answer; a hidden CSV dump would only add noise.
             summary = _summarizable(ordered_successful[-1].output)
         else:
             summary = ""
