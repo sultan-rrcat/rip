@@ -125,7 +125,7 @@ Local models that turn document chunks into searchable vectors: BGE-M3 at `./bac
 _Avoid_: Embedding model, vector model
 
 **Docling**:
-Document parser that converts PDFs to Markdown before chunking.
+The default PDF→Markdown parser used before chunking. The alternate parser, OpenDataLoader, runs first when `rag_pdf_loader=opendataloader`; whichever is not primary serves as the fallback.
 _Avoid_: Parser, document converter
 
 **Redis**:

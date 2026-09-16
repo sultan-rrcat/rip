@@ -23,7 +23,7 @@ services/chat.py, file_processor.py
 providers/base.py, ollama.py, streaming.py, tracing.py
 agents/base.py, registry.py, reasoning.py, coding.py, vision.py
 tools/base.py, registry.py, executor.py, rag_query.py, notebook_inspect.py,
-  plot_chart.py, doc_generate.py, doc_convert.py, code.sandbox.py, image_generate.py
+  plot_chart.py, doc_generate.py, doc_convert.py, code_sandbox.py, image_generate.py
 orchestration/plan.py, planner.py, validator.py, aggregator.py,
   engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
 store/runs.py        Postgres CRUD for runs + run_events (no deltas)
@@ -40,7 +40,7 @@ frontend/src/
 ## 3. Coding & style
 
 - **Backend:** strict type hints, `from app.*` imports, DI via `core/dependencies.py`, async I/O, `asyncio.to_thread` for ML. Config in `core/config.py` only. Ruff 88/py311.
-- **Frontend:** functional components + hooks. API in `services/*`, data in `hooks/*`, no direct `fetch` in components. Tailwind + MUI v7 default theme. Explain *why*, not *what*.
+- **Frontend:** functional components + hooks. API in `services/*`, data in `hooks/*`, no direct `fetch` in components. Tailwind + MUI v9 default theme. Explain *why*, not *what*.
 - **Deps:** backend root `pyproject.toml` (no `requirements.txt`); frontend `package.json`. New dependencies need justification + ADR note.
 
 ## 4. Workflow

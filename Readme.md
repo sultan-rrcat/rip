@@ -8,7 +8,7 @@ Offline research assistant: upload documents into notebooks, then chat over them
 
 - **Notebooks** group documents + chat history (one notebook = one conversation).
 - **Uploads** are parsed (Docling), chunked by Markdown headers, embedded (BGE-M3), and stored in Postgres+pgvector.
-- **Chat** runs through `POST /v1/runs` + SSE (`run_started → plan → step_started → delta → step_completed → sources → summary → run_completed`) with reasoning, coding, and vision agents plus five tools: `rag.query`, `plot.chart`, `doc.generate`, `code.sandbox`, `image.generate`.
+- **Chat** runs through `POST /v1/runs` + SSE (`run_started → plan → step_started → delta → step_completed → sources → artifacts → summary → run_completed`) with reasoning, coding, and vision agents plus seven tools: `rag.query`, `notebook.inspect`, `plot.chart`, `doc.generate`, `doc.convert`, `code.sandbox`, `image.generate`.
 - **Runs persist** to Postgres: they survive page refresh, replay their event log on reconnect, and can be cancelled with the stop button.
 
 ---
@@ -21,7 +21,7 @@ Offline research assistant: upload documents into notebooks, then chat over them
 | Retrieval | `VectorRAG`: vector similarity + full-text rank fusion + BGE rerank |
 | LLM | Ollama (`OLLAMA_BASE_URL`, default model `qwen2.5:14b`) |
 | DB | Postgres + pgvector (`notebooks/files/embeddings/messages/runs/run_events`) |
-| Frontend | React 19 + Vite, Tailwind + MUI v7, `useState` + `EventSource` |
+| Frontend | React 19 + Vite, Tailwind + MUI v9, `useState` + `EventSource` |
 | Observability | Langfuse, opt-in only |
 
 ---

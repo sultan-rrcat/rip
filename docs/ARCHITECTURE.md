@@ -29,8 +29,10 @@ Offline, single-codebase research assistant: document RAG + multi-agent orchestr
 │                           └────────────────────────────────┘  │
 │                                                               │
 │  API: /v1/runs · /v1/runs/{id}[/events|/cancel|/artifacts/*]  │
-│       /v1/admin/health · /api/notebooks · /api/files ·        │
-│       /api/notebooks/{id}/messages · /api/health (+ /health)  │
+│       /v1/admin/health · /api/health (+ /health)              │
+│       /api/notebooks · /api/notebooks/{id}/messages           │
+│       /api/notebooks/{id}/files · /api/files/upload           │
+│       /api/files/{id}/status · /api/files/{id}/process        │
 └────────────────────────────┬─────────────────────────────────┘
          ┌───────────────────┼───────────────────┐
          ▼                   ▼                   ▼
@@ -105,7 +107,7 @@ SSE vocabulary: `run_started · plan · step_started · delta · step_completed 
 
 ## 5. Retrieval (RAG)
 
-Ingest (`services/file_processor.py`, background task): Docling PDF→Markdown (fallback loader) → `MarkdownHeaderTextSplitter` (H1/H2/H3 + `{source,H1,H2,H3}` metadata) → BGE-M3 embeddings → `embeddings` table.
+Ingest (`services/file_processor.py`, background task): PDF→Markdown via the `RAG_PDF_LOADER` loader (Docling default, OpenDataLoader alternative; the other is the fallback) → `MarkdownHeaderTextSplitter` (H1/H2/H3 + `{source,H1,H2,H3}` metadata) → BGE-M3 embeddings → `embeddings` table.
 
 Retrieve (`rag/vector_rag.py:retrieve_context(notebook_id, query, top_k=8)`): pgvector cosine + full-text `ts_rank_cd` → dedupe → RRF (k=60) → BGE CrossEncoder rerank → threshold/filter. `rag.query` reuses the lifespan `VectorRAG` singleton (never re-instantiated — PyTorch weights are heavy).
 

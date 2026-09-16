@@ -4,6 +4,11 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — docs drift corrections
+
+- Corrected stale docs against the code: README tool list now names all seven tools (adds `notebook.inspect`, `doc.convert`) and includes the `artifacts` SSE event; MUI version corrected to v9 (was v7) in `README.md` and `AGENT.md`; `AGENT.md` module map points at `code_sandbox.py` (was `code.sandbox.py`).
+- Documented the `RAG_PDF_LOADER` switch (Docling default, OpenDataLoader alternative; the other loader is the fallback) in `SETUP.md`, `CONTEXT.md`, and `ARCHITECTURE.md`; added the `/api/notebooks/{id}/files`, `/api/files/upload`, `/api/files/{id}/status`, and `/api/files/{id}/process` routes to the `ARCHITECTURE.md` topology.
+
 ## Unreleased — grounded multi-step answers (ADR-023/027/020 amendments, run `4efaec2b`)
 
 - "Summarize + plot" no longer loses the summary: the final answer keeps terminal text plus the chart placeholder (intermediate chunks/numbers stay hidden), and every live token streams into the main bubble.

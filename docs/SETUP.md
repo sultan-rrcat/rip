@@ -38,6 +38,7 @@ Keys ( authoritative defaults in `backend/app/core/config.py`):
 | `PORT` | `8000`, pinned in compose (`docker-compose.yml` sets `PORT: 8000` — do not override; `EXPOSE`, port mapping, and health probes all assume it). Honored as `$PORT` only for bare `docker run` |
 | `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
 | `UPLOAD_DIR` | `./backend/uploads` host-local; `/app/uploads` in compose (overridden in `docker-compose.yml`, image `ENV` fallback matches) |
+| `RAG_PDF_LOADER` | `docling` (default) or `opendataloader` — the selected PDF→Markdown loader runs first, the other is the fallback |
 
 No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 
