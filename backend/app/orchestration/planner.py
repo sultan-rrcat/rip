@@ -72,6 +72,7 @@ class Planner:
         request_text: str,
         context: str | None = None,
         notebook_context: str | None = None,
+        feedback: str | None = None,
     ) -> Plan:
         manifest = self._registry.manifest()
         tool_manifest = self._tool_registry.manifest()
@@ -274,6 +275,12 @@ class Planner:
               "depends_on": ["2"], "expected_output_type": "chart"}}
         ]}}
         """
+
+        if feedback:
+            # Bounded recall: a rejected plan or failed execution, with the
+            # instance-specific error. Short and recent on purpose — it must
+            # cut through the rules above, not restate them.
+            system_prompt += f"\n\nRETRY FEEDBACK (previous attempt failed):\n{feedback}"
 
         if context:
             system_prompt += f"\n\nConversation context:\n{context}"

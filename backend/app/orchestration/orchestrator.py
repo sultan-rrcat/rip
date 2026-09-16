@@ -115,6 +115,8 @@ class Orchestrator:
                 "plan_error": None,
                 "step_results": {},
                 "aggregation": None,
+                "attempt": 0,
+                "planner_feedback": None,
             },
             config=config,  # type: ignore[call-overload]
         )

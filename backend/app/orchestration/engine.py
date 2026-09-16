@@ -4,12 +4,15 @@ The whole round trip is one compiled StateGraph:
 
     START ──► plan ──(plan ok?)──► execute ──► aggregate ──► END
                     │                  (fail-honest: a rejected plan
-                    └─(plan_error)──► END   never reaches execution)
+                    └─(plan_error, ─► plan (once)   never reaches execution
+                       attempts left)              unless retried)
 
-No reflection loop, no retry replanning: step failures are returned
-honestly and the deterministic aggregator reports them (merge decision).
+Bounded planner recall (one retry = two plans max): a rejected plan or a
+partial/failed aggregation routes back to `plan` once with short,
+instance-specific feedback; the second failure surfaces honestly.
+Clarifications never replan. No resumption: retries re-execute fully.
 
-- plan node: Planner + Validator
+- plan node: Planner (+ retry feedback) + Validator
 - execute node: builds + streams the per-request inner plan graph
   (plan_graph.run_plan_graph), forwarding step events to on_event
 - aggregate node: deterministic Aggregator (Q36, no LLM)
@@ -35,6 +38,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from app.agents.base import StepStatus
 from app.agents.registry import AgentRegistry
 from app.observability.langfuse import manual_span, truncate
 from app.orchestration.aggregator import AggregationResult, Aggregator
@@ -62,6 +66,10 @@ def _cancelled(config: RunnableConfig) -> bool:
     return event is not None and event.is_set()
 
 
+#: Retry budget: one recall = two planner outputs max per run.
+_MAX_PLAN_ATTEMPTS = 2
+
+
 class OrchestrationState(TypedDict):
     """Outer graph state — serializable, checkpoint-safe."""
 
@@ -74,10 +82,35 @@ class OrchestrationState(TypedDict):
     plan_error: str | None
     step_results: dict[str, StepResult]
     aggregation: AggregationResult | None
+    attempt: int
+    planner_feedback: str | None
 
 
 def _configurable(config: RunnableConfig) -> dict:
     return config.get("configurable") or {}
+
+
+def _validation_feedback(plan_dump: str | None, error: str) -> str:
+    """Short, instance-specific retry signal for a rejected plan."""
+    parts = [f"Your previous plan was REJECTED: {error}"]
+    if plan_dump:
+        parts.append(f"Rejected plan (fix it, do not repeat it): {plan_dump[:800]}")
+    parts.append("Return a corrected plan satisfying every rule above.")
+    return "\n".join(parts)
+
+
+def _execution_feedback(plan_dump: str, failed: list[StepResult]) -> str:
+    """Short retry signal for a partial/failed execution."""
+    lines = [
+        f"- step {r.step_id} ({r.agent_id}): {r.error or 'unknown error'}"
+        + (f" [output was: {r.output[:200]}]" if r.output else "")
+        for r in failed
+    ]
+    return (
+        "Your previous plan executed with FAILURES:\n" + "\n".join(lines) + "\n"
+        f"Previous plan (keep what worked, change only what the errors implicate): {plan_dump[:800]}\n"
+        "Return a corrected plan satisfying every rule above."
+    )
 
 
 def _make_plan_node(
@@ -88,16 +121,25 @@ def _make_plan_node(
         # on planning; the error terminal unwinds the graph.
         if _cancelled(config):
             return {"plan": None, "plan_error": "run cancelled"}
+        attempt = int(state.get("attempt") or 0) + 1
+        feedback_in = state.get("planner_feedback")
         with manual_span(
             "plan", as_type="span",
-            input=truncate(state["request_text"], 2000),
+            input={
+                "request": truncate(state["request_text"], 2000),
+                "attempt": attempt,
+                "feedback": truncate(feedback_in, 800),
+            },
         ) as plan_obs:
+            rejected: Plan | None = None
             try:
                 plan = planner.plan(
                     state["request_text"],
                     context=state["context"],
                     notebook_context=state.get("notebook_context"),
+                    feedback=feedback_in,
                 )
+                rejected = plan
                 validator.validate(plan)
                 if plan.is_trivial():
                     # Defensive fallback: the planner prompt forbids empty
@@ -134,12 +176,32 @@ def _make_plan_node(
                         plan.plan_id, fallback_id,
                     )
             except (ValueError, PlanValidationError) as e:
-                plan_obs.update(output={"error": str(e)[:500]})
-                return {"plan": None, "plan_error": str(e)}
+                err = str(e)
+                plan_obs.update(output={"error": err[:500], "attempt": attempt})
+                if attempt < _MAX_PLAN_ATTEMPTS:
+                    dump = rejected.model_dump_json()[:2000] if rejected else None
+                    logger.info(
+                        "plan %s rejected (attempt %d), recalling planner",
+                        rejected.plan_id if rejected else "?",
+                        attempt,
+                    )
+                    return {
+                        "plan": None,
+                        "plan_error": None,
+                        "attempt": attempt,
+                        "planner_feedback": _validation_feedback(dump, err),
+                    }
+                return {
+                    "plan": None,
+                    "plan_error": err,
+                    "attempt": attempt,
+                    "planner_feedback": None,
+                }
             plan_obs.update(output={
                 "goal": truncate(plan.goal, 500),
                 "steps": len(plan.steps),
                 "executors": [s.executor_id for s in plan.steps],
+                "attempt": attempt,
             })
         # The worker persists + streams this as the SSE `plan` event. Emitted
         # here (plan-time, before any step runs) so live subscribers and the
@@ -152,6 +214,7 @@ def _make_plan_node(
                     "type": "plan",
                     "plan_id": plan.plan_id,
                     "goal": plan.goal,
+                    "attempt": attempt,
                     "steps": [
                         {
                             "step_id": s.step_id,
@@ -162,7 +225,12 @@ def _make_plan_node(
                     ],
                 }
             )
-        return {"plan": plan, "plan_error": None}
+        return {
+            "plan": plan,
+            "plan_error": None,
+            "attempt": attempt,
+            "planner_feedback": None,
+        }
 
     return plan_node
 
@@ -214,13 +282,47 @@ def _make_aggregate_node(aggregator: Aggregator) -> Callable:
                 "status": agg.status,
                 "summary": truncate(agg.summary, 2000),
             })
-        return {"aggregation": agg}
+        # One execution retry: partial/failed runs replan with the step
+        # errors as feedback. Clarifications never replan (the question IS
+        # the answer); successes, cancellations and capped attempts end.
+        if _cancelled(config):
+            return {"aggregation": agg, "planner_feedback": None}
+        attempt = int(state.get("attempt") or 0)
+        retry_armed = (
+            agg.status in ("partial", "failed")
+            and not agg.needs_clarification
+            and attempt < _MAX_PLAN_ATTEMPTS
+        )
+        agg_obs.update(output={"retry_armed": retry_armed})
+        if retry_armed:
+            failed = [r for r in exec_result.step_results if r.status is not StepStatus.SUCCESS]
+            logger.info(
+                "aggregation %s (attempt %d), recalling planner",
+                agg.status, attempt,
+            )
+            return {
+                "aggregation": agg,
+                "planner_feedback": _execution_feedback(
+                    plan.model_dump_json(), failed,
+                ),
+            }
+        return {"aggregation": agg, "planner_feedback": None}
 
     return aggregate_node
 
 
 def _route_after_plan(state: OrchestrationState) -> str:
-    return END if state["plan_error"] else "execute"
+    if state["plan_error"]:
+        return END
+    if state["plan"] is None:
+        return "plan"  # retry loop: rejected plan, feedback armed
+    return "execute"
+
+
+def _route_after_aggregate(state: OrchestrationState) -> str:
+    if state.get("planner_feedback"):
+        return "plan"  # execution retry armed
+    return END
 
 
 def build_orchestration_graph(
@@ -246,9 +348,14 @@ def build_orchestration_graph(
         input_schema=OrchestrationState,  # type: ignore[call-overload]
     )
     graph.add_edge(START, "plan")
-    graph.add_conditional_edges("plan", _route_after_plan, {"execute": "execute", END: END})
+    graph.add_conditional_edges(
+        "plan", _route_after_plan,
+        {"plan": "plan", "execute": "execute", END: END},
+    )
     graph.add_edge("execute", "aggregate")
-    graph.add_edge("aggregate", END)
+    graph.add_conditional_edges(
+        "aggregate", _route_after_aggregate, {"plan": "plan", END: END},
+    )
     # Checkpointed state: every super-step writes a snapshot keyed by
     # thread_id (= trace_id, set by the façade). MemorySaver is in-process —
     # run durability across processes comes from Postgres run_events (Phase 4);

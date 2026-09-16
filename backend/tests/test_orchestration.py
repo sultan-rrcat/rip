@@ -44,10 +44,15 @@ from app.tools.registry import ToolRegistry, get_default_tool_registry
 class FakeProvider(ModelProvider):
     """Canned ModelProvider; records the model every call resolves to."""
 
-    def __init__(self, structured: dict | None = None, text: str = "ok"):
+    def __init__(self, structured: dict | None = None, text: str = "ok",
+                 queued: list[dict] | None = None):
         self.structured = structured or {"goal": "g", "steps": []}
         self.text = text
         self.models: list[str] = []
+        # Sequential plans for recall tests; every structured prompt kept
+        # so tests can assert on RETRY FEEDBACK content.
+        self.queued = list(queued) if queued else None
+        self.prompts: list = []
 
     def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
         self.models.append(model)
@@ -59,6 +64,9 @@ class FakeProvider(ModelProvider):
 
     def generate_structured(self, model, messages, schema, *, temperature=0.0):
         self.models.append(model)
+        self.prompts.append(messages)
+        if self.queued:
+            return dict(self.queued.pop(0))
         return dict(self.structured)
 
     def embed(self, model: str, text: str) -> list[float]:
@@ -78,9 +86,11 @@ class FakeAgent(Agent):
     name = "Fake"
     description = "test agent"
 
-    def __init__(self, output: str = "done", stream: bool = False):
+    def __init__(self, output: str = "done", stream: bool = False,
+                 clarify: bool = False):
         self.output = output
         self.stream = stream
+        self.clarify = clarify
         self.seen: list[dict] = []
 
     def execute(self, request: DelegationRequest) -> DelegationResponse:
@@ -88,7 +98,8 @@ class FakeAgent(Agent):
         if self.stream and request.on_delta is not None:
             request.on_delta("chunk-")
         return DelegationResponse(
-            step_id=request.step_id, status=StepStatus.SUCCESS, output=self.output
+            step_id=request.step_id, status=StepStatus.SUCCESS, output=self.output,
+            needs_clarification=self.clarify,
         )
 
 
@@ -688,6 +699,117 @@ class TestPlanner:
         assert plan.goal == "answer things" and plan.steps == []
         assert provider.models == [settings.ollama_default_model]
 
+    def test_feedback_absent_by_default(self):
+        provider = FakeProvider(structured={"goal": "g", "steps": []})
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        Planner(provider, agents, tools).plan("hello")
+        system = provider.prompts[-1][0]["content"]
+        assert "RETRY FEEDBACK" not in system
+
+    def test_feedback_appended_when_given(self):
+        provider = FakeProvider(structured={"goal": "g", "steps": []})
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        Planner(provider, agents, tools).plan("hello", feedback="fix the values")
+        system = provider.prompts[-1][0]["content"]
+        assert "RETRY FEEDBACK" in system and "fix the values" in system
+
+
+# --- Bounded planner recall (one retry = two plans max) ---
+
+
+def _recall_orchestrator(plans: list[dict], agent=None, rag=None):
+    provider = FakeProvider(queued=plans)
+    agents = AgentRegistry()
+    agents.register(agent or FakeAgent(output="recovered"))
+    tools = get_default_tool_registry(rag=rag or FakeRAG())
+    orch = Orchestrator(
+        Planner(provider, agents, tools),
+        PlanValidator(agents, tools),
+        Aggregator(), agents, tools,
+    )
+    return provider, orch
+
+
+def _good_text_step():
+    return {
+        "goal": "g",
+        "steps": [
+            {"step_id": "1", "agent_id": "fake", "input": {"message": "hi"},
+             "depends_on": [], "expected_output_type": "text"}
+        ],
+    }
+
+
+def _bad_plot_step():
+    return {
+        "goal": "g",
+        "steps": [
+            {"step_id": "1", "agent_id": "fake", "input": {"message": "n"},
+             "depends_on": [], "expected_output_type": "numbers"},
+            {"step_id": "2", "tool_id": "plot.chart",
+             "input": {"chart_type": "bar", "labels": ["a"], "values": [50]},
+             "depends_on": ["1"], "expected_output_type": "chart"},
+        ],
+    }
+
+
+class TestPlannerRecall:
+    def test_validation_retry_recovers(self):
+        provider, orch = _recall_orchestrator([_bad_plot_step(), _good_text_step()])
+        result = orch.run("plot it", "nb-1")
+        assert result.status == "success" and result.summary == "recovered"
+        assert len(provider.models) == 2
+        retry_system = provider.prompts[-1][0]["content"]
+        assert "RETRY FEEDBACK" in retry_system and "hardcoded" in retry_system
+
+    def test_double_validation_failure_aborts_honest(self):
+        provider, orch = _recall_orchestrator([_bad_plot_step(), _bad_plot_step()])
+        with pytest.raises(OrchestrationError, match="hardcoded"):
+            orch.run("plot it", "nb-1")
+        assert len(provider.models) == 2
+
+    def test_clarification_never_replans(self):
+        provider, orch = _recall_orchestrator(
+            [{
+                "goal": "g",
+                "steps": [
+                    {"step_id": "1", "agent_id": "fake",
+                     "input": {"message": "Which file?"},
+                     "depends_on": [], "expected_output_type": "clarification"}
+                ],
+            }],
+            agent=FakeAgent(output="Which file?", clarify=True),
+        )
+        result = orch.run("convert it", "nb-1")
+        assert result.summary == "Which file?" and result.needs_clarification
+        assert len(provider.models) == 1
+
+    def test_partial_execution_replans_once(self):
+        provider, orch = _recall_orchestrator([
+            {
+                "goal": "g",
+                "steps": [
+                    {"step_id": "1", "tool_id": "plot.chart",
+                     "input": {"chart_type": "nope", "labels": ["a"], "values": [1]},
+                     "depends_on": []}
+                ],
+            },
+            _good_text_step(),
+        ])
+        result = orch.run("plot it", "nb-1")
+        assert result.status == "success" and result.summary == "recovered"
+        assert len(provider.models) == 2
+        retry_system = provider.prompts[-1][0]["content"]
+        assert "RETRY FEEDBACK" in retry_system
+
+    def test_cancel_suppresses_recall(self):
+        provider, orch = _recall_orchestrator([_bad_plot_step(), _good_text_step()])
+        event = threading.Event()
+        event.set()
+        with pytest.raises(OrchestrationError, match="cancelled"):
+            orch.run("plot it", "nb-1", cancel_event=event)
+        assert len(provider.models) == 0
+
 
 # --- Full Orchestrator e2e ---
 
@@ -791,9 +913,9 @@ class TestOrchestrator:
             "request_text", "notebook_id", "on_event", "context",
         ]
 
-    def test_graph_has_no_reflection_edge(self):
-        # Honest failure: a failing step must NOT trigger a replan —
-        # the planner is called exactly once.
+    def test_execution_failure_recalls_once_then_fails_honest(self):
+        # Bounded recall supersedes the old no-replan lock: a failing step
+        # triggers exactly ONE replan; the repeat failure surfaces honestly.
         provider = FakeProvider(
             structured={
                 "goal": "g",
@@ -823,5 +945,5 @@ class TestOrchestrator:
             Aggregator(), agents, tools,
         )
         result = orch.run("plot it", "nb-1")
-        assert plans == [1]
+        assert plans == [1, 1]
         assert result.status == "failed" and result.plan_incomplete

@@ -134,6 +134,24 @@ export function useMessages(notebook_id: string | undefined) {
       switch (evt.type) {
         case 'plan': {
           const planEvt = evt as Extract<RunEvent, { type: 'plan' }>
+          // Planner recall: a second plan for the same run means attempt 1
+          // failed. Its tokens/sources/artifacts belong to the dead attempt
+          // and must not pollute the retry — reset every accumulator.
+          // Detected via the additive `attempt` field, with prior-plan
+          // presence as fallback (replay-safe: attach() clears the ref).
+          const attempt = typeof evt.attempt === 'number' ? evt.attempt : 1
+          if (attempt > 1 || planStepsRef.current !== null) {
+            textRef.current = ''
+            sourcesRef.current = []
+            artifactsRef.current = []
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId
+                  ? { ...m, text: '', sources: [], artifacts: [] }
+                  : m,
+              ),
+            )
+          }
           planStepsRef.current = planEvt.steps
           // initialise step results map
           const initSteps: Record<string, {executor:string,status:string,output:string,delta:string}> = {}
@@ -143,7 +161,7 @@ export function useMessages(notebook_id: string | undefined) {
           stepResultsRef.current = initSteps
           setActiveRun((r) =>
             r && r.runId === runId
-              ? { ...r, goal: planEvt.goal, plan: planEvt.steps, stepResults: initSteps }
+              ? { ...r, goal: planEvt.goal, plan: planEvt.steps, sources: [], artifacts: [], stepResults: initSteps }
               : r,
           )
           break
