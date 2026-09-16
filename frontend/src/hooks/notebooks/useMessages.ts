@@ -50,6 +50,8 @@ export function useMessages(notebook_id: string | undefined) {
     unsubscribeRef.current?.()
     unsubscribeRef.current = null
     placeholderRef.current = null
+    stepResultsRef.current = {}
+    planStepsRef.current = null
     setActiveRun(null)
     setIsRunning(false)
   }, [])
@@ -149,21 +151,20 @@ export function useMessages(notebook_id: string | undefined) {
         case 'delta': {
           const text = eventText(evt.content)
           if (!text) break
+          // Stream every delta into the main bubble (matches the
+          // concatenated summary); mirror into the Steps panel when the
+          // step is known. Never drop: deltas arriving before `plan` or
+          // without a step_id still belong to the answer.
+          textRef.current += text
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId
+                ? { ...m, text: textRef.current, status: 'streaming' as const }
+                : m,
+            ),
+          )
           const stepId = (evt as any).step_id as string | undefined
-          const planSteps = planStepsRef.current
-          const finalStepId = planSteps && planSteps.length > 0 ? planSteps[planSteps.length - 1].step_id : undefined
-          const isFinal = stepId && finalStepId && stepId === finalStepId
-          if (isFinal) {
-            textRef.current += text
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === messageId
-                  ? { ...m, text: textRef.current, status: 'streaming' as const }
-                  : m,
-              ),
-            )
-          } else if (stepId) {
-            // stream into step panel
+          if (stepId) {
             const step = stepResultsRef.current[stepId]
             if (step) {
               step.delta += text
@@ -267,6 +268,7 @@ export function useMessages(notebook_id: string | undefined) {
       artifactsRef.current = []
       placeholderRef.current = messageId
       stepResultsRef.current = {}
+      planStepsRef.current = null
       localStorage.setItem(activeKey(nb), runId)
       setActiveRun({
         runId,

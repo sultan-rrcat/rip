@@ -202,12 +202,14 @@ function AssistantMessage({
                 {plan.map((step) => {
                   const sr = stepResults[step.step_id]
                   if (!sr) return null
-                  const content = sr.status === 'running' ? sr.delta || '' : sr.output || sr.delta || ''
-                  const isFinal = step.step_id === plan[plan.length - 1].step_id
+                  const raw = sr.status === 'running' ? sr.delta || '' : sr.output || sr.delta || ''
+                  // Never dump raw chart SVG into the panel (same guard as
+                  // the main bubble): the chart renders via Artifacts <img>.
+                  const content = stripSvgFromText(raw) || ''
                   return (
                     <div key={step.step_id} className="border-l-2 border-gray-300 pl-2">
                       <div className="font-semibold">
-                        Step {step.step_id} · {step.executor} {isFinal ? '· Final' : ''} · {sr.status}
+                        Step {step.step_id} · {step.executor} · {sr.status}
                       </div>
                       <div className="whitespace-pre-wrap break-words text-[10px] text-gray-600">
                         {content}
