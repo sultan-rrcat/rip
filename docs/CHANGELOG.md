@@ -9,6 +9,7 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 - "Summarize + plot" no longer loses the summary: the final answer keeps terminal text plus the chart placeholder (intermediate chunks/numbers stay hidden), and every live token streams into the main bubble.
 - Ungrounded charts are refused instead of rendered: plans where a dependent `plot.chart` carries hardcoded values (or reads prose/chunks as numbers) fail honestly with a clear error; summarize+plot plans split numbers and answer branches.
 - Per-step detail lives in the live-only Steps panel (no raw SVG dumps); tool steps no longer receive conversation history they ignore.
+- Comparison plots fixed: garbled/multi-source `values` are rejected at plan time with a clear error instead of failing opaquely at render; placeholder-resolved comma-separated numbers are split back into chart points; hidden intermediates no longer leak into failure summaries.
 
 ## Unreleased — dynamic document awareness (ADR-027)
 
