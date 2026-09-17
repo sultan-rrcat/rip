@@ -4,8 +4,9 @@
 # Why this wrapper exists instead of raw `docker compose`:
 # - `up` always builds: VITE_API_URL is baked at image build and the backend
 #   code layer is copied at build, so plain `up` silently reuses stale images.
-# - Stale shell DB_* exports shadow .env for compose interpolation
-#   (POSTGRES_*), while the backend reads .env — cleared per invocation.
+# - Stale shell DB_*/OLLAMA_* exports shadow .env for compose interpolation
+#   (POSTGRES_*, OLLAMA_BASE_URL), while the backend reads .env —
+#   cleared per invocation.
 # - Host probes use 127.0.0.1, never bare localhost (IPv6-first hang).
 # - NOTE: .env PORT does NOT move the compose backend (docker-compose.yml
 #   pins container PORT=8000). Health URLs use HOST_*_PORT from .env.
@@ -34,13 +35,15 @@ dotenv_val() {
   echo "${val:-$default}"
 }
 
-clear_stale_db_env() {
-  # Session-only: stale exports shadow .env for compose interpolation.
+clear_stale_env() {
+  # Session-only: stale exports shadow .env for compose interpolation
+  # (DB_* for POSTGRES_*, OLLAMA_* for OLLAMA_BASE_URL/model/timeout).
   unset DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_CONNECT_TIMEOUT_S || true
+  unset OLLAMA_BASE_URL OLLAMA_DEFAULT_MODEL OLLAMA_TIMEOUT_MS OLLAMA_CONTEXT_WINDOW OLLAMA_IMAGE_MODEL || true
 }
 
 compose() {
-  clear_stale_db_env
+  clear_stale_env
   docker compose "$@"
 }
 
@@ -152,7 +155,7 @@ cmd_migrate() {
   local db_user db_name
   db_user="$(dotenv_val DB_USER rip)"
   db_name="$(dotenv_val DB_NAME rip)"
-  clear_stale_db_env
+  clear_stale_env
   if ! docker compose exec -T postgres pg_isready -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
     echo "postgres is not running — run 'scripts/rip.sh up' first." >&2
     exit 1
@@ -179,7 +182,7 @@ cmd_health() {
   fi
   db_user="$(dotenv_val DB_USER rip)"
   db_name="$(dotenv_val DB_NAME rip)"
-  clear_stale_db_env
+  clear_stale_env
   if docker compose exec -T postgres pg_isready -U "$db_user" -d "$db_name" >/dev/null 2>&1; then
     echo "postgres: ready"
   else

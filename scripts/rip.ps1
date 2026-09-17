@@ -6,8 +6,9 @@
 # Why this wrapper exists instead of raw `docker compose`:
 # - `up` always builds: VITE_API_URL is baked at image build and the backend
 #   code layer is copied at build, so plain `up` silently reuses stale images.
-# - Stale shell DB_* exports shadow .env for compose interpolation
-#   (POSTGRES_*), while the backend reads .env -- cleared per invocation.
+# - Stale shell DB_*/OLLAMA_* exports shadow .env for compose interpolation
+#   (POSTGRES_*, OLLAMA_BASE_URL), while the backend reads .env --
+#   cleared per invocation.
 # - Host probes use 127.0.0.1, never bare localhost (IPv6-first hang).
 # - NOTE: .env PORT does NOT move the compose backend (docker-compose.yml
 #   pins container PORT=8000). Health URLs use HOST_*_PORT from .env.
@@ -54,14 +55,16 @@ function Read-DotEnvValue {
     return $Default
 }
 
-function Clear-StaleDbEnv {
-    # Session-only: stale exports shadow .env for compose interpolation.
+function Clear-StaleEnv {
+    # Session-only: stale exports shadow .env for compose interpolation
+    # (DB_* for POSTGRES_*, OLLAMA_* for OLLAMA_BASE_URL/model/timeout).
     Remove-Item Env:DB_HOST, Env:DB_PORT, Env:DB_NAME, Env:DB_USER, Env:DB_PASSWORD, Env:DB_CONNECT_TIMEOUT_S -ErrorAction SilentlyContinue
+    Remove-Item Env:OLLAMA_BASE_URL, Env:OLLAMA_DEFAULT_MODEL, Env:OLLAMA_TIMEOUT_MS, Env:OLLAMA_CONTEXT_WINDOW, Env:OLLAMA_IMAGE_MODEL -ErrorAction SilentlyContinue
 }
 
 function Invoke-Compose {
     param([string[]]$ComposeArgs)
-    Clear-StaleDbEnv
+    Clear-StaleEnv
     & docker compose @ComposeArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
@@ -162,7 +165,7 @@ function Invoke-Logs {
 function Invoke-Migrate {
     $dbUser = Read-DotEnvValue "DB_USER" "rip"
     $dbName = Read-DotEnvValue "DB_NAME" "rip"
-    Clear-StaleDbEnv
+    Clear-StaleEnv
     & docker compose exec -T postgres pg_isready -U $dbUser -d $dbName | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Error "postgres is not running -- run 'scripts/rip.ps1 up' first."
@@ -190,7 +193,7 @@ function Invoke-Health {
     catch { Write-Output "frontend: FAIL  http://127.0.0.1:$fPort/healthz"; $failed = $true }
     $dbUser = Read-DotEnvValue "DB_USER" "rip"
     $dbName = Read-DotEnvValue "DB_NAME" "rip"
-    Clear-StaleDbEnv
+    Clear-StaleEnv
     & docker compose exec -T postgres pg_isready -U $dbUser -d $dbName 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Output "postgres: ready" }
     else { Write-Output "postgres: FAIL (not running?)"; $failed = $true }
