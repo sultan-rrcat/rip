@@ -50,10 +50,12 @@ from app.agents.base import StepStatus
 from app.agents.registry import AgentRegistry
 from app.observability.langfuse import get_trace_context, manual_span, truncate
 from app.orchestration.aggregator import AggregationResult, Aggregator
+from app.orchestration.builders import build as build_layered_plan
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.plan_graph import run_plan_graph
 from app.orchestration.planner import Planner
 from app.orchestration.results import ExecutionResult, StepResult
+from app.orchestration.router import Router
 from app.orchestration.validator import PlanValidationError, PlanValidator
 from app.tools.registry import ToolRegistry
 
@@ -185,12 +187,37 @@ def _make_plan_node(
         ) as plan_obs:
             rejected: Plan | None = None
             try:
-                plan = planner.plan(
-                    state["request_text"],
-                    context=state["context"],
-                    notebook_context=state.get("notebook_context"),
-                    feedback=feedback_in,
-                )
+                # Layered planning (L1/L2): route + deterministic builders run
+                # BEFORE the mega-prompt (L3), but only on the first attempt —
+                # retries already carry instance-specific feedback for the
+                # mega-prompt, so they stay on it. A validated builder plan is
+                # used directly — wiring is set by construction, so the
+                # ecd93eb4 ungrounded-fan-in class cannot occur. Any miss
+                # (unknown intent, validation failure, router error) falls
+                # through to the existing planner below, unchanged.
+                layered: Plan | None = None
+                if feedback_in is None:
+                    try:
+                        route = Router(planner.provider).route(state["request_text"])
+                        candidate = build_layered_plan(state["request_text"], route)
+                        if candidate is not None:
+                            validator.validate(candidate)
+                            layered = candidate
+                            logger.info(
+                                "layered plan hit intent=%s steps=%d",
+                                route.intent.value, len(layered.steps),
+                            )
+                    except Exception as e:  # noqa: BLE001 - miss falls through to L3
+                        logger.info("layered plan miss, using mega-prompt: %s", e)
+                if layered is not None:
+                    plan = layered
+                else:
+                    plan = planner.plan(
+                        state["request_text"],
+                        context=state["context"],
+                        notebook_context=state.get("notebook_context"),
+                        feedback=feedback_in,
+                    )
                 rejected = plan
                 validator.validate(plan)
                 if plan.is_trivial():

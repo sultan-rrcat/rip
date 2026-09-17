@@ -877,6 +877,16 @@ def _recall_orchestrator(plans: list[dict], agent=None, rag=None):
     return provider, orch
 
 
+def _router_miss() -> dict:
+    """Layered-planning head: router reports unknown so the run exercises L3.
+
+    The engine routes once (first attempt) before the mega-prompt, so every
+    queued recall test consumes one router payload first. Confidence 0.0 also
+    covers the low-confidence → unknown path.
+    """
+    return {"intent": "unknown", "queries": [], "confidence": 0.0}
+
+
 def _good_text_step():
     return {
         "goal": "g",
@@ -902,37 +912,43 @@ def _bad_plot_step():
 
 class TestPlannerRecall:
     def test_validation_retry_recovers(self):
-        provider, orch = _recall_orchestrator([_bad_plot_step(), _good_text_step()])
+        provider, orch = _recall_orchestrator(
+            [_router_miss(), _bad_plot_step(), _good_text_step()]
+        )
         result = orch.run("plot it", "nb-1")
         assert result.status == "success" and result.summary == "recovered"
-        assert len(provider.models) == 2
+        assert len(provider.models) == 3  # router + planner + planner-retry
         retry_system = provider.prompts[-1][0]["content"]
         assert "RETRY FEEDBACK" in retry_system and "hardcoded" in retry_system
 
     def test_double_validation_failure_aborts_honest(self):
-        provider, orch = _recall_orchestrator([_bad_plot_step(), _bad_plot_step()])
+        provider, orch = _recall_orchestrator(
+            [_router_miss(), _bad_plot_step(), _bad_plot_step()]
+        )
         with pytest.raises(OrchestrationError, match="hardcoded"):
             orch.run("plot it", "nb-1")
-        assert len(provider.models) == 2
+        assert len(provider.models) == 3
 
     def test_clarification_never_replans(self):
         provider, orch = _recall_orchestrator(
-            [{
+            [_router_miss(),
+             {
                 "goal": "g",
                 "steps": [
                     {"step_id": "1", "agent_id": "fake",
                      "input": {"message": "Which file?"},
                      "depends_on": [], "expected_output_type": "clarification"}
                 ],
-            }],
+             }],
             agent=FakeAgent(output="Which file?", clarify=True),
         )
         result = orch.run("convert it", "nb-1")
         assert result.summary == "Which file?" and result.needs_clarification
-        assert len(provider.models) == 1
+        assert len(provider.models) == 2  # router + planner
 
     def test_partial_execution_replans_once(self):
         provider, orch = _recall_orchestrator([
+            _router_miss(),
             {
                 "goal": "g",
                 "steps": [
@@ -945,7 +961,7 @@ class TestPlannerRecall:
         ])
         result = orch.run("plot it", "nb-1")
         assert result.status == "success" and result.summary == "recovered"
-        assert len(provider.models) == 2
+        assert len(provider.models) == 3
         retry_system = provider.prompts[-1][0]["content"]
         assert "RETRY FEEDBACK" in retry_system
 
@@ -1092,7 +1108,7 @@ class TestOrchestrator:
             Aggregator(), agents, tools,
         )
         result = orch.run("plot it", "nb-1")
-        assert plans == [1, 1]
+        assert plans == [1, 1, 1]  # router + planner + planner-retry
         assert result.status == "failed" and result.plan_incomplete
 
 

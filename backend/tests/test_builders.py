@@ -15,7 +15,7 @@ from app.orchestration.intents import Intent
 from app.orchestration.router import RouterResult
 from app.orchestration.validator import PlanValidator
 from app.providers.base import ModelProvider
-from app.tools.registry import ToolRegistry, get_default_tool_registry
+from app.tools.registry import get_default_tool_registry
 
 
 class _FakeProvider(ModelProvider):

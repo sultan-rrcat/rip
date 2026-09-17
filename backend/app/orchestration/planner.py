@@ -67,6 +67,11 @@ class Planner:
         self._tool_registry = tool_registry or ToolRegistry()
         self._model = settings.ollama_default_model
 
+    @property
+    def provider(self) -> ModelProvider:
+        """Expose the planning provider for layered planning (router reuse)."""
+        return self._provider
+
     def plan(
         self,
         request_text: str,
