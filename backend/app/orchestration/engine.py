@@ -108,12 +108,45 @@ def _configurable(config: RunnableConfig) -> dict:
 
 
 def _validation_feedback(plan_dump: str | None, error: str) -> str:
-    """Short, instance-specific retry signal for a rejected plan."""
+    """Short, instance-specific retry signal for a rejected plan.
+
+    A raw JSON dump gets truncated before the malformation (observed live:
+    the dangling `"step_id": "3"` element sat past the 800-char cut), so
+    lead with a per-step skeleton that always fits: step ids, executors and
+    input keys expose nesting/stray-element slips at a glance.
+    """
     parts = [f"Your previous plan was REJECTED: {error}"]
     if plan_dump:
-        parts.append(f"Rejected plan (fix it, do not repeat it): {plan_dump[:800]}")
+        skeleton = _plan_skeleton(plan_dump)
+        parts.append(
+            f"Rejected plan skeleton (fix it, do not repeat it): {skeleton[:600]}"
+        )
     parts.append("Return a corrected plan satisfying every rule above.")
     return "\n".join(parts)
+
+
+def _plan_skeleton(plan_dump: str) -> str:
+    """One line per step: id, executor, input keys. Never raises."""
+    import json as _json
+
+    try:
+        data = _json.loads(plan_dump)
+        steps = data.get("steps", [])
+    except (ValueError, AttributeError, TypeError):
+        return plan_dump[:600]
+    lines: list[str] = []
+    for i, s in enumerate(steps):
+        if not isinstance(s, dict):
+            lines.append(f"[{i}] NOT AN OBJECT: {str(s)[:100]!r}")
+            continue
+        ex = s.get("agent_id") or s.get("tool_id") or "NO-EXECUTOR"
+        raw_input = s.get("input")
+        keys = sorted(raw_input) if isinstance(raw_input, dict) else type(raw_input).__name__
+        lines.append(
+            f"step {s.get('step_id', '?')}: executor={ex} input_keys={keys} "
+            f"depends_on={s.get('depends_on', 'MISSING')}"
+        )
+    return "; ".join(lines) or plan_dump[:600]
 
 
 def _execution_feedback(plan_dump: str, failed: list[StepResult]) -> str:

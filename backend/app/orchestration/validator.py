@@ -60,6 +60,10 @@ class PlanValidator:
         self._check_no_cycles(plan)       # -> PlanValidationError on a cycle
         self._check_budget(plan)          # -> PlanValidationError if too many steps
         self._check_dataflow_grounding(plan)  # -> PlanValidationError on ungrounded plot/report
+        self._check_reasoning_grounding(plan)  # -> PlanValidationError on ungrounded agent step
+        self._check_placeholder_edges(plan)  # -> PlanValidationError on dangling {{id}} refs
+        self._check_tool_required_fields(plan)  # -> PlanValidationError on missing required tool input
+        self._check_retrieval_output_types(plan)  # -> PlanValidationError on rag.query not typed chunks
         logger.info("plan %s validated (%d steps)", plan.plan_id, len(plan.steps))
         return plan
 
@@ -78,10 +82,17 @@ class PlanValidator:
             has_tool = bool(step.tool_id)
             if has_agent == has_tool:  # both or neither
                 hint = ""
-                if isinstance(step.input, dict) and (
-                    "agent_id" in step.input or "tool_id" in step.input
-                ):
-                    hint = " (agent_id/tool_id are TOP-LEVEL step fields, not input keys — move them up)"
+                if isinstance(step.input, dict):
+                    if "agent_id" in step.input or "tool_id" in step.input:
+                        hint = " (agent_id/tool_id are TOP-LEVEL step fields, not input keys — move them up)"
+                    elif "step_id" in step.input or "depends_on" in step.input:
+                        hint = (
+                            f" (input buries step {str(step.input.get('step_id', '?'))!r} — "
+                            "each steps[] element is ONE step; move step_id/depends_on/"
+                            "expected_output_type out of input to top level)"
+                        )
+                    else:
+                        hint = f" (input keys={sorted(step.input)})"
                 raise PlanValidationError(
                     f"step {step.step_id} must set exactly one of agent_id/tool_id{hint}"
                 )
@@ -234,3 +245,166 @@ class PlanValidator:
                             "answer/summary/text step — reports must be grounded "
                             "in an answer step"
                         )
+
+    def _check_reasoning_grounding(self, plan: Plan) -> None:
+        """Reject agent steps that declare dependencies but use no placeholder.
+
+        An agent step with non-empty depends_on must reference at least one
+        transitive upstream step via a {{id}} placeholder in its input values
+        (typically the `message`). Without it the step executes on prose
+        alone — e.g. three "write 5 MCQs" steps off rag.query that never see
+        the retrieved chunks and ask the user to re-upload.
+        """
+        by_id = {s.step_id: s for s in plan.steps}
+
+        def upstream(step_id: str) -> set[str]:
+            seen: set[str] = set()
+            stack = list(by_id[step_id].depends_on)
+            while stack:
+                dep = stack.pop()
+                if dep in seen or dep not in by_id:
+                    continue
+                seen.add(dep)
+                stack.extend(by_id[dep].depends_on)
+            return seen
+
+        def placeholders_in(value: object) -> set[str]:
+            found: set[str] = set()
+            if isinstance(value, str):
+                found.update(_PLACEHOLDER.findall(value))
+            elif isinstance(value, dict):
+                for v in value.values():
+                    found.update(placeholders_in(v))
+            elif isinstance(value, list):
+                for v in value:
+                    found.update(placeholders_in(v))
+            return found
+
+        for step in plan.steps:
+            if step.tool_id or not step.depends_on:
+                continue
+            refs = placeholders_in(step.input)
+            ups = upstream(step.step_id)
+            if not (refs & ups):
+                raise PlanValidationError(
+                    f"step {step.step_id} ({step.agent_id or 'agent'}) depends on "
+                    f"{sorted(step.depends_on)} but its input carries no "
+                    "{{{id}}} placeholder — dependent agent steps must reference "
+                    "upstream output (e.g. \"... using {{1}} ...\")"
+                )
+
+    def _check_placeholder_edges(self, plan: Plan) -> None:
+        """Reject {{id}} placeholders with no matching ordering edge.
+
+        Placeholders are the engine's only dataflow mechanism
+        (plan_graph._resolve_value): a step referencing {{1}} without
+        depends_on ["1"] runs in the same super-step as step 1, so the
+        placeholder never resolves and the literal "{{1}}" reaches the LLM
+        (observed: "I don't have the retrieved chunks"). Plan.from_model
+        auto-wires this shape, so reaching here means a dangling reference
+        to a non-existent step — fail honest instead of executing garbled.
+        """
+        by_id = {s.step_id: s for s in plan.steps}
+
+        def placeholders_in(value: object) -> set[str]:
+            found: set[str] = set()
+            if isinstance(value, str):
+                found.update(_PLACEHOLDER.findall(value))
+            elif isinstance(value, dict):
+                for v in value.values():
+                    found.update(placeholders_in(v))
+            elif isinstance(value, list):
+                for v in value:
+                    found.update(placeholders_in(v))
+            return found
+
+        def upstream(step_id: str) -> set[str]:
+            seen: set[str] = set()
+            stack = list(by_id[step_id].depends_on)
+            while stack:
+                dep = stack.pop()
+                if dep in seen or dep not in by_id:
+                    continue
+                seen.add(dep)
+                stack.extend(by_id[dep].depends_on)
+            return seen
+
+        for step in plan.steps:
+            refs = placeholders_in(step.input)
+            if not refs:
+                continue
+            ups = upstream(step.step_id)
+            missing = refs - ups - {step.step_id}
+            unknown = {r for r in refs if r not in by_id}
+            if unknown:
+                raise PlanValidationError(
+                    f"step {step.step_id} references unknown step(s) "
+                    f"{sorted(unknown)} via {{{{id}}}} placeholder — "
+                    "placeholders must reference real step_ids"
+                )
+            if missing:
+                raise PlanValidationError(
+                    f"step {step.step_id} uses {{{{id}}}} placeholder(s) "
+                    f"{sorted(missing)} with no ordering edge — add "
+                    f"{sorted(missing)} to depends_on so upstream runs first"
+                )
+
+    def _check_tool_required_fields(self, plan: Plan) -> None:
+        """Reject tool steps missing their schema-required input fields.
+
+        Catches malformed planner output before execution (e.g. doc.generate
+        with {"message": ...} instead of {"title": ..., "sections": ...}).
+        `notebook_id` is exempt: the engine injects run-scoped truth at
+        execution time, so the planner must never emit it. A value containing
+        a {{id}} placeholder counts as present — it resolves at runtime.
+        """
+        schemas: dict[str, dict] = {}
+        for tool in self._tool_registry.manifest():
+            schemas[tool["tool_id"]] = tool.get("input_schema", {}) or {}
+        for step in plan.steps:
+            if not step.tool_id:
+                continue
+            schema = schemas.get(step.tool_id, {})
+            required = schema.get("required", []) or []
+            if not required or not isinstance(step.input, dict):
+                continue
+            for field in required:
+                if field == "notebook_id":
+                    continue
+                value = step.input.get(field)
+                if value is None:
+                    raise PlanValidationError(
+                        f"step {step.step_id} ({step.tool_id}) is missing required "
+                        f"input field {field!r} — refusing to execute an "
+                        "unguarded tool call"
+                    )
+                if isinstance(value, str):
+                    if not value.strip():
+                        raise PlanValidationError(
+                            f"step {step.step_id} ({step.tool_id}) has empty "
+                            f"required input field {field!r}"
+                        )
+                elif isinstance(value, list) and not value:
+                    raise PlanValidationError(
+                        f"step {step.step_id} ({step.tool_id}) has empty "
+                        f"required input field {field!r}"
+                    )
+
+    def _check_retrieval_output_types(self, plan: Plan) -> None:
+        """Enforce intermediate output typing so HIDE works downstream.
+
+        The aggregator hides `chunks`/`numbers` and shows everything else.
+        A rag.query typed as `text`/`answer` promotes raw chunks into the
+        user-visible summary (observed live: "Step 1 (rag.query): <ToC...>"
+        prefixing the MCQ answer). Fail honest at plan time.
+        """
+        for step in plan.steps:
+            if step.tool_id == "rag.query":
+                eot = (step.expected_output_type or "").lower()
+                if eot != "chunks":
+                    raise PlanValidationError(
+                        f"step {step.step_id} (rag.query) must declare "
+                        f"expected_output_type \"chunks\" (got "
+                        f"{step.expected_output_type!r}) — raw chunks are "
+                        "intermediates and must stay hidden from the answer"
+                    )

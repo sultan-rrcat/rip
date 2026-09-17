@@ -4,6 +4,17 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — auto-hoist wiring keys nested in `input`
+
+- `Plan.from_model` now hoists `depends_on`/`expected_output_type`/`step_id` found inside a step's `input` up to top level (observed live: ornith-1.5:9b nests them twice running, burning the whole retry budget on an otherwise executable plan). Equal top-level copies are dropped as echoes; conflicting values stay a retry-actionable `ValueError` (differing input `step_id` keeps the "buries step" message). Planner Rule 4 documents the repair.
+
+## Unreleased — planner structural hardening (stray elements, nested steps, omitted eot)
+
+- Malformed plans fail with actionable retry feedback: stray non-object `steps[]` elements and whole steps buried inside another step's `input` are rejected naming the exact shape violation (previously a generic executor error the model repeated past the retry budget).
+- Omitted `expected_output_type` on `rag.query` steps defaults to `"chunks"` (explicitly wrong values are still rejected), and validation retry feedback now leads with a per-step skeleton (id, executor, input keys) instead of a truncated JSON dump that cut off before the breakage.
+- Planner Rule 1 now shows the exact forbidden shapes (bare `"step_id"` array elements, nested step objects).
+- Grounded execution guards: dependent agent steps without a `{{id}}` placeholder, dangling placeholders, tool steps missing required input, and `rag.query` not typed `"chunks"` fail honestly at plan time; `{{id}}` placeholders auto-wire their `depends_on` edge.
+
 ## Unreleased — docs drift corrections
 
 - Corrected stale docs against the code: README tool list now names all seven tools (adds `notebook.inspect`, `doc.convert`) and includes the `artifacts` SSE event; MUI version corrected to v9 (was v7) in `README.md` and `AGENT.md`; `AGENT.md` module map points at `code_sandbox.py` (was `code.sandbox.py`).

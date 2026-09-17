@@ -349,6 +349,76 @@ class TestValidator:
         with pytest.raises(PlanValidationError, match="answer/summary/text"):
             PlanValidator(agents, tools).validate(plan)
 
+    def test_ungrounded_reasoning_rejected(self):
+        # Run 4ad8adfc shape: reasoning depends on rag.query but message
+        # carries no {{1}} — executes ungrounded, asks to re-upload.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "write 5 beginner MCQs"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="placeholder"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_grounded_reasoning_passes(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "write 15 MCQs from {{1}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_doc_generate_without_title_rejected(self):
+        # Run 4ad8adfc attempt-1 shape: doc.generate with message, no title.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="doc.generate",
+                         input={"message": "write MCQs"},
+                         expected_output_type="document"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="title"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_rag_without_query_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={},
+                         expected_output_type="chunks"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="query"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_rag_query_must_be_typed_chunks(self):
+        # Raw chunks typed as text would leak into the answer bubble.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="text"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="chunks"):
+            PlanValidator(agents, tools).validate(plan)
+
 
 # --- Aggregator (Q36 deterministic rules) ---
 
@@ -837,7 +907,7 @@ class TestOrchestrator:
                     },
                     {
                         "step_id": "2", "agent_id": "fake",
-                        "input": {"message": "answer it"},
+                        "input": {"message": "answer it using {{1}}"},
                         "depends_on": ["1"], "expected_output_type": "answer",
                     },
                 ],
@@ -1038,3 +1108,246 @@ class TestNestedExecutorHoist:
         )
         result = orch.run("hi", "nb-1")
         assert result.status == "success" and result.summary == "final"
+
+
+# --- Structural repair (live traces 77930808/26e4974f: stray elements,
+# nested step objects, omitted eot) ---
+
+
+class TestStructuralRepair:
+    def test_non_dict_element_rejected(self):
+        with pytest.raises(ValueError, match="not an object"):
+            Plan.from_model(
+                "p", "g",
+                [
+                    {"step_id": "1", "tool_id": "rag.query",
+                     "input": {"query": "x"},
+                     "expected_output_type": "chunks"},
+                    {"step_id": "2", "agent_id": "fake",
+                     "input": {"message": "answer {{1}}"},
+                     "depends_on": ["1"], "expected_output_type": "answer"},
+                    "step_id",
+                ],
+            )
+
+    def test_nested_step_in_input_rejected(self):
+        with pytest.raises(ValueError, match="buries step"):
+            Plan.from_model(
+                "p", "g",
+                [
+                    {"step_id": "1", "tool_id": "rag.query",
+                     "input": {"query": "x"},
+                     "expected_output_type": "chunks"},
+                    {"step_id": "3",
+                     "input": {"message": "write MCQs {{1}}", "step_id": "2",
+                               "depends_on": ["1"],
+                               "expected_output_type": "answer"},
+                     "depends_on": ["1"], "expected_output_type": "text"},
+                ],
+            )
+
+    def test_omitted_rag_eot_defaults_chunks(self):
+        plan = Plan.from_model(
+            "p", "Create 15 MCQs",
+            [
+                {"step_id": "1", "tool_id": "rag.query",
+                 "input": {"query": "x", "top_k": 8}},
+                {"step_id": "2", "agent_id": "fake",
+                 "input": {"message": "write 15 MCQs from {{1}}"},
+                 "expected_output_type": "answer"},
+            ],
+        )
+        assert plan.steps[0].expected_output_type == "chunks"
+        assert plan.steps[1].depends_on == ["1"]
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_validator_names_buried_step(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[PlanStep(step_id="3", input={"message": "x", "step_id": "2"})],
+        )
+        with pytest.raises(PlanValidationError, match="buries step"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_plan_skeleton_flags_shapes(self):
+        from app.orchestration.engine import _plan_skeleton
+
+        dump = (
+            '{"goal": "g", "steps": ['
+            '{"step_id": "1", "tool_id": "rag.query", '
+            '"input": {"query": "x"}, "depends_on": []}, '
+            '"step_id"]}'
+        )
+        skeleton = _plan_skeleton(dump)
+        assert "executor=rag.query" in skeleton
+        assert "NOT AN OBJECT" in skeleton
+
+
+# --- Wiring-key hoist (live trace 214e7509: ornith-1.5:9b nests
+# depends_on/expected_output_type inside input, twice running) ---
+
+
+class TestKeyHoist:
+    def _rag_then_writer(self, writer_input):
+        return [
+            {"step_id": "1", "tool_id": "rag.query",
+             "input": {"query": "x", "top_k": 8}},
+            {"step_id": "2", "agent_id": "fake", "input": writer_input},
+        ]
+
+    def test_attempt1_shape_hoisted(self):
+        # depends_on + expected_output_type buried in input move up.
+        plan = Plan.from_model(
+            "p", "Summarize the document",
+            self._rag_then_writer({
+                "message": "Summarize using ONLY these chunks: {{1}}",
+                "depends_on": ["1"], "expected_output_type": "answer",
+            }),
+        )
+        assert plan.steps[0].expected_output_type == "chunks"
+        assert plan.steps[1].depends_on == ["1"]
+        assert plan.steps[1].expected_output_type == "answer"
+        assert "depends_on" not in plan.steps[1].input
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_attempt2_shape_hoisted(self):
+        # expected_output_type "summary" buried in input moves up and
+        # validates (summary is a known answer type).
+        plan = Plan.from_model(
+            "p", "Summarize the document",
+            self._rag_then_writer({
+                "message": "Using ONLY {{1}}, write a summary.",
+                "expected_output_type": "summary",
+            }),
+        )
+        assert plan.steps[1].depends_on == ["1"]  # auto-wired from {{1}}
+        assert plan.steps[1].expected_output_type == "summary"
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_contradiction_rejected(self):
+        with pytest.raises(ValueError, match="contradicts"):
+            Plan.from_model(
+                "p", "g",
+                [
+                    {"step_id": "1", "tool_id": "rag.query",
+                     "input": {"query": "x"},
+                     "expected_output_type": "chunks"},
+                    {"step_id": "2", "agent_id": "fake",
+                     "input": {"message": "x {{1}}",
+                               "expected_output_type": "summary"},
+                     "depends_on": ["1"], "expected_output_type": "answer"},
+                ],
+            )
+
+    def test_depends_on_contradiction_rejected(self):
+        with pytest.raises(ValueError, match="contradicts"):
+            Plan.from_model(
+                "p", "g",
+                [
+                    {"step_id": "1", "tool_id": "rag.query",
+                     "input": {"query": "x"},
+                     "expected_output_type": "chunks"},
+                    {"step_id": "2", "tool_id": "rag.query",
+                     "input": {"query": "y", "depends_on": ["9"]},
+                     "depends_on": ["1"],
+                     "expected_output_type": "chunks"},
+                ],
+            )
+
+    def test_echo_dropped(self):
+        # input step_id equal to the top-level id is a harmless echo.
+        plan = Plan.from_model(
+            "p", "g",
+            [
+                {"step_id": "1", "tool_id": "rag.query",
+                 "input": {"query": "x", "step_id": "1"},
+                 "expected_output_type": "chunks"},
+            ],
+        )
+        assert "step_id" not in plan.steps[0].input
+
+    def test_whole_step_nesting_still_rejected(self):
+        # Differing input step_id with no top-level executor: the old
+        # buried-step shape stays a retry-actionable ValueError.
+        with pytest.raises(ValueError, match="buries step"):
+            Plan.from_model(
+                "p", "g",
+                [{
+                    "input": {"message": "x", "step_id": "2",
+                              "depends_on": ["1"],
+                              "expected_output_type": "answer"},
+                    "depends_on": [], "expected_output_type": "text",
+                }],
+            )
+
+
+# --- Placeholder edges (live trace be49925d: grounded message, missing edge) ---
+
+
+class TestPlaceholderEdges:
+    def test_from_model_autowires_missing_edge(self):
+        # Planner emits {{1}} but omits depends_on — same super-step means
+        # the placeholder never resolves (literal "{{1}}" reaches the LLM).
+        plan = Plan.from_model(
+            "p", "Create 15 MCQs",
+            [
+                {"step_id": "1", "tool_id": "rag.query",
+                 "input": {"query": "x", "top_k": 8},
+                 "expected_output_type": "chunks"},
+                {"step_id": "2", "agent_id": "fake",
+                 "input": {"message": "write 15 MCQs from {{1}}"},
+                 "expected_output_type": "answer"},
+            ],
+        )
+        assert plan.steps[1].depends_on == ["1"]
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_dangling_placeholder_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "use {{1}} and {{99}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="unknown step"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_e2e_autowired_mcq_shape_resolves_chunks(self):
+        # End-to-end: planner omits the edge; from_model wires it so the
+        # writer sees resolved chunks instead of literal "{{1}}".
+        provider = FakeProvider(
+            structured={
+                "goal": "Create 15 MCQs",
+                "steps": [
+                    {"step_id": "1", "tool_id": "rag.query",
+                     "input": {"query": "hello"},
+                     "depends_on": [], "expected_output_type": "chunks"},
+                    {"step_id": "2", "agent_id": "fake",
+                     "input": {"message": "write MCQs from {{1}}"},
+                     "expected_output_type": "answer"},
+                ],
+            }
+        )
+        agent = FakeAgent(output="final")
+        agents = AgentRegistry()
+        agents.register(agent)
+        tools = get_default_tool_registry(rag=FakeRAG())
+        orch = Orchestrator(
+            Planner(provider, agents, tools),
+            PlanValidator(agents, tools),
+            Aggregator(), agents, tools,
+        )
+        result = orch.run("hi", "nb-1")
+        assert result.status == "success" and result.summary == "final"
+        assert "{{1}}" not in agent.seen[0]["message"]
+        assert "chunk-one" in agent.seen[0]["message"]

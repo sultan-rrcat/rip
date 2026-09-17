@@ -392,6 +392,17 @@ def _make_step_node(
         # resolved, self-descriptive input. Cheap and synchronous: done
         # HERE in the node thread (not the background body) so the span
         # input is accurate even when the body times out.
+        # Fail-visible: a dependent step with no placeholder runs ungrounded
+        # (the validator rejects this shape, but log here as backstop for
+        # plans predating validation or bypassing it in tests).
+        if step.depends_on:
+            _refs = _PLACEHOLDER.findall(str(step.input))
+            if not _refs:
+                logger.warning(
+                    "step %s depends on %s but input carries no {{id}} "
+                    "placeholder — executing ungrounded",
+                    step.step_id, sorted(step.depends_on),
+                )
         resolved_input = _resolve_input(
             step.input, _outputs_from(state["step_results"])
         )

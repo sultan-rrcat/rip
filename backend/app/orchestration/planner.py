@@ -121,6 +121,10 @@ class Planner:
            or tool_id (deterministic utility work) as TOP-LEVEL step keys —
            NEVER nested inside "input". Never set both, never
            neither. Use ONLY the listed agent_ids and tool_ids.
+           The steps array holds ONLY step objects: NEVER a bare string
+           element like "step_id": "3", and NEVER a whole step (with its own
+           step_id/depends_on/expected_output_type) buried inside another
+           step's "input" — each step is its own TOP-LEVEL steps[] element.
         2. Assign each step a unique step_id.
         3. Use depends_on to specify ordering and dependencies between steps.
            depends_on entries must be EXACT step_id values (e.g. "2"), never
@@ -134,6 +138,10 @@ class Planner:
              title for plot.chart). Do NOT put tool input inside a "message"
              key — the tool reads its own schema fields. Never leave "input"
              empty.
+           - "input" holds ONLY content fields (message, query, ...).
+             Wiring keys (depends_on, expected_output_type) live at step
+             TOP level: misplaced copies are auto-hoisted, conflicting
+             duplicates are rejected.
         5. To use an earlier step's result inside a later step, embed the
            placeholder {{{{<step_id>}}}} - two braces around the exact step_id,
            e.g. {{{{1}}}} for step "1" - in this step's input values. The engine
@@ -164,8 +172,11 @@ class Planner:
         7. Return only the JSON object matching the provided execution-plan schema.
         8. DOCUMENT ROUTING (snapshot below lists this notebook's files):
            - Factual/QA/summary/report-about-documents with >=1 ready file
-             → rag.query FIRST (query=<search terms>, top_k=8), then a
-             reasoning step answering ONLY from {{{{1}}}} chunks. Say "not
+             → rag.query FIRST (query=<search terms>, top_k=8,
+             expected_output_type="chunks" — mandatory, never "text":
+             the validator rejects rag.query typed otherwise because raw
+             chunks would leak into the answer), then a
+             reasoning step answering ONLY from {{1}} chunks. Say "not
              in the documents" when chunks are empty. NEVER answer from
              parametric knowledge when ready documents exist. Generating
              questions/quiz/MCQs from documents is content work like any
@@ -286,6 +297,18 @@ class Planner:
               "input": {{"chart_type": "bar", "labels": ["Fire", "Smoke"],
                          "values": [{{{{2}}}}], "title": "Class distribution"}},
               "depends_on": ["2"], "expected_output_type": "chart"}}
+        ]}}
+
+        Example F (MCQ/quiz generation — ONE writer step, never fan-out):
+        {{"goal": "Create 15 MCQs (5 beginner, 5 intermediate, 5 senior)", "steps": [
+            {{"step_id": "1", "tool_id": "rag.query",
+              "input": {{"query": "key concepts topics important details", "top_k": 8}},
+              "depends_on": [], "expected_output_type": "chunks"}},
+            {{"step_id": "2", "agent_id": "reasoning",
+              "input": {{"message": "Using ONLY these retrieved chunks {{{{1}}}}, "
+                        "write 15 MCQs (5 beginner, 5 intermediate, 5 senior), "
+                        "each with 4 options and the correct answer marked."}},
+              "depends_on": ["1"], "expected_output_type": "answer"}}
         ]}}
         """
 
