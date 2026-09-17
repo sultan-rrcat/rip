@@ -16,8 +16,9 @@ if BACKEND_DIR not in sys.path:
 from app.agents.registry import get_default_agent_registry
 from app.orchestration.aggregator import Aggregator
 from app.orchestration.orchestrator import Orchestrator
+from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.planner import Planner
-from app.orchestration.validator import PlanValidator
+from app.orchestration.validator import PlanValidationError, PlanValidator
 from app.providers.base import ModelProvider
 from app.tools.registry import get_default_tool_registry
 
@@ -125,3 +126,69 @@ def test_greeting_fast_path_spends_no_structured_call() -> None:
     assert result.status == "success" and result.summary == "layered answer"
     assert len(result.step_results) == 1
     assert provider.structured_calls == 0  # fast-path: no router, no planner
+
+
+def _prose_validator():
+    provider = FakeLayeredProvider()
+    agents = get_default_agent_registry(provider)
+    return PlanValidator(agents, get_default_tool_registry(rag=FakeRAG()))
+
+
+def _rag_step(step_id: str) -> PlanStep:
+    return PlanStep(
+        step_id=step_id, tool_id="rag.query",
+        input={"query": "x"}, expected_output_type="chunks",
+    )
+
+
+def test_prose_step_ref_without_placeholder_rejected() -> None:
+    # Exact ecd93eb4 shape: prose names steps 1/2, no {{1}} {{2}}, no edges.
+    import pytest
+
+    plan = Plan(
+        plan_id="p", goal="compare both reports",
+        steps=[
+            _rag_step("1"),
+            _rag_step("2"),
+            PlanStep(
+                step_id="3", agent_id="reasoning",
+                input={"message": (
+                    "Using the retrieved chunks from step 1 (Fire report) "
+                    "and step 2 (Faultbook report), compare and rank them."
+                )},
+                expected_output_type="answer",
+            ),
+        ],
+    )
+    with pytest.raises(PlanValidationError, match="placeholder"):
+        _prose_validator().validate(plan)
+
+
+def test_prose_step_ref_with_placeholders_passes() -> None:
+    plan = Plan(
+        plan_id="p", goal="compare both reports",
+        steps=[
+            _rag_step("1"),
+            _rag_step("2"),
+            PlanStep(
+                step_id="3", agent_id="reasoning",
+                input={"message": "Using {{1}} and {{2}}, compare step outputs."},
+                depends_on=["1", "2"], expected_output_type="answer",
+            ),
+        ],
+    )
+    assert _prose_validator().validate(plan) is plan
+
+
+def test_benign_step_prose_without_rag_siblings_passes() -> None:
+    plan = Plan(
+        plan_id="p", goal="g",
+        steps=[
+            PlanStep(
+                step_id="1", agent_id="reasoning",
+                input={"message": "follow step 1 of the checklist below"},
+                expected_output_type="text",
+            )
+        ],
+    )
+    assert _prose_validator().validate(plan) is plan

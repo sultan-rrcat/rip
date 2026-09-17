@@ -25,6 +25,15 @@ logger = logging.getLogger("orchestration.validator")
 #: execution graph).
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
 
+#: Prose signal of an ungrounded fan-in (trace ecd93eb4): the message talks
+#: about retrieved chunks / numbered steps without a {{id}} placeholder.
+#: Checked only when rag.query chunks siblings exist (see
+#: _check_prose_grounding), so ordinary "step N" prose stays legal.
+_PROSE_STEP_REF = re.compile(
+    r"(retrieved\s+chunks?|chunks?\s+from\s+steps?|steps?\s+\d+|from\s+step\s+\d+)",
+    re.IGNORECASE,
+)
+
 #: Known expected_output_type vocabulary. "summary" is a legacy/planner
 #: variant of "answer" (both are terminal prose). Unknown types are allowed
 #: (forward-compatible — the aggregator treats them as SHOW) but logged.
@@ -61,6 +70,7 @@ class PlanValidator:
         self._check_budget(plan)          # -> PlanValidationError if too many steps
         self._check_dataflow_grounding(plan)  # -> PlanValidationError on ungrounded plot/report
         self._check_reasoning_grounding(plan)  # -> PlanValidationError on ungrounded agent step
+        self._check_prose_grounding(plan)  # -> PlanValidationError on prose step-ref without placeholder
         self._check_placeholder_edges(plan)  # -> PlanValidationError on dangling {{id}} refs
         self._check_parallel_fanout(plan)  # -> PlanValidationError on >5 parallel long writes
         self._check_tool_required_fields(plan)  # -> PlanValidationError on missing required tool input
@@ -292,6 +302,49 @@ class PlanValidator:
                     f"{sorted(step.depends_on)} but its input carries no "
                     "{{{id}}} placeholder — dependent agent steps must reference "
                     "upstream output (e.g. \"... using {{1}} ...\")"
+                )
+
+    def _check_prose_grounding(self, plan: Plan) -> None:
+        """Reject agent steps that name upstream steps in prose without a placeholder.
+
+        Live trace ecd93eb4: a reasoning step with empty depends_on said
+        "Using the retrieved chunks from step 1 ... and step 2 ..." with no
+        {{1}} {{2}}. It ran in parallel with the rag.query steps, saw no
+        chunks, and asked the user to re-upload. The structural
+        _check_reasoning_grounding cannot see this shape (no depends_on), so
+        match the prose signal — but ONLY when the plan actually holds
+        rag.query chunks siblings, to avoid false positives on benign
+        "step N" prose.
+        """
+        has_chunks = any(
+            s.tool_id == "rag.query"
+            and (s.expected_output_type or "").lower() == "chunks"
+            for s in plan.steps
+        )
+        if not has_chunks:
+            return
+        for step in plan.steps:
+            if step.tool_id:
+                continue
+            stack: list[object] = [step.input]
+            texts: list[str] = []
+            while stack:
+                value = stack.pop()
+                if isinstance(value, str):
+                    texts.append(value)
+                elif isinstance(value, dict):
+                    stack.extend(value.values())
+                elif isinstance(value, list):
+                    stack.extend(value)
+            body = " ".join(texts)
+            if _PLACEHOLDER.search(body):
+                continue  # structurally grounded; other checks own the edges
+            if _PROSE_STEP_REF.search(body):
+                raise PlanValidationError(
+                    f"step {step.step_id} ({step.agent_id or 'agent'}) mentions "
+                    "upstream steps in prose but carries no {{{id}}} placeholder "
+                    "— add depends_on plus {{1}} {{2}} references so the chunks "
+                    "are injected before it runs"
                 )
 
     def _check_placeholder_edges(self, plan: Plan) -> None:
