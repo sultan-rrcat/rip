@@ -8,6 +8,10 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 - `Plan.from_model` now hoists `depends_on`/`expected_output_type`/`step_id` found inside a step's `input` up to top level (observed live: ornith-1.5:9b nests them twice running, burning the whole retry budget on an otherwise executable plan). Equal top-level copies are dropped as echoes; conflicting values stay a retry-actionable `ValueError` (differing input `step_id` keeps the "buries step" message). Planner Rule 4 documents the repair.
 
+## Unreleased — thinking-model support (`think: false` on chat paths)
+
+- `OllamaProvider._chat` / `_stream_payload` (`/v1/chat/completions`) now send `"think": false` like `generate_structured` already did: thinking models (e.g. `lfm2.5:latest`) otherwise spend the token budget on chain-of-thought and return empty answers. Pre-thinking-era servers that reject the unknown field get one retry without it. Note: `think: false` moves lfm2's thinking in-band (`<think>` blocks, stripped by `strip_think`/`ThinkFilter`) rather than disabling it — keep token budgets above ~512 so the answer fits after the thinking.
+
 ## Unreleased — parallel long-write cap raised to 5
 
 - Validator `_check_parallel_fanout` now rejects 6+ (was 3+) parallel long-text agent steps off the same parent; the current model/host sustains at least 5 concurrent writes. Planner Rule 9 updated; MCQ single-writer shape stays the recommendation, per-level splits (up to 5) validate.

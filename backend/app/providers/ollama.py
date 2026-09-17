@@ -152,14 +152,28 @@ class OllamaProvider(ModelProvider):
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            # Thinking models (e.g. lfm2.5) otherwise spend the token
+            # budget on chain-of-thought and return empty content
+            # (observed: done_reason=length, 64/64 tokens thinking).
+            # Pre-thinking-era servers that reject the unknown field get
+            # one retry without it below.
+            "think": False,
         }
         if response_format is not None:
             payload["response_format"] = response_format
-        try:
-            response = self._client.post("/v1/chat/completions", json=payload)
-        except httpx.RequestError as e:
-            logger.error("Ollama request failed: %s", e)
-            raise RuntimeError(f"Ollama connection failure: {e}") from e
+
+        def _post(body: dict[str, Any]) -> httpx.Response:
+            try:
+                return self._client.post("/v1/chat/completions", json=body)
+            except httpx.RequestError as e:
+                logger.error("Ollama request failed: %s", e)
+                raise RuntimeError(f"Ollama connection failure: {e}") from e
+
+        response = _post(payload)
+        if response.status_code != 200 and "think" in response.text.lower():
+            logger.warning("Ollama rejected think flag; retrying without it")
+            payload = {k: v for k, v in payload.items() if k != "think"}
+            response = _post(payload)
         if response.status_code != 200:
             logger.error(
                 "Ollama non-200 status=%s body=%s",
@@ -186,8 +200,11 @@ class OllamaProvider(ModelProvider):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
-            # Ask for a trailing usage chunk so last_usage stays honest for
-            # streams. Not every server honors this — see _chat_stream's fallback.
+            # think=False: thinking models must not burn the token budget
+            # on chain-of-thought (see _chat). stream_options asks for a
+            # trailing usage chunk so last_usage stays honest. Servers that
+            # reject either unknown field hit _chat_stream's fallback.
+            "think": False,
             "stream_options": {"include_usage": True},
         }
         if response_format is not None:
@@ -246,18 +263,22 @@ class OllamaProvider(ModelProvider):
         try:
             yield from self._post_stream(payload)
         except RuntimeError as e:
-            # Older servers reject the unknown stream_options field instead
-            # of ignoring it: retry ONCE without the usage request (usage
-            # then stays None — logged, never fabricated).
-            if "stream_options" in str(e).lower():
+            # Older servers reject unknown fields instead of ignoring them:
+            # retry ONCE with each named field stripped (usage then stays
+            # None when stream_options goes — logged, never fabricated).
+            err = str(e).lower()
+            if "think" in err and "think" in payload:
+                logger.warning("Ollama rejected think flag; retrying without it")
+                payload = {k: v for k, v in payload.items() if k != "think"}
+            if "stream_options" in err and "stream_options" in payload:
                 logger.warning(
                     "Ollama rejected stream_options; retrying without usage request "
                     "(token usage will be missing for this generation)"
                 )
                 payload = {k: v for k, v in payload.items() if k != "stream_options"}
-                yield from self._post_stream(payload)
-            else:
+            if "think" in payload and "stream_options" in payload:
                 raise
+            yield from self._post_stream(payload)
 
     @staticmethod
     def _delta_content(event: dict[str, Any]) -> str:
