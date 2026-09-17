@@ -4,6 +4,12 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — layered planning (router + builders + ReAct fallback)
+
+- Simple requests now skip the big planning prompt: greetings answer directly with no planning call, and single questions / compare-two-reports requests use a fixed, pre-validated plan shape (retrieval steps fanning into one grounded answer step) instead of asking the model to invent the wiring. The compare-two-reports failure from testing (answer asked the user to re-upload instead of reading the retrieved documents) is fixed by construction.
+- When the planner still fails twice, the run now tries a step-by-step fallback (answer one small step at a time, up to 6 steps) before giving up; giving up still reports the original honest error.
+- Validator also rejects plans whose answer step merely *mentions* "step 1/2" or "retrieved chunks" in prose without actually linking the retrieval steps, with a one-retry fix hint.
+
 ## Unreleased — auto-hoist wiring keys nested in `input`
 
 - `Plan.from_model` now hoists `depends_on`/`expected_output_type`/`step_id` found inside a step's `input` up to top level (observed live: ornith-1.5:9b nests them twice running, burning the whole retry budget on an otherwise executable plan). Equal top-level copies are dropped as echoes; conflicting values stay a retry-actionable `ValueError` (differing input `step_id` keeps the "buries step" message). Planner Rule 4 documents the repair.

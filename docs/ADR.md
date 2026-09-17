@@ -138,6 +138,19 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Decision:** One recall = two planner outputs max per run. A rejected plan replans with short validation feedback (rejected plan excerpt + exact validator message + one-line fix); a partial/failed aggregation replans with execution feedback (failed step ids + errors + prior plan, failed outputs only). Guards: clarifications never replan; cancellations suppress recall; second failure surfaces honestly; ADR-026 trivial repair sits outside the attempt budget; no resumption — retries re-execute fully. Feedback rides a `RETRY FEEDBACK` block appended after the planner examples plus an additive `attempt` field on the SSE `plan` event (second `plan` resets the frontend accumulators; attempt-1 artifact files orphan on disk).
 - **Consequences:** Failure-path planning latency roughly doubles (~40–50s per plan call on the office model); execution retries re-spend RAG + step LLMs; success path unchanged. If trace-measured retry conversion stays low, stop tuning text and change the model or decoding instead.
 
+## ADR-029: Layered planning (router + deterministic builders + ReAct fallback)
+
+- **Status:** Accepted (2026-09-17, trace `ecd93eb4`)
+- **Context:** The planner prompt (`planner.py`, ~243 lines + full manifests + Rules 1-9 + Examples A-F) grows with every hardening rule, and the single-shot DAG format forces the model to solve intent classification + DAG shape + placeholder wiring in one call. Observed live: a compare-two-reports request produced two good `rag.query` steps plus a reasoning step that named "step 1/2" in prose with no `{{1}} {{2}}`, ran in parallel with retrieval, and asked the user to re-upload. Appending more prompt rules does not scale.
+- **Decision:** Layer the planning path, strictly additive; the existing mega-prompt is untouched as L3 fallback:
+  1. L0 deterministic fast-path (`intents.classify_fast_path`): greetings/empty → single `reasoning` step, no LLM.
+  2. L1 intent router (`router.py`): one tiny `generate_structured` call (`{intent, queries[≤3], confidence}`); `<0.6` → `unknown`.
+  3. L2a deterministic builders (`builders.py`): fixed DAGs for `chat/qa_single/compare_multi` — wiring set by construction. L2b specialist micro-prompts stay future work; unknown intents fall to L3.
+  4. L3 mega-prompt unchanged, incl. ADR-028 one-recall budget; layered routing runs on the first attempt only so retries stay pure mega-prompt.
+  5. Validator gains `_check_prose_grounding`: prose step-references without `{{id}}` are rejected, but only when `rag.query` chunks siblings exist (no false positives on benign prose).
+  6. L4 ReAct fallback (`react.py`): when plan recall is exhausted, a thought → action → observation loop (max 6 iterations, idle cap 2, cooperative cancel) answers one step at a time with observations inlined — no placeholders ever. Aggregates through the standard deterministic Aggregator; failure stays honest (`OrchestrationError` with the original plan error).
+- **Consequences:** Happy path costs one extra cheap call (router) or zero (fast-path/deterministic hit); worst path is bounded (router + 2 plans + ≤6 single steps). New capabilities should land as intents + builders, not prompt appendices. `test_layered.py` pins the chain; recall-test queues carry a router-miss head.
+
 ---
 
 ## Historical (superseded, one line each)
