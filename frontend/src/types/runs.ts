@@ -12,14 +12,22 @@ export type Source = { source: string; section: string }
 export type Artifact = { artifact_id: string; kind: string; filename: string; url: string }
 
 // One plan step as emitted by the SSE `plan` event.
-export type PlanStep = { step_id: string; executor: string; depends_on: string[] }
+// `expected_output_type` / `visibility` are additive backend fields;
+// older replays omit them (fallback: show everything, mark unknown).
+export type PlanStep = {
+  step_id: string
+  executor: string
+  depends_on: string[]
+  expected_output_type?: string
+  visibility?: 'show' | 'hide'
+}
 
 export type RunEvent =
   | { type: 'run_started'; run_id: string; seq: number }
   | { type: 'plan'; goal: string; steps: PlanStep[]; seq: number }
-  | { type: 'step_started'; step_id: string; agent_id?: string; tool_id?: string; seq: number }
+  | { type: 'step_started'; step_id: string; agent_id?: string; tool_id?: string; expected_output_type?: string; visibility?: 'show' | 'hide'; seq: number }
   | { type: 'delta'; step_id: string; content: string; seq: number }   // live only — not replayed from DB
-  | { type: 'step_completed'; step_id: string; status: string; output?: string; seq: number }
+  | { type: 'step_completed'; step_id: string; status: string; output?: string; expected_output_type?: string; visibility?: 'show' | 'hide'; seq: number }
   | { type: 'sources'; sources: Source[]; seq: number }
   | { type: 'summary'; content: string; seq: number }
   | { type: 'run_completed'; status: string; seq: number }
@@ -36,6 +44,8 @@ export interface StepResultView {
   status: string
   output: string
   delta: string
+  expected_output_type?: string
+  visibility?: 'show' | 'hide'
 }
 
 export interface RunView {

@@ -19,6 +19,12 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 - Planner Rule 1 now shows the exact forbidden shapes (bare `"step_id"` array elements, nested step objects).
 - Grounded execution guards: dependent agent steps without a `{{id}}` placeholder, dangling placeholders, tool steps missing required input, and `rag.query` not typed `"chunks"` fail honestly at plan time; `{{id}}` placeholders auto-wire their `depends_on` edge.
 
+## Unreleased — SHOW-persistent answers + collapsed-all Steps + visibility map
+
+- Answer bubble is SHOW-only and persists: intermediate `rag.query` chunks can no longer leak into the final answer (validator now enforces `rag.query → expected_output_type "chunks"`; planner prompt reinforced).
+- Steps panel lists all steps, each collapsed, and survives run completion (previously cleared on `run_completed` and rebuilt fully on replay); each step shows its `expected_output_type` and `shown/hidden` badge. The main bubble keeps showing only SHOW output.
+- Langfuse observability: `aggregate` span now carries `shown`/`hidden`/`visibility`, and every `step:{id}` span carries `expected_output_type` + `visibility`; `step_completed`/`plan` SSE events carry the same fields (additive, old replays fall back to show/unknown).
+
 ## Unreleased — docs drift corrections
 
 - Corrected stale docs against the code: README tool list now names all seven tools (adds `notebook.inspect`, `doc.convert`) and includes the `artifacts` SSE event; MUI version corrected to v9 (was v7) in `README.md` and `AGENT.md`; `AGENT.md` module map points at `code_sandbox.py` (was `code.sandbox.py`).

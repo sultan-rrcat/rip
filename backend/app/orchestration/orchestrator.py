@@ -52,6 +52,9 @@ class OrchestrationResult(BaseModel):
     plan_incomplete: bool = True
     conflicts: list[str] = Field(default_factory=list)
     needs_clarification: bool = False
+    shown: list[str] = Field(default_factory=list)
+    hidden: list[str] = Field(default_factory=list)
+    visibility: dict[str, str] = Field(default_factory=dict)
 
     @property
     def succeeded(self) -> bool:
@@ -156,4 +159,7 @@ class Orchestrator:
             plan_incomplete=aggregation.plan_incomplete,
             conflicts=aggregation.conflicts,
             needs_clarification=aggregation.needs_clarification,
+            shown=list(aggregation.shown),
+            hidden=list(aggregation.hidden),
+            visibility=dict(aggregation.visibility),
         )

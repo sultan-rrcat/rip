@@ -10,7 +10,7 @@ export default function Notebook() {
   const { notebook_id } = useParams()
   const { notebookName, renameNotebook } = useNotebook(notebook_id)
   const { files, handleUpload, handleDelete } = useFiles(notebook_id)
-  const { messages, activeRun, isRunning, handleSendMessage, handleCancelRun } =
+  const { messages, activeRun, pastRuns, isRunning, handleSendMessage, handleCancelRun } =
     useMessages(notebook_id)
 
   return (
@@ -23,7 +23,7 @@ export default function Notebook() {
         onRenameNotebook={renameNotebook}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
-        <ChatArea messages={messages} activeRun={activeRun} />
+        <ChatArea messages={messages} activeRun={activeRun} pastRuns={pastRuns} />
         <Footer
           onSendMessage={handleSendMessage}
           isLoading={isRunning}

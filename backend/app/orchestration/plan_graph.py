@@ -373,6 +373,12 @@ def _make_step_node(
     partial state update. `is_terminal` marks sink steps (nothing depends on
     them) — only terminal prose agent steps receive memory `context`.
     """
+    _eot = (step.expected_output_type or "text").lower()
+    _visibility = (
+        "hide"
+        if _eot in ("chunks", "numbers") or step.executor_id == "notebook.inspect"
+        else "show"
+    )
 
     def node(state: PlanGraphState) -> dict:
         # Cancellation fires HERE, in the node body proper — before the
@@ -385,6 +391,8 @@ def _make_step_node(
                     "type": "step_started",
                     "step_id": step.step_id,
                     "executor_id": step.executor_id,
+                    "expected_output_type": step.expected_output_type,
+                    "visibility": _visibility,
                 }
             )
 
@@ -471,7 +479,11 @@ def _make_step_node(
         with manual_span(
             f"step:{step.step_id}", as_type="span",
             input=truncate(resolved_input, 2000),
-            metadata={"executor": step.executor_id},
+            metadata={
+                "executor": step.executor_id,
+                "expected_output_type": step.expected_output_type,
+                "visibility": _visibility,
+            },
             trace_context=parent_span_ctx,
         ) as step_obs:
             run_ctx = contextvars.copy_context()
@@ -490,6 +502,8 @@ def _make_step_node(
                     "step_id": step.step_id,
                     "status": result.status.value,
                     "output": _trunc(result.output),
+                    "expected_output_type": step.expected_output_type,
+                    "visibility": _visibility,
                 }
             )
         return {"step_results": {step.step_id: result}}

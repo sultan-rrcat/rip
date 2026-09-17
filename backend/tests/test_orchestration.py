@@ -502,6 +502,32 @@ class TestAggregator:
             "Step 1 (reasoning): aaa\n\nStep 2 (coding): bbb"
         )
 
+    def test_visibility_map_mcq_shape(self):
+        # Example F: chunks HIDE, answer SHOW — answer bubble is SHOW-only.
+        plan = Plan(
+            plan_id="p", goal="Create 15 MCQs",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "write MCQs from {{1}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        agg = Aggregator().aggregate(
+            plan,
+            ExecutionResult(
+                trace_id="t",
+                step_results=[
+                    _ok("1", "raw chunks", executor="rag.query"),
+                    _ok("2", "Q1..."),
+                ],
+            ),
+        )
+        assert agg.summary == "Q1..."
+        assert agg.shown == ["2"] and agg.hidden == ["1"]
+        assert agg.visibility == {"1": "hide", "2": "show"}
+
     def test_partial_status(self):
         agg = Aggregator().aggregate(
             Plan(plan_id="p", goal="g"),

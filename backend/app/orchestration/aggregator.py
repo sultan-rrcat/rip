@@ -17,6 +17,8 @@ Type-aware deterministic rules (ADR-023 as amended):
 - a step needing clarification → its question verbatim (never mangled);
 - all steps failed (or nothing executed) → the joined error strings;
 - partial runs append every failure line so successes never mask failures.
+- `shown` / `hidden` / `visibility` expose the SHOW/HIDE decision per step
+  (answer bubble = SHOW only; Steps panel = all, collapsed; Langfuse map).
 
 `conflicts` is always empty (no LLM to detect contradictions).
 """
@@ -54,6 +56,12 @@ class AggregationResult(BaseModel):
     summary: str
     conflicts: list[str] = Field(default_factory=list)
     needs_clarification: bool = False
+    #: SHOW/HIDE decision per step_id ("show" | "hide"), in plan order terms.
+    #: Drives the frontend answer bubble (SHOW only) vs the collapsed-all
+    #: Steps panel, and the Langfuse aggregate-span visibility map.
+    shown: list[str] = Field(default_factory=list)
+    hidden: list[str] = Field(default_factory=list)
+    visibility: dict[str, str] = Field(default_factory=dict)
 
 
 class Aggregator:
@@ -87,6 +95,11 @@ class Aggregator:
                 plan_incomplete=False,
                 summary=clarification.output or "",
                 needs_clarification=True,
+                shown=[clarification.step_id],
+                hidden=[r.step_id for r in result.step_results
+                        if r.step_id != clarification.step_id],
+                visibility={r.step_id: ("show" if r.step_id == clarification.step_id else "hide")
+                            for r in result.step_results},
             )
 
         # All failed: join the error strings honestly.
@@ -99,7 +112,10 @@ class Aggregator:
                 plan.plan_id, len(failed),
             )
             return AggregationResult(
-                status="failed", plan_incomplete=True, summary=summary
+                status="failed", plan_incomplete=True, summary=summary,
+                shown=[],
+                hidden=[r.step_id for r in result.step_results],
+                visibility={r.step_id: "hide" for r in result.step_results},
             )
 
         # Type-aware assembly: hide intermediates, show terminals in plan
@@ -148,12 +164,23 @@ class Aggregator:
             )
             summary = f"{summary}\n\n{failures}" if summary.strip() else failures
 
+        shown_ids = [r.step_id for r in shown]
+        if not shown and ordered_successful and not failed:
+            # Anti-blank fallback surfaces the last intermediate — it IS shown.
+            shown_ids = [ordered_successful[-1].step_id]
+        hidden_ids = [r.step_id for r in ordered_successful if r.step_id not in shown_ids]
+        visibility = {r.step_id: ("hide" if r.step_id in hidden_ids else "show")
+                      for r in ordered_successful}
+
         logger.info(
-            "aggregated plan=%s status=%s successes=%d",
-            plan.plan_id, status, len(successful),
+            "aggregated plan=%s status=%s successes=%d shown=%s hidden=%s",
+            plan.plan_id, status, len(successful), shown_ids, hidden_ids,
         )
         return AggregationResult(
             status=status,
             plan_incomplete=plan_incomplete,
             summary=summary,
+            shown=shown_ids,
+            hidden=hidden_ids,
+            visibility=visibility,
         )

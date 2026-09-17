@@ -15,6 +15,7 @@ import TypingDots from '@/components/notebook/TypingDots'
 interface ChatAreaProps {
   messages: Message[]
   activeRun?: RunView | null
+  pastRuns?: Record<string, RunView>
 }
 
 const markdownComponents: Components = {
@@ -61,7 +62,7 @@ const markdownComponents: Components = {
   },
 }
 
-const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) {
+const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only stick to the bottom while the user is already near it, so scrolling
@@ -89,8 +90,13 @@ const ChatArea = memo(function ChatArea({ messages, activeRun }: ChatAreaProps) 
       {messages.map((message) => {
         // The in-flight run renders its plan + artifacts inside the run's
         // placeholder bubble; finished messages render from their rows.
+        // Completed runs keep a collapsed-all Steps snapshot (pastRuns) so
+        // the trace stays inspectable after activeRun is cleared; the main
+        // bubble always shows the SHOW-only summary text.
         const runView =
-          activeRun && activeRun.messageId === message.id ? activeRun : null
+          activeRun && activeRun.messageId === message.id
+            ? activeRun
+            : (pastRuns?.[message.id] ?? null)
         if (message.role === 'assistant') {
           // Merge persisted message artifacts (reload-safe) with the
           // in-flight run's artifacts, deduped by artifact_id.
@@ -153,7 +159,7 @@ interface AssistantMessageProps {
   plan?: PlanStep[] | null
   goal?: string | null
   artifacts?: Artifact[]
-  stepResults?: Record<string, {executor:string,status:string,output:string,delta:string}>
+  stepResults?: Record<string, {executor:string,status:string,output:string,delta:string,expected_output_type?:string,visibility?:'show'|'hide'}>
 }
 
 function AssistantMessage({
@@ -206,9 +212,9 @@ function AssistantMessage({
           {plan && plan.length > 0 && stepResults && Object.keys(stepResults).length > 0 && (
             <details className="mt-3 text-[11px] text-gray-500">
               <summary className="cursor-pointer font-semibold hover:text-gray-700">
-                Steps
+                Steps (all, collapsed)
               </summary>
-              <div className="mt-1 ml-2 space-y-2">
+              <div className="mt-1 ml-2 space-y-1">
                 {plan.map((step) => {
                   const sr = stepResults[step.step_id]
                   if (!sr) return null
@@ -216,15 +222,20 @@ function AssistantMessage({
                   // Never dump raw chart SVG into the panel (same guard as
                   // the main bubble): the chart renders via Artifacts <img>.
                   const content = stripSvgFromText(raw) || ''
+                  const vis = sr.visibility ?? step.visibility ?? null
+                  const eot = sr.expected_output_type ?? step.expected_output_type ?? null
+                  const badge = vis === 'hide' ? 'hidden' : vis === 'show' ? 'shown' : null
                   return (
-                    <div key={step.step_id} className="border-l-2 border-gray-300 pl-2">
-                      <div className="font-semibold">
+                    <details key={step.step_id} className="border-l-2 border-gray-300 pl-2">
+                      <summary className="cursor-pointer font-semibold hover:text-gray-700">
                         Step {step.step_id} · {step.executor} · {sr.status}
-                      </div>
+                        {eot ? ` · ${eot}` : ''}
+                        {badge ? ` · ${badge}` : ''}
+                      </summary>
                       <div className="whitespace-pre-wrap break-words text-[10px] text-gray-600">
                         {content}
                       </div>
-                    </div>
+                    </details>
                   )
                 })}
               </div>

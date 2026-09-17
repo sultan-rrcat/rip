@@ -45,6 +45,11 @@ export function useMessages(notebook_id: string | undefined) {
   // Step results for collapsible steps view
   const stepResultsRef = useRef<Record<string, StepResultView>>({})
   const planStepsRef = useRef<PlanStep[] | null>(null)
+  const goalRef = useRef<string | null>(null)
+  // Completed runs retained per assistant message so the collapsed-all
+  // Steps panel + SHOW-only answer persist after run_completed (activeRun
+  // is cleared) and across replay.
+  const [pastRuns, setPastRuns] = useState<Record<string, RunView>>({})
   // Notebook owning the current subscription. Written in effects/handlers
   // only (never during render) so the SSE callbacks can't go stale.
   const nbRef = useRef<string | undefined>(undefined)
@@ -55,6 +60,7 @@ export function useMessages(notebook_id: string | undefined) {
     placeholderRef.current = null
     stepResultsRef.current = {}
     planStepsRef.current = null
+    goalRef.current = null
     setActiveRun(null)
     setIsRunning(false)
   }, [])
@@ -63,6 +69,20 @@ export function useMessages(notebook_id: string | undefined) {
     async (runId: string) => {
       const nb = nbRef.current
       const messageId = placeholderRef.current
+      // Snapshot the collapsed-all Steps panel before detach clears it.
+      if (messageId && planStepsRef.current) {
+        const snapshot: RunView = {
+          runId,
+          messageId,
+          goal: goalRef.current,
+          plan: planStepsRef.current,
+          sources: sourcesRef.current,
+          artifacts: artifactsRef.current,
+          running: false,
+          stepResults: { ...stepResultsRef.current },
+        }
+        setPastRuns((prev) => ({ ...prev, [messageId]: snapshot }))
+      }
       detach()
       if (!nb || !messageId) return
       // Exactly-once assistant persist: a resumed replay of an already
@@ -175,7 +195,9 @@ export function useMessages(notebook_id: string | undefined) {
             )
           }
           planStepsRef.current = planEvt.steps
-          // initialise step results map
+          goalRef.current = planEvt.goal ?? null
+          // initialise step results map (carry visibility/eot when present;
+          // older replays omit them and fall back to show/unknown)
           const initSteps: Record<string, StepResultView> = {}
           for (const s of planEvt.steps) {
             initSteps[s.step_id] = {
@@ -183,6 +205,8 @@ export function useMessages(notebook_id: string | undefined) {
               status: 'pending',
               output: '',
               delta: '',
+              expected_output_type: s.expected_output_type,
+              visibility: s.visibility,
             }
           }
           stepResultsRef.current = initSteps
@@ -284,9 +308,19 @@ export function useMessages(notebook_id: string | undefined) {
         case 'step_started': {
           const stepId = event.step_id
           if (stepId && stepResultsRef.current[stepId]) {
+            const startedEvt = event as RunEvent & {
+              expected_output_type?: string
+              visibility?: 'show' | 'hide'
+            }
             stepResultsRef.current[stepId] = {
               ...stepResultsRef.current[stepId],
               status: 'running',
+              ...(startedEvt.expected_output_type !== undefined
+                ? { expected_output_type: startedEvt.expected_output_type }
+                : {}),
+              ...(startedEvt.visibility !== undefined
+                ? { visibility: startedEvt.visibility }
+                : {}),
             }
             setActiveRun((r) =>
               r && r.runId === runId
@@ -299,10 +333,20 @@ export function useMessages(notebook_id: string | undefined) {
         case 'step_completed': {
           const stepId = event.step_id
           if (stepId && stepResultsRef.current[stepId]) {
+            const completedEvt = event as RunEvent & {
+              expected_output_type?: string
+              visibility?: 'show' | 'hide'
+            }
             stepResultsRef.current[stepId] = {
               ...stepResultsRef.current[stepId],
               status: event.status || 'done',
               output: event.output || stepResultsRef.current[stepId].delta,
+              ...(completedEvt.expected_output_type !== undefined
+                ? { expected_output_type: completedEvt.expected_output_type }
+                : {}),
+              ...(completedEvt.visibility !== undefined
+                ? { visibility: completedEvt.visibility }
+                : {}),
             }
             setActiveRun((r) =>
               r && r.runId === runId
@@ -369,6 +413,7 @@ export function useMessages(notebook_id: string | undefined) {
     let cancelled = false
 
     async function load() {
+      setPastRuns({})
       try {
         const msgs = await getMessagesAPI(id)
         if (cancelled) return
@@ -497,6 +542,7 @@ export function useMessages(notebook_id: string | undefined) {
   return {
     messages,
     activeRun,
+    pastRuns,
     isRunning,
     handleSendMessage,
     handleCancelRun,

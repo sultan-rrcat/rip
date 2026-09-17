@@ -337,6 +337,9 @@ class RunManager:
                     "plan_incomplete": result.plan_incomplete,
                     "conflicts": result.conflicts,
                     "needs_clarification": result.needs_clarification,
+                    "shown": list(getattr(result, "shown", []) or []),
+                    "hidden": list(getattr(result, "hidden", []) or []),
+                    "visibility": dict(getattr(result, "visibility", {}) or {}),
                 },
             )
             terminal = "completed" if result.status in ("success", "partial") else "failed"
@@ -351,6 +354,9 @@ class RunManager:
                     "plan_incomplete": result.plan_incomplete,
                     "conflicts": result.conflicts,
                     "needs_clarification": result.needs_clarification,
+                    "shown": list(getattr(result, "shown", []) or []),
+                    "hidden": list(getattr(result, "hidden", []) or []),
+                    "visibility": dict(getattr(result, "visibility", {}) or {}),
                 },
             )
             self._persist_memory(record, summary_update)

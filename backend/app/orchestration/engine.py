@@ -277,6 +277,7 @@ def _make_plan_node(
                             "step_id": s.step_id,
                             "executor": s.executor_id,
                             "depends_on": list(s.depends_on),
+                            "expected_output_type": s.expected_output_type,
                         }
                         for s in plan.steps
                     ],
@@ -346,6 +347,9 @@ def _make_aggregate_node(aggregator: Aggregator) -> Callable:
                 agg_obs.update(output={
                     "status": agg.status,
                     "summary": truncate(agg.summary, 2000),
+                    "shown": list(agg.shown),
+                    "hidden": list(agg.hidden),
+                    "visibility": dict(agg.visibility),
                 })
                 return {"aggregation": agg, "planner_feedback": None}
             attempt = int(state.get("attempt") or 0)
@@ -358,6 +362,9 @@ def _make_aggregate_node(aggregator: Aggregator) -> Callable:
                 "status": agg.status,
                 "summary": truncate(agg.summary, 2000),
                 "retry_armed": retry_armed,
+                "shown": list(agg.shown),
+                "hidden": list(agg.hidden),
+                "visibility": dict(agg.visibility),
             })
         # One execution retry: partial/failed runs replan with the step
         # errors as feedback. Clarifications never replan (the question IS
