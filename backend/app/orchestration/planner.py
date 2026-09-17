@@ -224,13 +224,21 @@ class Planner:
              question.
         9. PARALLELISM BUDGET (local single-model backend): steps with no
            depends_on run AT THE SAME TIME against one Ollama server.
-           NEVER fan out more than 2 long-text reasoning steps in parallel
-           (e.g. three "write 5 MCQs" steps off one rag.query will time
-           out — observed 25–77s per write against a 30s+ budget). Chain
-           long writes SEQUENTIALLY instead (2 depends_on ["1"],
-           3 depends_on ["2"], ...) so each gets the model to itself.
-           Short branches (numbers + answer in Example E) and cheap
-           deterministic tools may stay parallel.
+           NEVER fan out more than 5 long-text reasoning steps in parallel
+           off the same parent (the validator rejects 6+; the current
+           model/host sustains at least 5 concurrent writes). MCQ/quiz
+           generation is PREFERABLY exactly TWO steps: rag.query FIRST,
+           then ONE reasoning step writing ALL questions (e.g. all 15:
+           5 beginner + 5 intermediate + 5 senior) from {{{{1}}}} chunks;
+           splitting by difficulty level (up to 5 parallel writers) is
+           allowed but costs more. Beyond 5 parallel long writes, chain
+           SEQUENTIALLY instead (2 depends_on ["1"], 3 depends_on ["2"],
+           ...) so each gets the model to itself. Short branches (numbers
+           + answer in Example E) and cheap deterministic tools may stay
+           parallel.
+           Every agent step with depends_on MUST embed a {{{{id}}}}
+           placeholder referencing an upstream step in its message —
+           plans without one are rejected as ungrounded.
 
         Examples:
         Example A (document question answering):

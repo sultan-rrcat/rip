@@ -62,6 +62,7 @@ class PlanValidator:
         self._check_dataflow_grounding(plan)  # -> PlanValidationError on ungrounded plot/report
         self._check_reasoning_grounding(plan)  # -> PlanValidationError on ungrounded agent step
         self._check_placeholder_edges(plan)  # -> PlanValidationError on dangling {{id}} refs
+        self._check_parallel_fanout(plan)  # -> PlanValidationError on >5 parallel long writes
         self._check_tool_required_fields(plan)  # -> PlanValidationError on missing required tool input
         self._check_retrieval_output_types(plan)  # -> PlanValidationError on rag.query not typed chunks
         logger.info("plan %s validated (%d steps)", plan.plan_id, len(plan.steps))
@@ -347,6 +348,36 @@ class PlanValidator:
                     f"step {step.step_id} uses {{{{id}}}} placeholder(s) "
                     f"{sorted(missing)} with no ordering edge — add "
                     f"{sorted(missing)} to depends_on so upstream runs first"
+                )
+
+    def _check_parallel_fanout(self, plan: Plan) -> None:
+        """Reject >5 parallel long-text agent steps off the same parent.
+
+        The backend is a single local Ollama server: concurrent long writes
+        contend for it (previously observed 25-77s per write on qwen2.5:14b,
+        hence the old cap of 2). The cap is raised to 5 for the current
+        model/host, which sustains at least five parallel writes. Beyond
+        that, long writes must be chained sequentially or collapsed into
+        one step. Machine outputs (numbers/chunks) stay exempt so the
+        numbers+answer pattern in Example E keeps passing.
+        """
+        groups: dict[tuple[str, ...], list] = {}
+        for step in plan.steps:
+            if step.tool_id or not step.depends_on:
+                continue
+            eot = (step.expected_output_type or "text").lower()
+            if eot in ("numbers", "chunks"):
+                continue
+            key = tuple(sorted(step.depends_on))
+            groups.setdefault(key, []).append(step)
+        for key, siblings in groups.items():
+            if len(siblings) > 5:
+                ids = sorted(s.step_id for s in siblings)
+                raise PlanValidationError(
+                    f"steps {ids} fan out {len(siblings)} parallel long-text "
+                    f"agent steps off {list(key)} — chain long writes "
+                    "sequentially (2 depends_on [\"1\"], 3 depends_on [\"2\"], ...) "
+                    "or collapse them into ONE step"
                 )
 
     def _check_tool_required_fields(self, plan: Plan) -> None:

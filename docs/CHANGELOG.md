@@ -8,6 +8,10 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 - `Plan.from_model` now hoists `depends_on`/`expected_output_type`/`step_id` found inside a step's `input` up to top level (observed live: ornith-1.5:9b nests them twice running, burning the whole retry budget on an otherwise executable plan). Equal top-level copies are dropped as echoes; conflicting values stay a retry-actionable `ValueError` (differing input `step_id` keeps the "buries step" message). Planner Rule 4 documents the repair.
 
+## Unreleased — parallel long-write cap raised to 5
+
+- Validator `_check_parallel_fanout` now rejects 6+ (was 3+) parallel long-text agent steps off the same parent; the current model/host sustains at least 5 concurrent writes. Planner Rule 9 updated; MCQ single-writer shape stays the recommendation, per-level splits (up to 5) validate.
+
 ## Unreleased — planner structural hardening (stray elements, nested steps, omitted eot)
 
 - Malformed plans fail with actionable retry feedback: stray non-object `steps[]` elements and whole steps buried inside another step's `input` are rejected naming the exact shape violation (previously a generic executor error the model repeated past the retry budget).

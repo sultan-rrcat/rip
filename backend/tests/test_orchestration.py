@@ -380,6 +380,57 @@ class TestValidator:
         )
         assert PlanValidator(agents, tools).validate(plan) is plan
 
+    def test_triple_mcq_fanout_passes(self):
+        # Cap raised to 5 for the current model/host: 3 parallel writers
+        # (e.g. beginner/intermediate/senior) validate fine.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="Create 15 MCQs",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                *[
+                    PlanStep(step_id=str(i), agent_id="fake",
+                             input={"message": f"write 5 MCQs from {{{{{1}}}}} level {i}"},
+                             depends_on=["1"], expected_output_type="answer")
+                    for i in (2, 3, 4)
+                ],
+            ],
+        )
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_six_way_fanout_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                *[
+                    PlanStep(step_id=str(i), agent_id="fake",
+                             input={"message": f"write part {{{{{1}}}}} ({i})"},
+                             depends_on=["1"], expected_output_type="answer")
+                    for i in range(2, 8)
+                ],
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="fan out|sequentially"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_single_mcq_shape_passes(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="Create 15 MCQs",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "write 15 MCQs (5/5/5) from {{1}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
     def test_doc_generate_without_title_rejected(self):
         # Run 4ad8adfc attempt-1 shape: doc.generate with message, no title.
         agents, tools = _registries(FakeAgent(), rag=FakeRAG())
