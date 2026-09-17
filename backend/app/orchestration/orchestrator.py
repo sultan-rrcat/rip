@@ -70,6 +70,10 @@ class Orchestrator:
         registry: AgentRegistry,
         tool_registry: ToolRegistry | None = None,
     ):
+        self._planner = planner
+        self._validator = validator
+        self._aggregator = aggregator
+        self._registry = registry
         self._tool_registry = tool_registry or ToolRegistry()
         self._graph = build_orchestration_graph(
             planner,
@@ -133,6 +137,51 @@ class Orchestrator:
         )
 
         if final["plan_error"]:
+            # L4 last resort: the mega-prompt failed twice (bounded recall
+            # exhausted). Try the ReAct loop before failing honestly —
+            # cancellations skip it and raise immediately.
+            if cancel_event is not None and cancel_event.is_set():
+                logger.warning("orchestration aborted: %s", final["plan_error"])
+                raise OrchestrationError(final["plan_error"])
+            try:
+                from app.orchestration.react import run_react
+
+                react = run_react(
+                    request_text,
+                    self._planner.provider,
+                    self._registry,
+                    self._tool_registry,
+                    trace_id=trace_id,
+                    notebook_id=notebook_id,
+                    context=context,
+                    notebook_context=notebook_context,
+                    cancel_event=cancel_event,
+                    on_event=on_event,
+                )
+                aggregation = self._aggregator.aggregate(react.plan, react.result)
+                if aggregation.status != "failed":
+                    logger.info(
+                        "react fallback recovered plan=%s steps=%d trace=%s",
+                        react.plan.plan_id, len(react.plan.steps), trace_id,
+                    )
+                    return OrchestrationResult(
+                        trace_id=trace_id,
+                        plan_id=react.plan.plan_id,
+                        goal=react.plan.goal,
+                        step_results=list(react.result.step_results),
+                        summary=aggregation.summary,
+                        status=aggregation.status,
+                        plan_incomplete=aggregation.plan_incomplete,
+                        conflicts=aggregation.conflicts,
+                        needs_clarification=aggregation.needs_clarification,
+                        shown=list(aggregation.shown),
+                        hidden=list(aggregation.hidden),
+                        visibility=dict(aggregation.visibility),
+                    )
+            except OrchestrationError:
+                raise
+            except Exception as e:  # noqa: BLE001 - react miss → original honest error
+                logger.warning("react fallback failed: %s", e)
             logger.warning("orchestration aborted: %s", final["plan_error"])
             raise OrchestrationError(final["plan_error"])
 

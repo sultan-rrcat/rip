@@ -927,7 +927,9 @@ class TestPlannerRecall:
         )
         with pytest.raises(OrchestrationError, match="hardcoded"):
             orch.run("plot it", "nb-1")
-        assert len(provider.models) == 3
+        # 3 planning calls + 2 idle react turns (exhausted queue yields
+        # executor-less payloads; idle cap), then the original honest error.
+        assert len(provider.models) == 5
 
     def test_clarification_never_replans(self):
         provider, orch = _recall_orchestrator(

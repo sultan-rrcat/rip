@@ -192,3 +192,65 @@ def test_benign_step_prose_without_rag_siblings_passes() -> None:
         ],
     )
     assert _prose_validator().validate(plan) is plan
+
+
+def _react_orchestrator(provider):
+    agents = get_default_agent_registry(provider)
+    tools = get_default_tool_registry(rag=FakeRAG())
+    return agents, tools
+
+
+def test_react_answers_after_tool_observation() -> None:
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "need docs", "executor": "rag.query",
+         "input": {"query": "fire"}, "is_final": False},
+        {"thought": "have chunks", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "react final"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "what do docs say?", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert outcome.result.step_results[-1].status.value == "success"
+    assert outcome.result.step_results[-1].output == "react final"
+    assert provider.structured_calls == 2
+    # No placeholder wiring is ever emitted by the loop.
+    assert "{{" not in str([s.input for s in outcome.plan.steps])
+
+
+def test_react_rejects_unknown_executor_then_recovers() -> None:
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "bad pick", "executor": "ghost",
+         "input": {}, "is_final": False},
+        {"thought": "answer directly", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "recovered"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "answer this", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert outcome.result.step_results[-1].output == "recovered"
+    assert provider.structured_calls == 2
+
+
+def test_orchestrator_falls_back_to_react_on_double_plan_failure() -> None:
+    ghost = {
+        "goal": "g",
+        "steps": [{"step_id": "1", "agent_id": "ghost", "input": {}}],
+    }
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "unknown", "queries": [], "confidence": 0.0},
+        ghost, ghost,
+        {"thought": "need docs", "executor": "rag.query",
+         "input": {"query": "x"}, "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "react rescued"},
+    ])
+    assert _orchestrator(provider).run("a long failing request here", "nb-1").summary == "react rescued"
+    assert provider.structured_calls == 5  # router + 2 planners + 2 react turns
