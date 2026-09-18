@@ -58,9 +58,11 @@ class FakeRAG:
             {"content": "c3", "source": "g.pdf", "section": "H2", "rerank_score": 0.7},
         ]
 
-    def retrieve_context(self, notebook_id, query, top_k=8):
-        self.seen.append((notebook_id, query, top_k))
-        return {"query": query, "results": list(self.results)}
+    def retrieve_context(
+        self, notebook_id, query, top_k=8, file_id=None, file_name=None, mode="specific"
+    ):
+        self.seen.append((notebook_id, query, top_k, file_id, mode))
+        return {"query": query, "mode": mode, "results": list(self.results)}
 
 
 # --- Registry / executor ---
@@ -146,7 +148,34 @@ class TestRagQuery:
         fake = FakeRAG()
         reg = get_default_tool_registry(rag=fake)
         execute_tool(reg, "rag.query", {"notebook_id": "nb-9", "query": "q"})
-        assert fake.seen and fake.seen[0][0] == "nb-9" and fake.seen[0][2] == 8
+        assert fake.seen and fake.seen[0][0] == "nb-9" and fake.seen[0][2] == 4
+        assert fake.seen[0][4] == "specific"
+
+    def test_file_id_and_mode_forwarded(self):
+        fake = FakeRAG()
+        reg = get_default_tool_registry(rag=fake)
+        resp = execute_tool(
+            reg,
+            "rag.query",
+            {"notebook_id": "nb-1", "query": "q", "file_id": "fid-1", "mode": "overview"},
+        )
+        assert resp.ok
+        assert fake.seen[0][3] == "fid-1" and fake.seen[0][4] == "overview"
+        assert resp.data["file_id"] == "fid-1" and resp.data["mode"] == "overview"
+
+    def test_bad_mode_rejected(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        resp = execute_tool(
+            reg, "rag.query", {"notebook_id": "nb-1", "query": "q", "mode": "bogus"}
+        )
+        assert not resp.ok and "mode" in (resp.error or "")
+
+    def test_placeholder_file_id_rejected(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        resp = execute_tool(
+            reg, "rag.query", {"notebook_id": "nb-1", "query": "q", "file_id": "{{1}}"}
+        )
+        assert not resp.ok and "placeholder" in (resp.error or "")
 
     def test_missing_notebook_id_fails_honest(self):
         reg = get_default_tool_registry(rag=FakeRAG())

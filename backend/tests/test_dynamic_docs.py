@@ -290,3 +290,18 @@ class TestPlannerDocAwareness:
         provider = _FakeProvider(plan_json)
         Planner(provider, AgentRegistry(), ToolRegistry()).plan("hi")
         assert "(no documents)" in provider.seen_messages[0]["content"]
+
+    def test_rag_top_k_unified_and_numbers_placeholder_emphasized(self):
+        from app.agents.registry import AgentRegistry
+        from app.orchestration.planner import Planner
+        from app.tools.registry import ToolRegistry
+
+        plan_json = {
+            "goal": "g",
+            "steps": [{"step_id": "1", "agent_id": "reasoning", "input": {"message": "hi"}, "depends_on": []}],
+        }
+        provider = _FakeProvider(plan_json)
+        Planner(provider, AgentRegistry(), ToolRegistry()).plan("hi")
+        system = provider.seen_messages[0]["content"]
+        assert '"top_k": 8' not in system
+        assert "BOTH the numbers step" in system

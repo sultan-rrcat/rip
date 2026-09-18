@@ -24,9 +24,12 @@ from app.tools.registry import get_default_tool_registry
 
 
 class FakeRAG:
-    def retrieve_context(self, notebook_id, query, top_k=8):
+    def retrieve_context(
+        self, notebook_id, query, top_k=8, file_id=None, file_name=None, mode="specific"
+    ):
         return {
             "query": query,
+            "mode": mode,
             "results": [
                 {
                     "content": f"chunk for {query}",
@@ -237,6 +240,85 @@ def test_react_rejects_unknown_executor_then_recovers() -> None:
     )
     assert outcome.result.step_results[-1].output == "recovered"
     assert provider.structured_calls == 2
+
+
+def test_react_normalizes_nested_agent_input() -> None:
+    from app.orchestration.react import (
+        _normalize_react_input,
+        _validate_react_input,
+    )
+
+    # Trace c9e59039 iter-1 shape: tool input wrapped under "agent".
+    out = _normalize_react_input(
+        "rag.query", {"agent": {"message": "fire distribution"}}
+    )
+    assert out["query"] == "fire distribution"
+    assert "agent" not in out
+    assert _validate_react_input("rag.query", out) is None
+
+    out = _normalize_react_input(
+        "code.sandbox", {"agent": {"message": "print(1)"}}
+    )
+    assert out["code"] == "print(1)"
+    assert _validate_react_input("code.sandbox", out) is None
+
+    # Stray tool_id key dropped (trace iter-3 shape).
+    out = _normalize_react_input(
+        "doc.convert", {"tool_id": "doc.convert", "file_id": "f", "target_format": "md"}
+    )
+    assert "tool_id" not in out
+    assert _validate_react_input("doc.convert", out) is None
+
+
+def test_react_validation_hints_without_executing() -> None:
+    from app.orchestration.react import _validate_react_input, run_react
+
+    assert "query" in (_validate_react_input("rag.query", {}) or "")
+    assert "code" in (_validate_react_input("code.sandbox", {}) or "")
+    assert "target_format" in (_validate_react_input("doc.convert", {"file_id": "f"}) or "")
+    assert "labels" in (
+        _validate_react_input("plot.chart", {"chart_type": "bar"}) or ""
+    )
+
+    # Malformed first turn gets a retry hint WITHOUT burning a step;
+    # normalized second turn executes and the loop finishes.
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "bad shape", "executor": "rag.query",
+         "input": {"agent": {"message": ""}}, "is_final": False},
+        {"thought": "need docs", "executor": "rag.query",
+         "input": {"query": "fire"}, "is_final": False},
+        {"thought": "have chunks", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "react final"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "what do docs say?", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert outcome.result.step_results[-1].output == "react final"
+    # Only ONE executed tool step (r2) + final answer: the malformed r1
+    # never reached execution.
+    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
+
+
+def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
+    from app.orchestration.react import run_react
+
+    seen: list = []
+
+    class _ProbeProvider(FakeLayeredProvider):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0):
+            seen.append(messages)
+            return {"thought": "done", "executor": "reasoning",
+                    "input": {}, "is_final": True, "answer": "ok"}
+
+    agents, tools = _react_orchestrator(_ProbeProvider())
+    run_react("plot this", _ProbeProvider(), agents, tools,
+              trace_id="t", notebook_id="nb-1")
+    system = seen[0][0]["content"]
+    assert '{"query": "..."' in system
+    assert "never nested under 'agent'" in system
+    assert "plot.chart" in system and "never code.sandbox for charting" in system
 
 
 def test_orchestrator_falls_back_to_react_on_double_plan_failure() -> None:

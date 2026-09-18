@@ -64,6 +64,87 @@ def test_compare_multi_pads_short_queries() -> None:
     _validator().validate(plan)
 
 
+def test_compare_multi_per_file_fanout() -> None:
+    from app.orchestration.builders import build_compare_multi
+
+    plan = build_compare_multi(
+        ["x", "y"], "compare both reports", _SNAPSHOT,
+    )
+    assert len(plan.steps) == 3
+    assert plan.steps[0].input["file_id"] == "aaa111"
+    assert plan.steps[1].input["file_id"] == "bbb222"
+    assert plan.steps[0].input["mode"] == "specific"
+    assert plan.steps[0].input["top_k"] == 4
+    assert plan.steps[0].input["query"] == "compare both reports"
+    _validator().validate(plan)
+
+
+def test_summarize_per_file_overview() -> None:
+    from app.orchestration.builders import build_summarize
+
+    plan = build_summarize("summarize both docs", _SNAPSHOT)
+    assert len(plan.steps) == 3
+    assert all(s.input.get("mode") == "overview" for s in plan.steps[:2])
+    assert all(s.input.get("top_k") == 4 for s in plan.steps[:2])
+    assert plan.steps[2].depends_on == ["1", "2"]
+    _validator().validate(plan)
+
+
+def test_quiz_multi_file_overview() -> None:
+    from app.orchestration.builders import build_quiz
+
+    plan = build_quiz("key concepts", "make quiz", _SNAPSHOT)
+    assert len(plan.steps) == 3
+    assert all(s.input.get("mode") == "overview" for s in plan.steps[:2])
+    _validator().validate(plan)
+
+
+def test_compare_too_many_files_falls_to_l3() -> None:
+    snapshot = "; ".join(f"f{i}.pdf [ready] id=id{i}" for i in range(6))
+    route = RouterResult(
+        intent=Intent.COMPARE_MULTI, queries=["a", "b"], confidence=0.9,
+        routed_by="llm",
+    )
+    assert build("compare many", route, snapshot) is None
+
+
+def test_summarize_dispatch() -> None:
+    route = RouterResult(intent=Intent.SUMMARIZE, confidence=0.9, routed_by="llm")
+    plan = build("summarize docs", route, _SNAPSHOT)
+    assert plan is not None and len(plan.steps) == 3
+
+
+def test_rag_query_mode_validation() -> None:
+    import pytest
+
+    from app.orchestration.plan import Plan, PlanStep
+
+    bad = Plan(
+        plan_id="p", goal="g",
+        steps=[
+            PlanStep(
+                step_id="1", tool_id="rag.query",
+                input={"query": "x", "mode": "bogus"},
+                expected_output_type="chunks",
+            )
+        ],
+    )
+    with pytest.raises(Exception, match="mode"):
+        _validator().validate(bad)
+    placeholder = Plan(
+        plan_id="p", goal="g",
+        steps=[
+            PlanStep(
+                step_id="1", tool_id="rag.query",
+                input={"query": "x", "file_id": "{{1}}"},
+                expected_output_type="chunks",
+            )
+        ],
+    )
+    with pytest.raises(Exception, match="placeholder"):
+        _validator().validate(placeholder)
+
+
 def test_build_dispatch() -> None:
     route = RouterResult(
         intent=Intent.COMPARE_MULTI,

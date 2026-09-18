@@ -14,7 +14,11 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from app.rag.vector_rag import _interleave_by_source
+from app.rag.vector_rag import (
+    _interleave_by_source,
+    _matches_overview_section,
+    _stratify_overview,
+)
 
 
 def _chunk(source: str, text: str) -> dict:
@@ -56,3 +60,39 @@ def test_missing_metadata_groups_as_unknown() -> None:
     items = [{"text": "x"}, _chunk("a.pdf", "a1")]
     merged = _interleave_by_source(items)
     assert [c["text"] for c in merged] == ["x", "a1"]
+
+
+def _hchunk(source: str, h1: str, text: str, idx: int, score: float = 0.5) -> dict:
+    return {
+        "text": text,
+        "metadata": {"source": source, "H1": h1},
+        "chunk_index": idx,
+        "rerank_score": score,
+    }
+
+
+def test_overview_section_match() -> None:
+    assert _matches_overview_section({"H1": "Introduction"}) is True
+    assert _matches_overview_section({"H2": "Summary of results"}) is True
+    assert _matches_overview_section({"H1": "Random Methods"}) is False
+    assert _matches_overview_section({}) is False
+
+
+def test_stratify_one_per_h1_in_doc_order() -> None:
+    items = [
+        _hchunk("a.pdf", "Intro", "i1", 0, 0.9),
+        _hchunk("a.pdf", "Intro", "i2", 1, 0.8),
+        _hchunk("a.pdf", "Methods", "m1", 5, 0.7),
+        _hchunk("a.pdf", "Conclusion", "c1", 9, 0.6),
+    ]
+    out = _stratify_overview(items, 3)
+    assert [c["text"] for c in out] == ["i1", "m1", "c1"]
+
+
+def test_stratify_single_section_truncates() -> None:
+    items = [_hchunk("a.pdf", "Intro", f"t{i}", i) for i in range(5)]
+    assert len(_stratify_overview(items, 4)) == 4
+
+
+def test_stratify_empty() -> None:
+    assert _stratify_overview([], 4) == []

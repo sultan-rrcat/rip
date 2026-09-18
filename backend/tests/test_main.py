@@ -37,7 +37,9 @@ def _stub_heavy_rag():
             def __init__(self, *a, **k):
                 pass
 
-            def retrieve_context(self, notebook_id, query, top_k=8):
+            def retrieve_context(
+                self, notebook_id, query, top_k=8, file_id=None, file_name=None, mode="specific"
+            ):
                 return []
 
         mod.VectorRAG = VectorRAG

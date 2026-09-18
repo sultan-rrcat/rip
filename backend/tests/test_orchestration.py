@@ -122,8 +122,10 @@ class FakeRAG:
     def __init__(self):
         self.seen: list[tuple] = []
 
-    def retrieve_context(self, notebook_id, query, top_k=8):
-        self.seen.append((notebook_id, query, top_k))
+    def retrieve_context(
+        self, notebook_id, query, top_k=8, file_id=None, file_name=None, mode="specific"
+    ):
+        self.seen.append((notebook_id, query, top_k, file_id, mode))
         return {
             "query": query,
             "results": [
