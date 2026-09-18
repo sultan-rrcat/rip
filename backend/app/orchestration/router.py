@@ -63,6 +63,10 @@ class Router:
             "one intent and propose 1-3 short document search queries "
             "(empty list when the intent needs no documents).\n"
             f"Intents:\n{lines}\n"
+            "Precedence: plot/draw/chart/show-as-graph (from document data) "
+            "is always summarize_plot, even when the request also says "
+            "compare; compare_multi is only for comparisons with no chart. "
+            "Make the queries distinct from each other (one angle per query).\n"
             "Return intent as the exact value string, queries as a list, "
             "confidence as 0.0-1.0."
         )

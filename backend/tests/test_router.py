@@ -23,12 +23,14 @@ class FakeRouterProvider(ModelProvider):
         }
         self.fail = fail
         self.calls = 0
+        self.messages: list = []
 
     def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
         raise NotImplementedError("router uses generate_structured")
 
     def generate_structured(self, model, messages, schema, *, temperature=0.0):
         self.calls += 1
+        self.messages = messages
         if self.fail:
             raise ValueError("ollama down")
         return dict(self.payload)
@@ -77,3 +79,36 @@ def test_llm_failure_falls_open_to_unknown() -> None:
         "a long enough request that needs the llm path"
     )
     assert result.intent is Intent.UNKNOWN
+
+
+def test_prompt_disambiguates_plot_vs_compare() -> None:
+    # Live trace: "compare the class distribution and plot in a bar chart"
+    # was routed compare_multi (no plot step emitted). The prompt must carry
+    # the precedence rule so a chart ask wins over a compare ask.
+    provider = FakeRouterProvider()
+    Router(provider).route("compare the class distribution and plot in a bar chart")
+    system = provider.messages[0]["content"]
+    assert "summarize_plot" in system
+    assert "compare_multi is only for comparisons with no chart" in system
+    assert "distinct" in system
+
+
+def test_prompt_built_from_descriptions_with_precedence() -> None:
+    # The descriptions themselves must separate the two intents: compare
+    # excludes charts, summarize_plot claims them even alongside compare.
+    from app.orchestration.intents import INTENT_DESCRIPTIONS
+
+    assert "no chart" in INTENT_DESCRIPTIONS[Intent.COMPARE_MULTI]
+    assert "even when the request also says compare" in INTENT_DESCRIPTIONS[
+        Intent.SUMMARIZE_PLOT
+    ]
+
+
+def test_compare_without_chart_stays_compare_multi() -> None:
+    # Trace 2's request has no chart ask: the canned compare_multi payload
+    # must pass through untouched (precedence rule must not steal it).
+    result = Router(FakeRouterProvider()).route(
+        "compare both report and rank them based on complexity"
+    )
+    assert result.intent is Intent.COMPARE_MULTI
+    assert len(result.queries) == 2

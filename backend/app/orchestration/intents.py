@@ -37,9 +37,9 @@ ROUTER_CONFIDENCE_THRESHOLD = 0.6
 INTENT_DESCRIPTIONS: dict[Intent, str] = {
     Intent.CHAT: "greeting, thanks, or small talk with no document question",
     Intent.QA_SINGLE: "one factual question answered from documents",
-    Intent.COMPARE_MULTI: "compare, contrast, or rank two or more documents/topics",
+    Intent.COMPARE_MULTI: "compare, contrast, or rank two or more documents/topics (no chart requested)",
     Intent.SUMMARIZE: "summarize documents without chart or report file",
-    Intent.SUMMARIZE_PLOT: "summarize plus draw/plot/chart the numbers",
+    Intent.SUMMARIZE_PLOT: "summarize/compare AND draw/plot/chart the numbers — any plot/draw/chart/show-as-graph ask belongs here, even when the request also says compare",
     Intent.PLOT_STANDALONE: "draw a chart from numbers given in the message",
     Intent.REPORT: "write the answer as a titled report file (doc.generate)",
     Intent.CONVERT_ONE: "convert one named file to md/docx/pdf",
