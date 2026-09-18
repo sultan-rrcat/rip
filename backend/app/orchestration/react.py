@@ -59,6 +59,107 @@ _TOOL_OUTPUT_TYPES = {
     "image.generate": "document",
 }
 
+#: Correct-shape hints surfaced when the ReAct model emits a malformed
+#: tool input (observed live trace c9e59039: {"agent": {"message": ...}}
+#: for rag.query/code.sandbox, {"tool_id": ...} without target_format
+#: for doc.convert — each burned a full iteration). Pre-flight validation
+#: appends these to the scratchpad WITHOUT executing, so the 6-step
+#: budget is preserved for real work.
+_TOOL_INPUT_HINTS = {
+    "rag.query": "rag.query needs {\"query\": \"...\"} flat "
+    "(not {\"agent\": {...}}); add \"file_id\" to scope to one file",
+    "code.sandbox": "code.sandbox needs {\"code\": \"...\"} flat "
+    "(not {\"agent\": {...}})",
+    "plot.chart": "plot.chart needs {\"chart_type\": \"bar|line\", "
+    "\"labels\": [...], \"values\": [...]} with literal numbers from "
+    "observations — never code.sandbox for charting",
+    "doc.convert": "doc.convert needs {\"file_id\": \"...\", "
+    "\"target_format\": \"md|docx|pdf\"}",
+    "doc.generate": "doc.generate needs {\"title\": \"...\", "
+    "\"sections\": [{\"heading\": ..., \"body\": ...}]}",
+    "image.generate": "image.generate needs {\"message\": \"...\"}",
+    "notebook.inspect": "notebook.inspect needs {} (notebook_id is injected)",
+}
+
+
+def _normalize_react_input(executor: str, action_input: dict) -> dict:
+    """Unwrap common ReAct model slips into flat tool/agent inputs.
+
+    - {"agent": {"message": ...}} → top-level "message" (observed live
+      for rag.query AND code.sandbox in the same run).
+    - stray {"tool_id": ...} inside input → dropped (executor already
+      selects the tool; the key only confuses required-field checks).
+    - rag.query message→query alias (mirrors RagQueryTool.execute);
+      code.sandbox message→code alias (same recovery philosophy).
+    Pure function — safe to unit test without Ollama/DB.
+    """
+    normalized = dict(action_input)
+    nested = normalized.get("agent")
+    if isinstance(nested, dict) and isinstance(nested.get("message"), str):
+        if not str(normalized.get("message", "")).strip():
+            normalized["message"] = nested["message"]
+        normalized.pop("agent", None)
+    normalized.pop("tool_id", None)
+    if (
+        executor == "rag.query"
+        and not str(normalized.get("query", "")).strip()
+        and str(normalized.get("message", "")).strip()
+    ):
+        normalized["query"] = str(normalized["message"]).strip()
+    elif (
+        executor == "code.sandbox"
+        and not str(normalized.get("code", "")).strip()
+        and str(normalized.get("message", "")).strip()
+    ):
+        normalized["code"] = str(normalized["message"]).strip()
+    return normalized
+
+
+def _validate_react_input(executor: str, action_input: dict) -> str | None:
+    """Return None when valid, else a correct-shape hint string.
+
+    Agents need input.message; tools need their flat schema fields.
+    """
+    if executor in ("reasoning", "coding", "vision"):
+        return None  # agent message check lives at the call site
+    if executor == "rag.query":
+        if str(action_input.get("query", "")).strip():
+            return None
+        return _TOOL_INPUT_HINTS["rag.query"]
+    if executor == "code.sandbox":
+        if str(action_input.get("code", "")).strip():
+            return None
+        return _TOOL_INPUT_HINTS["code.sandbox"]
+    if executor == "plot.chart":
+        labels = action_input.get("labels")
+        values = action_input.get("values")
+        if (
+            str(action_input.get("chart_type", "")).strip()
+            and isinstance(labels, list)
+            and labels
+            and isinstance(values, list)
+            and values
+        ):
+            return None
+        return _TOOL_INPUT_HINTS["plot.chart"]
+    if executor == "doc.convert":
+        if str(action_input.get("file_id", "")).strip() and str(
+            action_input.get("target_format", "")
+        ).strip().lower() in ("md", "docx", "pdf"):
+            return None
+        return _TOOL_INPUT_HINTS["doc.convert"]
+    if executor == "doc.generate":
+        if str(action_input.get("title", "")).strip() and isinstance(
+            action_input.get("sections"), list
+        ):
+            return None
+        return _TOOL_INPUT_HINTS["doc.generate"]
+    if executor == "image.generate":
+        if str(action_input.get("message", "")).strip():
+            return None
+        return _TOOL_INPUT_HINTS["image.generate"]
+    return None  # notebook.inspect + unknown tools: execution is the check
+
 
 def _output_type(executor: str, is_final: bool) -> str:
     if is_final:
@@ -141,11 +242,22 @@ def run_react(
                 f"Agents: {agent_ids}\nTools: {tool_ids}\n"
                 "Each turn return thought (what you learned / what remains), "
                 "executor (exactly one agent_id or tool_id for the NEXT single "
-                "step), input (agent: {\"message\": ...} with observations inlined "
-                "verbatim — never reference steps by number; tool: its schema "
-                "fields), is_final (true only when answering now), and answer "
-                "(the final answer when is_final).\n"
+                "step), input, is_final (true only when answering now), and "
+                "answer (the final answer when is_final).\n"
+                "Input shape (FLAT object, never nested under 'agent'):\n"
+                "- agent executor: {\"message\": \"...\"} with observations "
+                "inlined verbatim — never reference steps by number.\n"
+                "- tool executor: its FLAT schema fields, e.g. rag.query "
+                "{\"query\": \"...\", \"file_id\": \"...\"}, plot.chart "
+                "{\"chart_type\": \"bar\", \"labels\": [...], \"values\": [...]}, "
+                "code.sandbox {\"code\": \"...\"}, doc.convert "
+                "{\"file_id\": \"...\", \"target_format\": \"md|docx|pdf\"}.\n"
+                "WRONG: {\"agent\": {\"message\": \"...\"}} for a tool — "
+                "the tool reads top-level fields, so this fails with "
+                "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
                 "Prefer rag.query first when documents are available. "
+                "Bar/line charts MUST use plot.chart with literal numbers "
+                "from observations — never code.sandbox for charting. "
                 f"Notebook documents:\n{notebook_context or '(no documents)'}"
             )
             messages = [
@@ -242,7 +354,27 @@ def run_react(
                 })
                 continue
             raw_input = raw.get("input", {}) or {}
-            action_input = dict(raw_input) if isinstance(raw_input, dict) else {}
+            action_input = _normalize_react_input(
+                executor, dict(raw_input) if isinstance(raw_input, dict) else {}
+            )
+            if executor in known_tools:
+                hint = _validate_react_input(executor, action_input)
+                if hint is not None:
+                    idle_turns += 1
+                    if idle_turns >= 2:
+                        iter_obs.update(output={
+                            "status": "failed",
+                            "error": _truncate(hint, 500),
+                        })
+                        break
+                    scratchpad.append(f"{hint}; retry with corrected flat input.")
+                    iter_obs.update(output={
+                        "status": "retry",
+                        "thought": thought_in,
+                        "executor": executor,
+                        "error": _truncate(hint, 500),
+                    })
+                    continue
             if executor in known_agents and not str(action_input.get("message", "")).strip():
                 idle_turns += 1
                 if idle_turns >= 2:
