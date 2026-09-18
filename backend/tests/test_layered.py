@@ -529,3 +529,35 @@ def test_orchestrator_react_span(monkeypatch) -> None:
     assert reacts[0]["output"]["steps"] == 2
     iters = [s for s in recorder.spans if s["name"].startswith("react:iter-")]
     assert len(iters) == 2
+
+
+def test_qa_empty_notebook_skips_rag_query() -> None:
+    # Trace ea48cb30: "What is QLoRA?" with "(no documents)" must build a
+    # single general-answer reasoning step — no rag.query execution, only
+    # the router structured call.
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "qa_single", "queries": [], "confidence": 0.95},
+    ])
+    result = _orchestrator(provider).run(
+        "What is QLoRA?", "nb-empty", notebook_context="(no documents)",
+    )
+    assert result.status == "success"
+    assert result.summary == "layered answer"
+    assert len(result.step_results) == 1
+    assert result.step_results[0].agent_id == "reasoning"
+    assert provider.structured_calls == 1
+
+
+def test_compare_empty_notebook_yields_clarification() -> None:
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "compare_multi", "queries": [], "confidence": 0.9},
+    ])
+    result = _orchestrator(provider).run(
+        "compare both reports in this empty notebook please",
+        "nb-empty",
+        notebook_context="(no documents)",
+    )
+    assert result.status == "success"
+    assert len(result.step_results) == 1
+    assert result.shown == ["1"] and result.hidden == []
+    assert provider.structured_calls == 1

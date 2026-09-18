@@ -264,3 +264,63 @@ def test_deterministic_intents_all_dispatched() -> None:
         Intent.CHAT, Intent.QA_SINGLE, Intent.COMPARE_MULTI,
         Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.QUIZ,
     } <= DETERMINISTIC_INTENTS
+
+
+def _qa_route(queries=None) -> RouterResult:
+    return RouterResult(
+        intent=Intent.QA_SINGLE, queries=list(queries or []),
+        confidence=0.95, routed_by="llm",
+    )
+
+
+def test_qa_single_empty_corpus_answers_generally() -> None:
+    # Trace ea48cb30: "What is QLoRA?" on "(no documents)" must not emit
+    # rag.query — a single general-answer reasoning step instead.
+    plan = build("What is QLoRA?", _qa_route([]), "(no documents)")
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].agent_id == "reasoning"
+    assert plan.steps[0].tool_id is None
+    assert (plan.steps[0].expected_output_type or "").lower() == "answer"
+    assert "not from the" in str(plan.steps[0].input).lower()
+    _validator().validate(plan)
+
+
+def test_qa_single_processing_corpus_asks_to_wait() -> None:
+    plan = build(
+        "What is QLoRA?", _qa_route([]),
+        "1 file(s): big.pdf [processing] id=zzz",
+    )
+    assert plan is not None and len(plan.steps) == 1
+    assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
+    _validator().validate(plan)
+
+
+def test_qa_single_unknown_snapshot_still_retrieves() -> None:
+    # Snapshot None (DB failure) keeps the retrieval path: the database,
+    # not the snapshot, is ground truth.
+    plan = build("What is QLoRA?", _qa_route([]), None)
+    assert plan is not None and len(plan.steps) == 2
+    assert plan.steps[0].tool_id == "rag.query"
+    assert plan.steps[0].input["top_k"] == 4
+    assert plan.steps[0].input["mode"] == "specific"
+    _validator().validate(plan)
+
+
+def test_doc_intents_empty_corpus_yield_clarification() -> None:
+    for intent in (Intent.SUMMARIZE, Intent.COMPARE_MULTI, Intent.QUIZ):
+        route = RouterResult(
+            intent=intent, queries=["x"], confidence=0.9, routed_by="llm",
+        )
+        plan = build("summarize/compare/quiz with no docs", route, "(no documents)")
+        assert plan is not None and len(plan.steps) == 1, intent
+        assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
+        _validator().validate(plan)
+
+
+def test_corpus_state_tristate() -> None:
+    from app.orchestration.builders import _corpus_state
+
+    assert _corpus_state(None) == "unknown"
+    assert _corpus_state("(no documents)") == "empty"
+    assert _corpus_state("1 file(s): big.pdf [processing] id=zzz") == "processing"
+    assert _corpus_state(_SNAPSHOT) == "ready"

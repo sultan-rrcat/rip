@@ -37,6 +37,19 @@ ROUTER_SCHEMA: dict = {
 #: Formats doc.convert accepts; anything else means "format unstated".
 _CONVERT_FORMATS = frozenset({"md", "docx", "pdf"})
 
+#: Intents grounded in notebook documents: the router must always supply
+#: at least one search query for these (post-filled from the request text
+#: when the model returns an empty list — trace ea48cb30 returned
+#: qa_single with queries=[] and masked the miss downstream).
+_DOC_GROUNDED_INTENTS = frozenset({
+    Intent.QA_SINGLE,
+    Intent.COMPARE_MULTI,
+    Intent.SUMMARIZE,
+    Intent.SUMMARIZE_PLOT,
+    Intent.REPORT,
+    Intent.QUIZ,
+})
+
 
 class RouterResult(BaseModel):
     intent: Intent = Intent.UNKNOWN
@@ -74,6 +87,10 @@ class Router:
             "one intent and propose 1-3 short document search queries "
             "(empty list when the intent needs no documents).\n"
             f"Intents:\n{lines}\n"
+            "Document-grounded intents (qa_single, compare_multi, summarize, "
+            "summarize_plot, report, quiz) MUST return 1-3 queries — never "
+            "an empty list. Non-document intents (chat, convert_*, code, "
+            "image, vision, plot_standalone, unknown) return [].\n"
             "Precedence: plot/draw/chart/show-as-graph (from document data) "
             "is always summarize_plot, even when the request also says "
             "compare; compare_multi is only for comparisons with no chart. "
@@ -121,6 +138,11 @@ class Router:
             target_format = ""
         if confidence < ROUTER_CONFIDENCE_THRESHOLD:
             intent = Intent.UNKNOWN
+        if intent in _DOC_GROUNDED_INTENTS and not queries:
+            queries = [request_text.strip()][:1]
+            logger.info(
+                "router post-filled empty queries for intent=%s", intent.value
+            )
         return RouterResult(
             intent=intent,
             queries=queries,

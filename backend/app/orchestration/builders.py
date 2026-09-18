@@ -50,6 +50,88 @@ def _ready_files(notebook_context: str | None) -> list[tuple[str, str]]:
 _PER_FILE_TOP_K = 4
 
 
+def _corpus_state(notebook_context: str | None) -> str:
+    """Tri-state the notebook file snapshot for empty-corpus guards.
+
+    Returns one of:
+    - "unknown": snapshot is None (DB failure) — caller should still try
+      rag.query; the database is ground truth, not the snapshot.
+    - "ready": at least one ready file — document-grounded retrieval path.
+    - "processing": files exist but none is ready yet (uploading /
+      processing / error) — nothing retrievable right now.
+    - "empty": known to hold zero files — retrieval would provably return
+      "(no chunks retrieved)".
+    """
+    if notebook_context is None:
+        return "unknown"
+    files = _snapshot_files(notebook_context)
+    if not files:
+        return "empty"
+    if any(status == "ready" and fid for _, status, fid in files):
+        return "ready"
+    return "processing"
+
+
+def build_qa_no_docs(request_text: str) -> Plan:
+    """Answer a factual question with no retrievable documents.
+
+    Empty-corpus path: emitting rag.query would provably return
+    "(no chunks retrieved)" and force the grounded prompt to answer
+    "not in the documents" — useless for general-knowledge questions
+    like "What is QLoRA?". Answer parametrically with a disclaimer.
+    """
+    return Plan(
+        plan_id=str(uuid.uuid4()),
+        goal=request_text,
+        steps=[
+            PlanStep(
+                step_id="1",
+                agent_id="reasoning",
+                input={
+                    "message": (
+                        "There are no ready documents in this notebook. "
+                        "Answer the request from general knowledge and "
+                        "state clearly that the answer is not from the "
+                        f"notebook documents. Request: {request_text}"
+                    )
+                },
+                expected_output_type="answer",
+            )
+        ],
+    )
+
+
+def build_no_docs_clarification(request_text: str, *, processing: bool = False) -> Plan:
+    """Ask the user to upload/wait — nothing exists to summarize/compare.
+
+    expected_output_type="clarification" so the single terminal step is
+    returned verbatim as the answer (no retrieval to ground anything else).
+    """
+    if processing:
+        detail = (
+            "The notebook's files are not ready yet (still uploading, "
+            "processing, or errored). Ask the user to wait until "
+            "processing finishes and then retry"
+        )
+    else:
+        detail = (
+            "There are no ready documents in this notebook. Ask the user "
+            "to upload documents or clarify how to proceed without them"
+        )
+    return Plan(
+        plan_id=str(uuid.uuid4()),
+        goal=request_text,
+        steps=[
+            PlanStep(
+                step_id="1",
+                agent_id="reasoning",
+                input={"message": f"{detail}. Request: {request_text}"},
+                expected_output_type="clarification",
+            )
+        ],
+    )
+
+
 def build_chat(request_text: str) -> Plan:
     return Plan(
         plan_id=str(uuid.uuid4()),
@@ -75,7 +157,7 @@ def build_qa_single(query: str, request_text: str) -> Plan:
                 tool_id="rag.query",
                 input={
                     "query": query or request_text,
-                    "top_k": 8,
+                    "top_k": _PER_FILE_TOP_K,
                     "mode": "specific",
                 },
                 expected_output_type="chunks",
@@ -367,19 +449,39 @@ def build(
     if route.intent is Intent.CHAT:
         return build_chat(request_text)
     if route.intent is Intent.QA_SINGLE:
+        state = _corpus_state(notebook_context)
+        if state == "empty":
+            return build_qa_no_docs(request_text)
+        if state == "processing":
+            return build_no_docs_clarification(request_text, processing=True)
         query = route.queries[0] if route.queries else request_text
         return build_qa_single(query, request_text)
     if route.intent is Intent.COMPARE_MULTI:
+        state = _corpus_state(notebook_context)
+        if state in ("empty", "processing"):
+            return build_no_docs_clarification(
+                request_text, processing=(state == "processing")
+            )
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
             return None  # too many files: fall through to L3 mega-prompt
         return build_compare_multi(route.queries, request_text, notebook_context)
     if route.intent is Intent.SUMMARIZE:
+        state = _corpus_state(notebook_context)
+        if state in ("empty", "processing"):
+            return build_no_docs_clarification(
+                request_text, processing=(state == "processing")
+            )
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
             return None
         return build_summarize(request_text, notebook_context)
     if route.intent is Intent.QUIZ:
+        state = _corpus_state(notebook_context)
+        if state in ("empty", "processing"):
+            return build_no_docs_clarification(
+                request_text, processing=(state == "processing")
+            )
         query = route.queries[0] if route.queries else request_text
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:

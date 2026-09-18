@@ -184,7 +184,16 @@ class Planner:
            ready documents — it needs the document-grounded path (rule 8),
            not a bare reasoning step.
         7. Return only the JSON object matching the provided execution-plan schema.
-        8. DOCUMENT ROUTING (snapshot below lists this notebook's files):
+         8. DOCUMENT ROUTING (snapshot below lists this notebook's files):
+            - ZERO ready files ("(no documents)", empty snapshot, or files
+              present but all still uploading/processing/errored) → NEVER
+              emit rag.query (it would provably return no chunks). A
+              factual question becomes EXACTLY ONE reasoning step answering
+              generally ("not from the documents" disclaimer); summarize /
+              compare / quiz become EXACTLY ONE reasoning clarification
+              asking to upload or wait (expected_output_type
+              "clarification"); convert follows the ambiguous-convert
+              counter-question path below.
            - Factual/QA/summary/report-about-documents with >=1 ready file
               → rag.query FIRST (query=<search terms>, top_k=4,
              expected_output_type="chunks" — mandatory, never "text":
