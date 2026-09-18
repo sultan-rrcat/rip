@@ -492,3 +492,26 @@ class PlanValidator:
                         f"{step.expected_output_type!r}) — raw chunks are "
                         "intermediates and must stay hidden from the answer"
                     )
+                if not isinstance(step.input, dict):
+                    continue
+                file_id = step.input.get("file_id")
+                if file_id is not None:
+                    if not isinstance(file_id, str) or not file_id.strip():
+                        raise PlanValidationError(
+                            f"step {step.step_id} (rag.query) has empty "
+                            f"file_id — use a literal snapshot id or omit it"
+                        )
+                    if "{{" in file_id or "}}" in file_id:
+                        raise PlanValidationError(
+                            f"step {step.step_id} (rag.query) file_id must be "
+                            f"a literal snapshot id, never a {{{{id}}}} placeholder"
+                        )
+                mode = step.input.get("mode")
+                if mode is not None and (
+                    not isinstance(mode, str)
+                    or mode.strip().lower() not in ("specific", "overview")
+                ):
+                    raise PlanValidationError(
+                        f"step {step.step_id} (rag.query) mode must be "
+                        f"'specific' or 'overview' (got {mode!r})"
+                    )

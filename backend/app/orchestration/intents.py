@@ -56,11 +56,14 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
 #: SUMMARIZE_PLOT is deliberately excluded: a plot needs content-derived
 #: `labels` no fixed shape can know (inventing them would be the
 #: hallucinated-chart class ADR-027 prevents), so it stays on L3.
+#: SUMMARIZE is included: per-file overview shards (mode=overview) fan
+#: into one reduce step — wiring set by construction like compare_multi.
 DETERMINISTIC_INTENTS = frozenset(
     {
         Intent.CHAT,
         Intent.QA_SINGLE,
         Intent.COMPARE_MULTI,
+        Intent.SUMMARIZE,
         Intent.CONVERT_ONE,
         Intent.CONVERT_ALL,
         Intent.QUIZ,

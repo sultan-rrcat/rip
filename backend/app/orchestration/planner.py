@@ -95,10 +95,19 @@ class Planner:
 
         Tool notes:
         - rag.query searches the user's notebook documents. Its input is
-          {{"query": "<search terms>", "top_k": 8}}. NEVER include
+          {{"query": "<search terms>", "top_k": 4, "file_id": "<optional literal snapshot id>",
+          "mode": "specific|overview"}}. NEVER include
           notebook_id in any step input — it is injected at execution time.
           Use rag.query for question-answering, summaries and reports
           grounded in document content — NEVER for verbatim file conversion.
+          file_id must be a literal snapshot id (same rule as doc.convert) —
+          NEVER invented, NEVER a {{{{...}}}} placeholder. mode=specific
+          (default) is topical ranking; mode=overview is a stratified
+          one-per-section sample for summarize/overall-theme asks. Compare /
+          summarize / quiz with >=2 ready files → ONE file-scoped rag.query
+          PER FILE (top_k=4 each, specific for compare-rank, overview for
+          summarize/quiz) fanning into one reasoning step — NEVER two
+          generic global queries (they collapse to one dominant document).
         - notebook.inspect lists the notebook's files
           (id, name, size, status). Its input is empty — notebook_id is
           injected at execution time like rag.query. It is a FRESHNESS
@@ -177,7 +186,7 @@ class Planner:
         7. Return only the JSON object matching the provided execution-plan schema.
         8. DOCUMENT ROUTING (snapshot below lists this notebook's files):
            - Factual/QA/summary/report-about-documents with >=1 ready file
-             → rag.query FIRST (query=<search terms>, top_k=8,
+              → rag.query FIRST (query=<search terms>, top_k=4,
              expected_output_type="chunks" — mandatory, never "text":
              the validator rejects rag.query typed otherwise because raw
              chunks would leak into the answer), then a
@@ -206,10 +215,13 @@ class Planner:
              chunks, then numbers-only reasoning + answer reasoning IN
              PARALLEL off the chunks, then plot.chart depending ONLY on
              the numbers step (values [{{numbers-step}}], concrete
-             labels from the chunks — never "Class 0/1"). One reasoning
-             step can NEVER feed both prose and plot values because a
-             placeholder carries whole text the plot cannot parse as
-             numbers (see Example E).
+              labels from the chunks — never "Class 0/1"). One reasoning
+              step can NEVER feed both prose and plot values because a
+              placeholder carries whole text the plot cannot parse as
+              numbers (see Example E). CRITICAL: BOTH the numbers step
+              AND the answer step MUST contain {{{{1}}}} in their message
+              (e.g. "Extract ... from {{{{1}}}}") — a dependent step with
+              no placeholder is rejected and the run fails.
            - Comparison plots (A vs B, one value per label): the numbers
              step MUST return exactly one number per label, in label
              order, as a flat comma-separated list with no words.
@@ -249,7 +261,7 @@ class Planner:
         Example A (document question answering):
         {{"goal": "Answer what the documents say about X", "steps": [
             {{"step_id": "1", "tool_id": "rag.query",
-              "input": {{"query": "X", "top_k": 8}},
+              "input": {{"query": "X", "top_k": 4}},
               "depends_on": [], "expected_output_type": "chunks"}},
             {{"step_id": "2", "agent_id": "reasoning",
               "input": {{"message": "Answer the user's question using these retrieved chunks: {{{{1}}}}"}},
@@ -295,7 +307,7 @@ class Planner:
         Example E (document summary + plot — split numbers and answer):
         {{"goal": "Summarize the class distribution and plot it", "steps": [
             {{"step_id": "1", "tool_id": "rag.query",
-              "input": {{"query": "class distribution", "top_k": 8}},
+              "input": {{"query": "class distribution", "top_k": 4}},
               "depends_on": [], "expected_output_type": "chunks"}},
             {{"step_id": "2", "agent_id": "reasoning",
               "input": {{"message": "Extract the class counts for charting from {{{{1}}}}. "
@@ -315,7 +327,7 @@ class Planner:
         Example F (MCQ/quiz generation — ONE writer step, never fan-out):
         {{"goal": "Create 15 MCQs (5 beginner, 5 intermediate, 5 senior)", "steps": [
             {{"step_id": "1", "tool_id": "rag.query",
-              "input": {{"query": "key concepts topics important details", "top_k": 8}},
+              "input": {{"query": "key concepts topics important details", "top_k": 4}},
               "depends_on": [], "expected_output_type": "chunks"}},
             {{"step_id": "2", "agent_id": "reasoning",
               "input": {{"message": "Using ONLY these retrieved chunks {{{{1}}}}, "
