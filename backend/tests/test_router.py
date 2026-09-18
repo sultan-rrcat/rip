@@ -112,3 +112,30 @@ def test_compare_without_chart_stays_compare_multi() -> None:
     )
     assert result.intent is Intent.COMPARE_MULTI
     assert len(result.queries) == 2
+
+
+def test_convert_slots_parsed() -> None:
+    provider = FakeRouterProvider(
+        {"intent": "convert_one", "queries": [], "confidence": 0.9,
+         "file_hint": "Faultbook", "target_format": "MD"}
+    )
+    result = Router(provider).route("convert the faultbook report to MD please!")
+    assert result.intent is Intent.CONVERT_ONE
+    assert result.file_hint == "Faultbook"
+    assert result.target_format == "md"  # normalized
+
+
+def test_convert_slots_default_empty_and_bad_format_dropped() -> None:
+    provider = FakeRouterProvider(
+        {"intent": "convert_all", "queries": [], "confidence": 0.9,
+         "file_hint": "*", "target_format": "exe"}
+    )
+    result = Router(provider).route("convert all documents to exe somehow here")
+    assert result.intent is Intent.CONVERT_ALL
+    assert result.file_hint == "*"
+    assert result.target_format == ""  # not a doc.convert format
+
+    legacy = Router(FakeRouterProvider()).route(
+        "compare both report and rank them based on complexity"
+    )
+    assert legacy.file_hint == "" and legacy.target_format == ""

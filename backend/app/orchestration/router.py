@@ -28,9 +28,14 @@ ROUTER_SCHEMA: dict = {
         "intent": {"type": "string"},
         "queries": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "number"},
+        "file_hint": {"type": "string"},
+        "target_format": {"type": "string"},
     },
     "required": ["intent", "confidence"],
 }
+
+#: Formats doc.convert accepts; anything else means "format unstated".
+_CONVERT_FORMATS = frozenset({"md", "docx", "pdf"})
 
 
 class RouterResult(BaseModel):
@@ -38,6 +43,12 @@ class RouterResult(BaseModel):
     queries: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     routed_by: str = "llm"  # "fast_path" when classify_fast_path hit
+    # Convert slots: file_hint names one file (or "*" for all) and
+    # target_format is md|docx|pdf. Empty = unstated → caller falls
+    # through to L3 (which asks the counter-question) instead of
+    # guessing a conversion.
+    file_hint: str = ""
+    target_format: str = ""
 
 
 class Router:
@@ -67,6 +78,9 @@ class Router:
             "is always summarize_plot, even when the request also says "
             "compare; compare_multi is only for comparisons with no chart. "
             "Make the queries distinct from each other (one angle per query).\n"
+            "Convert intents only: file_hint is the named file (or \"*\" when "
+            "the request says all/every documents, else \"\"), target_format "
+            "is md|docx|pdf when stated (else \"\").\n"
             "Return intent as the exact value string, queries as a list, "
             "confidence as 0.0-1.0."
         )
@@ -97,6 +111,20 @@ class Router:
         except (TypeError, ValueError):
             confidence = 0.0
         confidence = min(1.0, max(0.0, confidence))
+        file_hint = raw.get("file_hint", "") or ""
+        file_hint = file_hint.strip() if isinstance(file_hint, str) else ""
+        target_format = raw.get("target_format", "") or ""
+        target_format = (
+            target_format.strip().lower() if isinstance(target_format, str) else ""
+        )
+        if target_format not in _CONVERT_FORMATS:
+            target_format = ""
         if confidence < ROUTER_CONFIDENCE_THRESHOLD:
             intent = Intent.UNKNOWN
-        return RouterResult(intent=intent, queries=queries, confidence=confidence)
+        return RouterResult(
+            intent=intent,
+            queries=queries,
+            confidence=confidence,
+            file_hint=file_hint,
+            target_format=target_format,
+        )

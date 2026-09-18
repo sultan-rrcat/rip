@@ -53,12 +53,14 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
 }
 
 #: Intents served by deterministic code-built DAGs (no DAG-LLM needed).
+#: SUMMARIZE_PLOT is deliberately excluded: a plot needs content-derived
+#: `labels` no fixed shape can know (inventing them would be the
+#: hallucinated-chart class ADR-027 prevents), so it stays on L3.
 DETERMINISTIC_INTENTS = frozenset(
     {
         Intent.CHAT,
         Intent.QA_SINGLE,
         Intent.COMPARE_MULTI,
-        Intent.SUMMARIZE_PLOT,
         Intent.CONVERT_ONE,
         Intent.CONVERT_ALL,
         Intent.QUIZ,

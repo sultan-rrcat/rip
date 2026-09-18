@@ -222,7 +222,11 @@ def _make_plan_node(
                         "routed_by": route.routed_by,
                         "queries": [truncate(q, 200) for q in (route.queries or [])],
                     })
-                    candidate = build_layered_plan(state["request_text"], route)
+                    candidate = build_layered_plan(
+                        state["request_text"],
+                        route,
+                        state.get("notebook_context"),
+                    )
                     if candidate is not None:
                         validator.validate(candidate)
                         layered = candidate

@@ -79,3 +79,107 @@ def test_build_dispatch() -> None:
 
     unknown = build("???", RouterResult(intent=Intent.UNKNOWN, confidence=0.0))
     assert unknown is None
+
+
+_SNAPSHOT = (
+    "2 file(s): Fire Report.pdf [ready] id=aaa111; "
+    "Faultbook.pdf [ready] id=bbb222"
+)
+
+
+def test_quiz_single_writer_shape() -> None:
+    route = RouterResult(
+        intent=Intent.QUIZ, queries=["key concepts"], confidence=0.85,
+        routed_by="llm",
+    )
+    plan = build("make 10 MCQs", route)
+    assert plan is not None and len(plan.steps) == 2
+    assert plan.steps[0].tool_id == "rag.query"
+    assert plan.steps[1].depends_on == ["1"]
+    assert "{{1}}" in str(plan.steps[1].input)
+    _validator().validate(plan)
+
+
+def test_convert_all_star_shape() -> None:
+    route = RouterResult(
+        intent=Intent.CONVERT_ALL, confidence=0.9, routed_by="llm",
+        file_hint="*", target_format="pdf",
+    )
+    plan = build("convert all documents to pdf", route)
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].input == {"file_id": "*", "target_format": "pdf"}
+    _validator().validate(plan)
+
+
+def test_convert_all_without_format_falls_to_l3() -> None:
+    route = RouterResult(
+        intent=Intent.CONVERT_ALL, confidence=0.9, routed_by="llm",
+        file_hint="*",
+    )
+    assert build("convert everything", route) is None
+
+
+def test_convert_one_resolves_literal_id() -> None:
+    route = RouterResult(
+        intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
+        file_hint="faultbook", target_format="md",
+    )
+    plan = build("convert faultbook to md", route, _SNAPSHOT)
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].input == {"file_id": "bbb222", "target_format": "md"}
+    _validator().validate(plan)
+
+
+def test_convert_one_unresolvable_falls_to_l3() -> None:
+    hint = RouterResult(
+        intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
+        file_hint="missing", target_format="md",
+    )
+    assert build("convert missing to md", hint, _SNAPSHOT) is None
+    no_snapshot = RouterResult(
+        intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
+        file_hint="faultbook", target_format="md",
+    )
+    assert build("convert faultbook to md", no_snapshot, None) is None
+    no_format = RouterResult(
+        intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
+        file_hint="faultbook",
+    )
+    assert build("convert faultbook", no_format, _SNAPSHOT) is None
+
+
+def test_convert_one_ambiguous_match_falls_to_l3() -> None:
+    snapshot = "2 file(s): report-a.pdf [ready] id=1; report-b.pdf [ready] id=2"
+    route = RouterResult(
+        intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
+        file_hint="report", target_format="md",
+    )
+    assert build("convert report to md", route, snapshot) is None
+
+
+def test_convert_one_skips_unready_files() -> None:
+    snapshot = "1 file(s): big.pdf [processing] id=zzz"
+    route = RouterResult(
+        intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
+        file_hint="big", target_format="pdf",
+    )
+    assert build("convert big to pdf", route, snapshot) is None
+
+
+def test_summarize_plot_stays_l3() -> None:
+    # Plot labels are content-derived: no fixed shape may invent them.
+    route = RouterResult(
+        intent=Intent.SUMMARIZE_PLOT, queries=["x"], confidence=0.9,
+        routed_by="llm",
+    )
+    assert build("summarize and plot", route) is None
+
+
+def test_deterministic_intents_all_dispatched() -> None:
+    from app.orchestration.intents import DETERMINISTIC_INTENTS
+
+    assert Intent.SUMMARIZE_PLOT not in DETERMINISTIC_INTENTS
+    assert {
+        Intent.CHAT, Intent.QA_SINGLE, Intent.COMPARE_MULTI,
+        Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.QUIZ,
+    } <= DETERMINISTIC_INTENTS
