@@ -89,10 +89,7 @@ def build_qa_no_docs(request_text: str) -> Plan:
                 agent_id="reasoning",
                 input={
                     "message": (
-                        "There are no ready documents in this notebook. "
-                        "Answer the request from general knowledge and "
-                        "state clearly that the answer is not from the "
-                        f"notebook documents. Request: {request_text}"
+                        "{request_text}"
                     )
                 },
                 expected_output_type="answer",
