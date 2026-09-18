@@ -150,6 +150,7 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
   5. Validator gains `_check_prose_grounding`: prose step-references without `{{id}}` are rejected, but only when `rag.query` chunks siblings exist (no false positives on benign prose).
   6. L4 ReAct fallback (`react.py`): when plan recall is exhausted, a thought → action → observation loop (max 6 iterations, idle cap 2, cooperative cancel) answers one step at a time with observations inlined — no placeholders ever. Aggregates through the standard deterministic Aggregator; failure stays honest (`OrchestrationError` with the original plan error).
 - **Consequences:** Happy path costs one extra cheap call (router) or zero (fast-path/deterministic hit); worst path is bounded (router + 2 plans + ≤6 single steps). New capabilities should land as intents + builders, not prompt appendices. `test_layered.py` pins the chain; recall-test queues carry a router-miss head.
+- **Observability amendment (Option A, trace-only):** the router emits a `router` span as a sibling of `plan` under `run` (explicit `run_ctx` parenting; no graph/state change), `plan` output carries `layer/intent/routed_by/confidence`, and the ReAct fallback traces as `react → react:iter-N → step:rN` with fixed `parent_span_ctx` threading. The SSE `plan` event carries additive `route: {intent, routed_by, confidence}`.
 
 ---
 

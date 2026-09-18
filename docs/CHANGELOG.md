@@ -9,6 +9,7 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 - Simple requests now skip the big planning prompt: greetings answer directly with no planning call, and single questions / compare-two-reports requests use a fixed, pre-validated plan shape (retrieval steps fanning into one grounded answer step) instead of asking the model to invent the wiring. The compare-two-reports failure from testing (answer asked the user to re-upload instead of reading the retrieved documents) is fixed by construction.
 - When the planner still fails twice, the run now tries a step-by-step fallback (answer one small step at a time, up to 6 steps) before giving up; giving up still reports the original honest error.
 - Validator also rejects plans whose answer step merely *mentions* "step 1/2" or "retrieved chunks" in prose without actually linking the retrieval steps, with a one-retry fix hint.
+- Layered routing is now visible in Langfuse: a `router` span (sibling of `plan`, carrying intent/confidence/queries) shows which layer served the run (`L0-fast`/`L2-builder`/`L3-mega` on the `plan` span), and the step-by-step fallback traces as `react → react:iter-N → step:rN`. No behavior change; tracing stays opt-in.
 
 ## Unreleased — auto-hoist wiring keys nested in `input`
 

@@ -254,3 +254,196 @@ def test_orchestrator_falls_back_to_react_on_double_plan_failure() -> None:
     ])
     assert _orchestrator(provider).run("a long failing request here", "nb-1").summary == "react rescued"
     assert provider.structured_calls == 5  # router + 2 planners + 2 react turns
+
+
+# --- Option A observability: router sibling span, plan enrichment, react spans.
+#
+# No Langfuse server needed: `manual_span` is monkeypatched with a recorder,
+# so these tests prove the wiring (names, explicit parenting, outputs)
+# without any tracing backend.
+
+
+class _SpanRecorder:
+    """Stand-in for `manual_span`: records (name, trace_context, updates)."""
+
+    def __init__(self):
+        self.spans: list[dict] = []
+
+    def __call__(self, name, *, as_type="span", input=None, output=None,
+                 metadata=None, trace_context=None, **extra):
+        rec: dict = {
+            "name": name,
+            "trace_context": trace_context,
+            "input": input,
+            "output": None,
+            "updates": [],
+        }
+        self.spans.append(rec)
+        obs_id = f"span-{len(self.spans)}"
+
+        class _Obs:
+            id = obs_id
+
+            def update(self, **kw):
+                rec["updates"].append(kw)
+                if "output" in kw:
+                    rec["output"] = kw["output"]
+
+        class _Ctx:
+            def __enter__(self):
+                return _Obs()
+
+            def __exit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+    def by_name(self, name: str) -> list[dict]:
+        return [s for s in self.spans if s["name"] == name]
+
+
+def _compare_provider() -> FakeLayeredProvider:
+    return FakeLayeredProvider(queued=[
+        {
+            "intent": "compare_multi",
+            "queries": ["fire report sections", "faultbook sections"],
+            "confidence": 0.9,
+        },
+    ])
+
+
+def test_plan_event_carries_routing_fields() -> None:
+    events: list[dict] = []
+    result = _orchestrator(_compare_provider()).run(
+        COMPARE_REQUEST, "nb-1", on_event=events.append,
+    )
+    assert result.status == "success"
+    plans = [e for e in events if e.get("type") == "plan"]
+    assert len(plans) == 1
+    route = plans[0].get("route") or {}
+    assert route.get("intent") == "compare_multi"
+    assert route.get("routed_by") == "llm"
+    assert route.get("confidence") == 0.9
+
+
+def test_greeting_plan_event_fast_path_route() -> None:
+    events: list[dict] = []
+    result = _orchestrator(FakeLayeredProvider()).run(
+        "hi", "nb-1", on_event=events.append,
+    )
+    assert result.status == "success"
+    plans = [e for e in events if e.get("type") == "plan"]
+    assert len(plans) == 1
+    route = plans[0].get("route") or {}
+    assert route.get("routed_by") == "fast_path"
+    assert route.get("intent") == "chat"
+
+
+def test_router_span_is_sibling_of_plan_under_run(monkeypatch) -> None:
+    from app.orchestration import engine
+
+    recorder = _SpanRecorder()
+    monkeypatch.setattr(engine, "manual_span", recorder)
+    # Distinct well-formed sentinel for the plan-span context: proves the
+    # router span does NOT parent under `plan` (it must carry the run ctx
+    # instead). Well-formed (dict with trace_id/parent_span_id) so the
+    # real step spans downstream still parent correctly when tracing is on.
+    _plan_ctx = {"trace_id": "T", "parent_span_id": "PLAN-SPAN"}
+    monkeypatch.setattr(engine, "get_trace_context", lambda: dict(_plan_ctx))
+    result = _orchestrator(_compare_provider()).run(COMPARE_REQUEST, "nb-1")
+    assert result.status == "success"
+    routers = recorder.by_name("router")
+    plans = recorder.by_name("plan")
+    assert len(routers) == 1 and len(plans) == 1
+    # Sibling parenting: both spans carry the run ctx from config, never the
+    # plan-span ctx captured later via get_trace_context().
+    assert routers[0]["trace_context"] == plans[0]["trace_context"]
+    assert routers[0]["trace_context"] != _plan_ctx
+    assert routers[0]["output"]["intent"] == "compare_multi"
+    assert routers[0]["output"]["routed_by"] == "llm"
+    assert plans[0]["output"]["layer"] == "L2-builder"
+    assert plans[0]["output"]["intent"] == "compare_multi"
+
+
+def test_plan_span_output_carries_layer_on_mega_fallback(monkeypatch) -> None:
+    from app.orchestration import engine
+
+    recorder = _SpanRecorder()
+    monkeypatch.setattr(engine, "manual_span", recorder)
+    mega = {
+        "goal": "mega goal",
+        "steps": [
+            {"step_id": "1", "agent_id": "reasoning",
+             "input": {"message": "mega answer"},
+             "depends_on": [], "expected_output_type": "text"}
+        ],
+    }
+    provider = FakeLayeredProvider(
+        queued=[{"intent": "unknown", "queries": [], "confidence": 0.0}, mega]
+    )
+    result = _orchestrator(provider).run(
+        "a vague long request with no clear shape at all here", "nb-1"
+    )
+    assert result.status == "success"
+    plans = recorder.by_name("plan")
+    assert len(plans) == 1
+    assert plans[0]["output"]["layer"] == "L3-mega"
+    assert plans[0]["output"]["intent"] == "unknown"
+
+
+def test_react_iteration_spans(monkeypatch) -> None:
+    import app.orchestration.react as react_mod
+    from app.orchestration.react import run_react
+
+    recorder = _SpanRecorder()
+    monkeypatch.setattr(react_mod, "_manual_span", recorder)
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "need docs", "executor": "rag.query",
+         "input": {"query": "fire"}, "is_final": False},
+        {"thought": "have chunks", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "react final"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "what do docs say?", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert outcome.result.step_results[-1].output == "react final"
+    iters = [s for s in recorder.spans if s["name"].startswith("react:iter-")]
+    assert [s["name"] for s in iters] == ["react:iter-1", "react:iter-2"]
+    assert iters[0]["output"]["status"] == "success"
+    assert iters[0]["output"]["executor"] == "rag.query"
+    assert iters[1]["output"]["is_final"] is True
+    # Both iterations share the same explicit parent (the react ctx).
+    assert iters[0]["trace_context"] == iters[1]["trace_context"]
+
+
+def test_orchestrator_react_span(monkeypatch) -> None:
+    import app.observability.langfuse as lf
+    import app.orchestration.react as react_mod
+
+    recorder = _SpanRecorder()
+    # Orchestrator imports manual_span lazily (picks up the lf patch);
+    # react binds _manual_span at module import, so patch both with the
+    # same recorder. engine/plan_graph keep the real no-op here.
+    monkeypatch.setattr(lf, "manual_span", recorder)
+    monkeypatch.setattr(react_mod, "_manual_span", recorder)
+    ghost = {
+        "goal": "g",
+        "steps": [{"step_id": "1", "agent_id": "ghost", "input": {}}],
+    }
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "unknown", "queries": [], "confidence": 0.0},
+        ghost, ghost,
+        {"thought": "need docs", "executor": "rag.query",
+         "input": {"query": "x"}, "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "react rescued"},
+    ])
+    assert _orchestrator(provider).run("a long failing request here", "nb-1").summary == "react rescued"
+    reacts = recorder.by_name("react")
+    assert len(reacts) == 1
+    assert reacts[0]["output"]["status"] == "success"
+    assert reacts[0]["output"]["steps"] == 2
+    iters = [s for s in recorder.spans if s["name"].startswith("react:iter-")]
+    assert len(iters) == 2

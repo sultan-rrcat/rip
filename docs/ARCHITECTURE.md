@@ -125,9 +125,13 @@ One trace per run worker (`session_id = notebook_id`, `trace_name = run`). Span 
 
 ```
 run
-├─ plan → llm.generate_structured (planner)
-├─ step:{id} → llm.generate[.stream] (agent LLM)
-└─ aggregate (deterministic, no LLM)
+├─ router → llm.generate_structured (L1 intent router; zero generations on L0 fast-path)
+├─ plan → llm.generate_structured (L3 mega-prompt; absent on L2 builder hit)
+│  └─ step:{id} → llm.generate[.stream] (agent LLM)
+├─ aggregate (deterministic, no LLM)
+└─ react → react:iter-N → step:rN (L4 fallback only, max 6 iterations)
 ```
+
+`router` is a trace-only sibling of `plan` under `run` (explicit `trace_context` parenting; the code still runs inside the plan node — no graph/state change). `plan` output carries `layer` (`L0-fast`/`L2-builder`/`L3-mega`) + `intent`/`routed_by`/`confidence`; `router` output carries `intent`/`confidence`/`routed_by`/`queries`; each `react:iter-N` output carries `thought`/`executor`/`observation`. The SSE `plan` event carries an additive `route: {intent, routed_by, confidence}` object (old clients ignore it).
 
 Enabled only with `LANGFUSE_ENABLED=true` + keys + backend restart; disabled path is behavior-identical. See `docs/CAVEATS.md` for host/proxy/API notes.

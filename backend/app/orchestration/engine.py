@@ -176,6 +176,65 @@ def _make_plan_node(
         attempt = int(state.get("attempt") or 0) + 1
         feedback_in = state.get("planner_feedback")
         run_ctx = _configurable(config).get(_TRACE_CTX)
+        # Layered planning (L1/L2): route + deterministic builders run
+        # BEFORE the mega-prompt (L3), but only on the first attempt —
+        # retries already carry instance-specific feedback for the
+        # mega-prompt, so they stay on it. A validated builder plan is
+        # used directly — wiring is set by construction, so the
+        # ecd93eb4 ungrounded-fan-in class cannot occur. Any miss
+        # (unknown intent, validation failure, router error) falls
+        # through to the existing planner below, unchanged.
+        # Routing runs BEFORE the plan span opens: the router span is a
+        # strict temporal-predecessor sibling (run → router → plan) in the
+        # trace timeline, even though both live in this node (Option A: no
+        # graph or state changes). Disabled path is a no-op.
+        layered: Plan | None = None
+        route_info: dict = {
+            "layer": "L3-mega",
+            "intent": "unknown",
+            "routed_by": "none",
+            "confidence": 0.0,
+            "queries": [],
+        }
+        if feedback_in is None:
+            with manual_span(
+                "router",
+                as_type="span",
+                input={"request": truncate(state["request_text"], 2000)},
+                trace_context=run_ctx,
+            ) as router_obs:
+                try:
+                    route = Router(planner.provider).route(state["request_text"])
+                    route_info = {
+                        "layer": (
+                            "L0-fast"
+                            if route.routed_by == "fast_path"
+                            else "L2-builder"
+                        ),
+                        "intent": route.intent.value,
+                        "routed_by": route.routed_by,
+                        "confidence": route.confidence,
+                        "queries": list(route.queries or []),
+                    }
+                    router_obs.update(output={
+                        "intent": route.intent.value,
+                        "confidence": route.confidence,
+                        "routed_by": route.routed_by,
+                        "queries": [truncate(q, 200) for q in (route.queries or [])],
+                    })
+                    candidate = build_layered_plan(state["request_text"], route)
+                    if candidate is not None:
+                        validator.validate(candidate)
+                        layered = candidate
+                        logger.info(
+                            "layered plan hit intent=%s steps=%d",
+                            route.intent.value, len(layered.steps),
+                        )
+                    else:
+                        route_info["layer"] = "L3-mega"
+                except Exception as e:  # noqa: BLE001 - miss falls through to L3
+                    router_obs.update(output={"error": str(e)[:500]})
+                    logger.info("layered plan miss, using mega-prompt: %s", e)
         with manual_span(
             "plan", as_type="span",
             input={
@@ -187,28 +246,6 @@ def _make_plan_node(
         ) as plan_obs:
             rejected: Plan | None = None
             try:
-                # Layered planning (L1/L2): route + deterministic builders run
-                # BEFORE the mega-prompt (L3), but only on the first attempt —
-                # retries already carry instance-specific feedback for the
-                # mega-prompt, so they stay on it. A validated builder plan is
-                # used directly — wiring is set by construction, so the
-                # ecd93eb4 ungrounded-fan-in class cannot occur. Any miss
-                # (unknown intent, validation failure, router error) falls
-                # through to the existing planner below, unchanged.
-                layered: Plan | None = None
-                if feedback_in is None:
-                    try:
-                        route = Router(planner.provider).route(state["request_text"])
-                        candidate = build_layered_plan(state["request_text"], route)
-                        if candidate is not None:
-                            validator.validate(candidate)
-                            layered = candidate
-                            logger.info(
-                                "layered plan hit intent=%s steps=%d",
-                                route.intent.value, len(layered.steps),
-                            )
-                    except Exception as e:  # noqa: BLE001 - miss falls through to L3
-                        logger.info("layered plan miss, using mega-prompt: %s", e)
                 if layered is not None:
                     plan = layered
                 else:
@@ -256,7 +293,13 @@ def _make_plan_node(
                     )
             except (ValueError, PlanValidationError) as e:
                 err = str(e)
-                plan_obs.update(output={"error": err[:500], "attempt": attempt})
+                plan_obs.update(output={
+                    "error": err[:500],
+                    "attempt": attempt,
+                    "layer": route_info["layer"],
+                    "intent": route_info["intent"],
+                    "routed_by": route_info["routed_by"],
+                })
                 if attempt < _MAX_PLAN_ATTEMPTS:
                     dump = rejected.model_dump_json()[:2000] if rejected else None
                     logger.info(
@@ -281,6 +324,10 @@ def _make_plan_node(
                 "steps": len(plan.steps),
                 "executors": [s.executor_id for s in plan.steps],
                 "attempt": attempt,
+                "layer": route_info["layer"] if layered is not None else "L3-mega",
+                "intent": route_info["intent"],
+                "routed_by": route_info["routed_by"],
+                "confidence": route_info["confidence"],
             })
             # Capture this attempt's plan-span context while it is current so
             # the execute node can parent step:{id} spans explicitly under it.
@@ -299,6 +346,11 @@ def _make_plan_node(
                     "plan_id": plan.plan_id,
                     "goal": plan.goal,
                     "attempt": attempt,
+                    "route": {
+                        "intent": route_info["intent"],
+                        "routed_by": route_info["routed_by"],
+                        "confidence": route_info["confidence"],
+                    },
                     "steps": [
                         {
                             "step_id": s.step_id,

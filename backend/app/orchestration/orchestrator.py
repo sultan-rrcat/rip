@@ -144,40 +144,70 @@ class Orchestrator:
                 logger.warning("orchestration aborted: %s", final["plan_error"])
                 raise OrchestrationError(final["plan_error"])
             try:
+                from app.observability.langfuse import (
+                    get_trace_context as _get_tc,
+                )
+                from app.observability.langfuse import (
+                    manual_span as _manual_span,
+                )
+                from app.observability.langfuse import (
+                    truncate as _truncate,
+                )
                 from app.orchestration.react import run_react
 
-                react = run_react(
-                    request_text,
-                    self._planner.provider,
-                    self._registry,
-                    self._tool_registry,
-                    trace_id=trace_id,
-                    notebook_id=notebook_id,
-                    context=context,
-                    notebook_context=notebook_context,
-                    cancel_event=cancel_event,
-                    on_event=on_event,
-                )
-                aggregation = self._aggregator.aggregate(react.plan, react.result)
-                if aggregation.status != "failed":
-                    logger.info(
-                        "react fallback recovered plan=%s steps=%d trace=%s",
-                        react.plan.plan_id, len(react.plan.steps), trace_id,
-                    )
-                    return OrchestrationResult(
+                # Trace-only sibling: the `react` span parents explicitly
+                # under `run` (via the worker-thread context captured here),
+                # so Langfuse reads run → react → react:iter-N → step:rN.
+                # Disabled path is a no-op; failures still fall through to
+                # the original honest error below.
+                with _manual_span(
+                    "react",
+                    as_type="span",
+                    input={
+                        "request": _truncate(request_text, 2000),
+                        "plan_error": _truncate(final["plan_error"], 500),
+                    },
+                    trace_context=_get_tc(),
+                ) as react_obs:
+                    react = run_react(
+                        request_text,
+                        self._planner.provider,
+                        self._registry,
+                        self._tool_registry,
                         trace_id=trace_id,
-                        plan_id=react.plan.plan_id,
-                        goal=react.plan.goal,
-                        step_results=list(react.result.step_results),
-                        summary=aggregation.summary,
-                        status=aggregation.status,
-                        plan_incomplete=aggregation.plan_incomplete,
-                        conflicts=aggregation.conflicts,
-                        needs_clarification=aggregation.needs_clarification,
-                        shown=list(aggregation.shown),
-                        hidden=list(aggregation.hidden),
-                        visibility=dict(aggregation.visibility),
+                        notebook_id=notebook_id,
+                        context=context,
+                        notebook_context=notebook_context,
+                        cancel_event=cancel_event,
+                        on_event=on_event,
+                        parent_span_ctx=_get_tc(),
                     )
+                    aggregation = self._aggregator.aggregate(react.plan, react.result)
+                    react_obs.update(output={
+                        "status": aggregation.status,
+                        "steps": len(react.plan.steps),
+                        "iterations": len(react.result.step_results),
+                        "summary": _truncate(aggregation.summary, 2000),
+                    })
+                    if aggregation.status != "failed":
+                        logger.info(
+                            "react fallback recovered plan=%s steps=%d trace=%s",
+                            react.plan.plan_id, len(react.plan.steps), trace_id,
+                        )
+                        return OrchestrationResult(
+                            trace_id=trace_id,
+                            plan_id=react.plan.plan_id,
+                            goal=react.plan.goal,
+                            step_results=list(react.result.step_results),
+                            summary=aggregation.summary,
+                            status=aggregation.status,
+                            plan_incomplete=aggregation.plan_incomplete,
+                            conflicts=aggregation.conflicts,
+                            needs_clarification=aggregation.needs_clarification,
+                            shown=list(aggregation.shown),
+                            hidden=list(aggregation.hidden),
+                            visibility=dict(aggregation.visibility),
+                        )
             except OrchestrationError:
                 raise
             except Exception as e:  # noqa: BLE001 - react miss → original honest error

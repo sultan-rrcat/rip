@@ -103,6 +103,7 @@ Gating chains `postgres → backend → frontend`. Probes use `127.0.0.1`, never
 ### Outer spans are explicitly parented (fixed)
 
 - The engine parents `plan`/`aggregate` spans explicitly via `trace_context` captured in the worker thread (`Orchestrator.run` → `config["configurable"]["trace_context"]`), and `step:{id}` spans parent explicitly under the plan span (`state["plan_span_ctx"]` → `run_plan_graph(parent_span_ctx=…)`). This replaces the old contextvars-only chain (Athena `_with_parent_ctx` pattern RIP had dropped) and survives LangGraph pool-thread scheduling. If spans ever detach into orphan traces again, check that `get_trace_context()` returns non-None inside the `run` span and that the IDs flow through config/state.
+- The layered-routing spans follow the same rule: the `router` span parents explicitly under `run` (via the plan node's `run_ctx`, so it reads as a sibling of `plan`); the orchestrator opens a `react` span under `run` and passes its context into `run_react(parent_span_ctx=…)`, and each `react:iter-N` span passes its own context into its mini `run_plan_graph` so `step:rN` nests under its iteration. Never pass a placeholder or sentinel as `trace_context` — `manual_span` calls `.get()` on it, so a non-dict silently breaks every downstream span when tracing is on.
 
 ---
 
