@@ -196,8 +196,55 @@ class PlanValidator:
 
         for step in plan.steps:
             if step.tool_id == "plot.chart":
-                values = step.input.get("values") if isinstance(step.input, dict) else None
-                refs = placeholders_in(values)
+                step_input = step.input if isinstance(step.input, dict) else {}
+                values = step_input.get("values")
+                series = step_input.get("series")
+                if values is not None and series is not None:
+                    raise PlanValidationError(
+                        f"step {step.step_id} (plot.chart) passes both 'values' "
+                        "and 'series' — pass exactly one (single series vs "
+                        "multi-series comparison)"
+                    )
+                if values is None and series is None:
+                    raise PlanValidationError(
+                        f"step {step.step_id} (plot.chart) is missing required "
+                        "input field 'values' (or 'series' for multi-series) — "
+                        "refusing to execute an unguarded tool call"
+                    )
+                if series is not None and (
+                    not isinstance(series, list) or not series
+                ):
+                    raise PlanValidationError(
+                        f"step {step.step_id} (plot.chart) 'series' must be a "
+                        "non-empty array of {label, values} objects"
+                    )
+                series_values: list[object] = []
+                if isinstance(series, list):
+                    for entry in series:
+                        if not isinstance(entry, dict):
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) 'series' "
+                                "entries must be {label, values} objects"
+                            )
+                        if not str(entry.get("label", "")).strip():
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) 'series' "
+                                "entries need a non-empty string 'label'"
+                            )
+                        entry_values = entry.get("values")
+                        if not isinstance(entry_values, list) or not entry_values:
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) series "
+                                f"{entry.get('label')!r} needs a non-empty "
+                                "'values' array"
+                            )
+                        series_values.append(entry_values)
+                value_lists = (
+                    [values] if isinstance(values, list) else []
+                ) + series_values
+                refs: set[str] = set()
+                for value_list in value_lists:
+                    refs.update(placeholders_in(value_list))
                 if step.depends_on:
                     if not refs:
                         raise PlanValidationError(
@@ -206,8 +253,9 @@ class PlanValidator:
                             "{{{id}}} placeholder — dependent plots must reference "
                             "upstream numbers, never hardcoded literals"
                         )
-                    if isinstance(values, list):
-                        for v in values:
+                    for value_list in value_lists:
+                        assert isinstance(value_list, list)
+                        for v in value_list:
                             if isinstance(v, str) and _PLACEHOLDER.search(v) and not _PLACEHOLDER.fullmatch(v.strip()):
                                 raise PlanValidationError(
                                     f"step {step.step_id} (plot.chart) values element "
@@ -215,11 +263,12 @@ class PlanValidator:
                                     "each values element must be a number or a lone "
                                     "{{{id}}} placeholder"
                                 )
-                    if len(refs) > 1:
+                    if len(refs) > len(value_lists):
                         raise PlanValidationError(
                             f"step {step.step_id} (plot.chart) values reference "
-                            f"multiple upstream steps {sorted(refs)} — fan them into "
-                            "ONE merging numbers step first, then reference only it"
+                            f"multiple upstream steps {sorted(refs)} in one series — "
+                            "fan them into ONE merging numbers step first, then "
+                            "reference only it (one placeholder per series)"
                         )
                     for ref in refs:
                         target = by_id.get(ref)

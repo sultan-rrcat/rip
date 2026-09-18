@@ -12,7 +12,9 @@ deterministic Aggregator stays the single answer-assembly path.
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
 import threading
 import uuid
 from collections.abc import Callable
@@ -29,6 +31,7 @@ from app.observability.langfuse import (
 from app.observability.langfuse import (
     truncate as _truncate,
 )
+from app.orchestration.builders import _corpus_state
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.plan_graph import run_plan_graph
 from app.orchestration.results import ExecutionResult, StepResult
@@ -167,6 +170,24 @@ def _output_type(executor: str, is_final: bool) -> str:
     return _TOOL_OUTPUT_TYPES.get(executor, "text")
 
 
+def _sandbox_available() -> bool:
+    """Whether code.sandbox can execute on this host (docker CLI present).
+
+    Split out for prompt advertisement + tests: on docker-less hosts the
+    loop must never pick code.sandbox (trace 27dcf635 burned 2 of 6
+    iterations on a deterministically-broken tool).
+    """
+    return shutil.which("docker") is not None
+
+
+def _action_signature(executor: str, action_input: dict) -> str:
+    """Stable id for a proposed action — repeats of a failed action loop out."""
+    try:
+        return executor + "\0" + json.dumps(action_input, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return executor + "\0" + str(sorted(action_input))
+
+
 class ReactResult:
     def __init__(self, plan: Plan, result: ExecutionResult):
         self.plan = plan
@@ -206,6 +227,16 @@ def run_react(
     scratchpad: list[str] = []
     steps: list[PlanStep] = []
     step_results: list[StepResult] = []
+    # Signatures of FAILED executions (trace 27dcf635 retried code.sandbox
+    # twice with the same docker error and rag.query twice with the same
+    # empty result). A proposed repeat becomes an idle turn — no execution,
+    # budget preserved for a different executor or a final answer.
+    failed_actions: dict[str, str] = {}
+    # rag.query is provably useless when the snapshot holds zero ready
+    # files (same argument as the L2 empty-corpus short-circuit) — refuse
+    # it once instead of burning iterations on "(no chunks retrieved)".
+    corpus_empty = _corpus_state(notebook_context) in ("empty", "processing")
+    sandbox_available = _sandbox_available()
     # Consecutive turns that produced no observation (provider errors,
     # unknown executors, empty answers). Caps garbage-loops against a
     # degraded model; any executed step or final answer resets it.
@@ -256,9 +287,19 @@ def run_react(
                 "the tool reads top-level fields, so this fails with "
                 "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
                 "Prefer rag.query first when documents are available. "
+                "When the notebook has no documents and no observation "
+                "holds numbers, recall approximate figures with a reasoning "
+                "step first (state they are approximate), then plot.chart. "
                 "Bar/line charts MUST use plot.chart with literal numbers "
-                "from observations — never code.sandbox for charting. "
-                f"Notebook documents:\n{notebook_context or '(no documents)'}"
+                "from observations (or a prior reasoning step) — never "
+                "code.sandbox for charting. "
+                + (
+                    ""
+                    if sandbox_available
+                    else "code.sandbox is UNAVAILABLE on this host (no "
+                    "docker) — never pick it; use reasoning/plot.chart instead. "
+                )
+                + f"Notebook documents:\n{notebook_context or '(no documents)'}"
             )
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -390,6 +431,48 @@ def run_react(
                     "executor": executor,
                 })
                 continue
+            if corpus_empty and executor == "rag.query":
+                idle_turns += 1
+                if idle_turns >= 2:
+                    iter_obs.update(output={
+                        "status": "failed",
+                        "error": "rag.query on a notebook with no ready documents",
+                    })
+                    break
+                scratchpad.append(
+                    "notebook has no ready documents — rag.query cannot "
+                    "return chunks; recall numbers with reasoning or answer "
+                    "directly."
+                )
+                iter_obs.update(output={
+                    "status": "retry",
+                    "thought": thought_in,
+                    "executor": executor,
+                    "error": "rag.query refused: empty corpus",
+                })
+                continue
+            sig = _action_signature(executor, action_input)
+            if sig in failed_actions:
+                idle_turns += 1
+                if idle_turns >= 2:
+                    iter_obs.update(output={
+                        "status": "failed",
+                        "error": _truncate(
+                            f"{executor} already failed: {failed_actions[sig]}", 500
+                        ),
+                    })
+                    break
+                scratchpad.append(
+                    f"{executor} already failed ({failed_actions[sig]}); pick "
+                    "a different executor or answer from what you have."
+                )
+                iter_obs.update(output={
+                    "status": "retry",
+                    "thought": thought_in,
+                    "executor": executor,
+                    "error": _truncate(f"repeat of failed {executor}", 500),
+                })
+                continue
             idle_turns = 0
             step_id = f"r{iteration}"
             is_tool = executor in known_tools
@@ -452,6 +535,7 @@ def run_react(
                     "observation": _truncate(outcome.output, 2000),
                 })
             else:
+                failed_actions[sig] = outcome.error or "unknown error"
                 scratchpad.append(
                     f"step {step_id} ({executor}) failed: {outcome.error}; try another."
                 )

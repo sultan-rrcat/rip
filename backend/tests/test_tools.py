@@ -279,6 +279,74 @@ class TestPlotChart:
         )
         assert not resp.ok and "same length" in (resp.error or "")
 
+    def test_multiseries_line_renders_with_legend(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "line", "labels": ["2000", "2010", "2020"],
+             "series": [{"label": "USA", "values": [10.0, 15.0, 21.0]},
+                        {"label": "China", "values": ["1.2, 6.0, 14.7"]}],
+             "title": "GDP (approximate)"},
+        )
+        assert resp.ok
+        assert (resp.output or "").count("<polyline") == 2
+        assert ">USA<" in (resp.output or "") and ">China<" in (resp.output or "")
+        assert resp.data["series_count"] == 2 and resp.data["point_count"] == 3
+
+    def test_multiseries_bar_groups(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a", "b"],
+             "series": [{"label": "x", "values": [1, 2]},
+                        {"label": "y", "values": [3, 4]}]},
+        )
+        assert resp.ok and (resp.output or "").startswith("<svg")
+
+    def test_values_and_series_conflict_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a"], "values": [1],
+             "series": [{"label": "x", "values": [1]}]},
+        )
+        assert not resp.ok and "never both" in (resp.error or "")
+
+    def test_missing_values_and_series_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a"]},
+        )
+        assert not resp.ok and "non-empty array" in (resp.error or "")
+
+    def test_series_length_mismatch_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "line", "labels": ["a", "b"],
+             "series": [{"label": "x", "values": [1]}]},
+        )
+        assert not resp.ok and "but 2 labels" in (resp.error or "")
+
+    def test_too_many_series_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "line", "labels": ["a"],
+             "series": [{"label": f"s{i}", "values": [1]} for i in range(6)]},
+        )
+        assert not resp.ok and "at most 5 series" in (resp.error or "")
+
+    def test_series_entry_without_label_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "line", "labels": ["a"],
+             "series": [{"label": "", "values": [1]}]},
+        )
+        assert not resp.ok and "label" in (resp.error or "")
+
 
 # --- doc.generate (live libs) ---
 

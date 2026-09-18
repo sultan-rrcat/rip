@@ -21,6 +21,9 @@ _MAX_POINTS = 50
 _WIDTH, _HEIGHT = 640, 360
 _PAD_LEFT, _PAD_RIGHT, _PAD_TOP, _PAD_BOTTOM = 56, 16, 36, 44
 
+#: Series palette for multi-series charts (line strokes / bar fills).
+_PALETTE = ("#4a90d9", "#e94f37", "#44af69", "#f2a541", "#7b6fd0")
+
 
 def _scale(values: list[float], height: float) -> list[float]:
     peak = max(values) if values else 0.0
@@ -30,12 +33,29 @@ def _scale(values: list[float], height: float) -> list[float]:
 
 
 def render_svg(
-    chart_type: str, labels: list[str], values: list[float], *, title: str = ""
+    chart_type: str, labels: list[str], values: list[float], *, title: str = "",
+    series: list[tuple[str, list[float]]] | None = None,
 ) -> str:
-    """Render a bar/line chart as an SVG document string."""
+    """Render a bar/line chart as an SVG document string.
+
+    Single-series (``series=None``): legacy labels+values behavior.
+    Multi-series: ``labels`` are the shared x-axis, ``series`` holds
+    ``(name, values)`` pairs drawn in palette order with a legend.
+    """
+    multi = list(series) if series else []
     plot_w = _WIDTH - _PAD_LEFT - _PAD_RIGHT
     plot_h = _HEIGHT - _PAD_TOP - _PAD_BOTTOM
-    heights = _scale(values, plot_h)
+    all_values = [v for _, vals in multi for v in vals] if multi else list(values)
+    heights_all = _scale(all_values, plot_h)
+    per_series: list[tuple[str, list[float]]] = []
+    if multi:
+        offset = 0
+        for name, vals in multi:
+            per_series.append((name, heights_all[offset:offset + len(vals)]))
+            offset += len(vals)
+    else:
+        per_series = [("", heights_all)]
+    n = len(labels)
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{_WIDTH}" height="{_HEIGHT}" role="img">',
     ]
@@ -48,32 +68,68 @@ def render_svg(
         f"<rect x='{_PAD_LEFT}' y='{_PAD_TOP}' width='{plot_w}' "
         f"height='{plot_h}' fill='none' stroke='#888'/>"
     )
-    n = len(values)
     if chart_type == "bar":
         gap = 6.0
-        bar_w = (plot_w - gap * (n + 1)) / n if n else 0
-        for i, (label, h) in enumerate(zip(labels, heights, strict=True)):
-            x = _PAD_LEFT + gap + i * (bar_w + gap)
-            y = _PAD_TOP + plot_h - h
-            parts.append(
-                f"<rect x='{x:.1f}' y='{y:.1f}' width='{bar_w:.1f}' "
-                f"height='{h:.1f}' fill='#4a90d9'>"
-                f"<title>{escape(label)}: {values[i]}</title></rect>"
-            )
+        if multi:
+            group_w = plot_w / n if n else 0
+            bar_w = (group_w - gap * (len(multi) + 1)) / len(multi) if n else 0
+            for i in range(n):
+                for j, (name, vals) in enumerate(multi):
+                    h = per_series[j][1][i]
+                    x = _PAD_LEFT + i * group_w + gap + j * (bar_w + gap)
+                    y = _PAD_TOP + plot_h - h
+                    color = _PALETTE[j % len(_PALETTE)]
+                    parts.append(
+                        f"<rect x='{x:.1f}' y='{y:.1f}' width='{bar_w:.1f}' "
+                        f"height='{h:.1f}' fill='{color}'>"
+                        f"<title>{escape(name)} {escape(labels[i])}: "
+                        f"{vals[i]}</title></rect>"
+                    )
+        else:
+            heights = per_series[0][1]
+            bar_w = (plot_w - gap * (n + 1)) / n if n else 0
+            for i, (label, h) in enumerate(zip(labels, heights, strict=True)):
+                x = _PAD_LEFT + gap + i * (bar_w + gap)
+                y = _PAD_TOP + plot_h - h
+                parts.append(
+                    f"<rect x='{x:.1f}' y='{y:.1f}' width='{bar_w:.1f}' "
+                    f"height='{h:.1f}' fill='#4a90d9'>"
+                    f"<title>{escape(label)}: {values[i]}</title></rect>"
+                )
     else:  # line
         step = plot_w / (n - 1) if n > 1 else 0
-        points = " ".join(
-            f"{_PAD_LEFT + i * step:.1f},{_PAD_TOP + plot_h - h:.1f}"
-            for i, h in enumerate(heights)
-        )
-        parts.append(f"<polyline points='{points}' fill='none' stroke='#4a90d9' stroke-width='2'/>")
-        for i, (label, h) in enumerate(zip(labels, heights, strict=True)):
-            x = _PAD_LEFT + i * step
-            y = _PAD_TOP + plot_h - h
-            parts.append(
-                f"<circle cx='{x:.1f}' cy='{y:.1f}' r='3' fill='#4a90d9'>"
-                f"<title>{escape(label)}: {values[i]}</title></circle>"
+        series_vals: list[tuple[str, list[float]]] = multi if multi else [("", values)]
+        for j, ((name, vals), (_pname, hts)) in enumerate(
+            zip(series_vals, per_series)
+        ):
+            color = _PALETTE[j % len(_PALETTE)] if multi else "#4a90d9"
+            points = " ".join(
+                f"{_PAD_LEFT + i * step:.1f},{_PAD_TOP + plot_h - h:.1f}"
+                for i, h in enumerate(hts)
             )
+            parts.append(
+                f"<polyline points='{points}' fill='none' stroke='{color}' "
+                f"stroke-width='2'/>"
+            )
+            for i, (label, h) in enumerate(zip(labels, hts, strict=True)):
+                x = _PAD_LEFT + i * step
+                y = _PAD_TOP + plot_h - h
+                tip = f"{escape(name + ' ' if name else '')}{escape(label)}: {vals[i]}"
+                parts.append(
+                    f"<circle cx='{x:.1f}' cy='{y:.1f}' r='3' fill='{color}'>"
+                    f"<title>{tip}</title></circle>"
+                )
+        if multi:
+            lx = _WIDTH - _PAD_RIGHT - 8
+            for j, (name, _hts) in enumerate(per_series):
+                color = _PALETTE[j % len(_PALETTE)]
+                y = _PAD_TOP + 8 + j * 18
+                parts.append(
+                    f"<rect x='{lx - 130:.1f}' y='{y:.1f}' width='12' height='12' "
+                    f"fill='{color}'/>"
+                    f"<text x='{lx - 114:.1f}' y='{y + 10:.1f}' font-size='11' "
+                    f"font-family='sans-serif'>{escape(name)}</text>"
+                )
     # x labels: first, middle, last (keeps small SVGs readable)
     for i in sorted({0, n // 2, n - 1}):
         x = _PAD_LEFT + (i + 0.5) * (plot_w / n) if chart_type == "bar" else _PAD_LEFT + i * step
@@ -88,16 +144,31 @@ def render_svg(
 class PlotChartTool(Tool):
     tool_id = "plot.chart"
     name = "Plot Chart"
-    description = "Render a bar or line chart as inline SVG from labels + numeric values."
+    description = (
+        "Render a bar or line chart as inline SVG from labels + numeric values. "
+        "Single series: labels + values. Multi-series (comparisons): shared "
+        "labels + series: [{label, values}] (at most 5 series, drawn with a legend)."
+    )
     input_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "chart_type": {"type": "string", "enum": ["bar", "line"]},
             "labels": {"type": "array", "items": {"type": "string"}},
             "values": {"type": "array", "items": {"type": "number"}},
+            "series": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "values": {"type": "array"},
+                    },
+                    "required": ["label", "values"],
+                },
+            },
             "title": {"type": "string"},
         },
-        "required": ["chart_type", "labels", "values"],
+        "required": ["chart_type", "labels"],
     }
     output_schema: ClassVar[dict] = {
         "type": "object",
@@ -105,15 +176,20 @@ class PlotChartTool(Tool):
             "svg": {"type": "string"},
             "chart_type": {"type": "string"},
             "point_count": {"type": "integer"},
+            "series_count": {"type": "integer"},
         },
     }
     effect_class = "sandboxed"  # type: ignore[assignment]
     cost_class = "low"
 
+    #: At most this many series per chart (legend space + readability).
+    _MAX_SERIES = 5
+
     def execute(self, request: ToolRequest) -> ToolResponse:
         chart_type = request.input.get("chart_type")
         labels = request.input.get("labels")
         values = request.input.get("values")
+        series_in = request.input.get("series")
         title = str(request.input.get("title", "") or "")
         if chart_type not in ("bar", "line"):
             return ToolResponse(
@@ -122,29 +198,100 @@ class PlotChartTool(Tool):
                 output=None,
                 error="'chart_type' must be 'bar' or 'line'",
             )
-        if not isinstance(labels, list) or not isinstance(values, list) or not labels:
+        if not isinstance(labels, list) or not labels:
             return ToolResponse(
                 tool_id=self.tool_id,
                 ok=False,
                 output=None,
-                error="'labels' and 'values' must be non-empty arrays",
+                error="'labels' must be a non-empty array",
             )
-        # Placeholder-originated CSV strings: the engine resolves a whole
-        # upstream text output (e.g. a numbers step returning "0.82, 0.88")
-        # into ONE string element. Split comma-separated strings back into
-        # points so one placeholder can fill a whole series; empties are
-        # dropped (covers stray leading/trailing commas from templates).
-        # Length is checked AFTER the split, not against raw elements.
-        flat: list[object] = []
-        for v in values:
-            if isinstance(v, str) and "," in v:
-                flat.extend(part.strip() for part in v.split(","))
-                continue
-            flat.append(v)
-        flat = [v for v in flat if not (isinstance(v, str) and v == "")]
-        try:
-            numbers = [float(v) for v in flat]  # type: ignore[arg-type]
-        except (TypeError, ValueError):
+        if series_in is not None:
+            if values is not None:
+                return ToolResponse(
+                    tool_id=self.tool_id,
+                    ok=False,
+                    output=None,
+                    error="pass either 'values' (single series) or 'series', never both",
+                )
+            if not isinstance(series_in, list) or not series_in:
+                return ToolResponse(
+                    tool_id=self.tool_id,
+                    ok=False,
+                    output=None,
+                    error="'series' must be a non-empty array of {label, values}",
+                )
+            if len(series_in) > self._MAX_SERIES:
+                return ToolResponse(
+                    tool_id=self.tool_id,
+                    ok=False,
+                    output=None,
+                    error=f"at most {self._MAX_SERIES} series per chart",
+                )
+            multi: list[tuple[str, list[float]]] = []
+            for entry in series_in:
+                if not isinstance(entry, dict):
+                    return ToolResponse(
+                        tool_id=self.tool_id,
+                        ok=False,
+                        output=None,
+                        error="'series' entries must be {label, values} objects",
+                    )
+                name = entry.get("label")
+                if not isinstance(name, str) or not name.strip():
+                    return ToolResponse(
+                        tool_id=self.tool_id,
+                        ok=False,
+                        output=None,
+                        error="'series' entries need a non-empty string 'label'",
+                    )
+                numbers = self._to_numbers(entry.get("values"))
+                if numbers is None:
+                    return ToolResponse(
+                        tool_id=self.tool_id,
+                        ok=False,
+                        output=None,
+                        error=f"series {name!r} 'values' must all be numbers",
+                    )
+                if len(numbers) != len(labels):
+                    return ToolResponse(
+                        tool_id=self.tool_id,
+                        ok=False,
+                        output=None,
+                        error=f"series {name!r} has {len(numbers)} values "
+                        f"but {len(labels)} labels",
+                    )
+                multi.append((name, numbers))
+            if len(labels) > _MAX_POINTS:
+                return ToolResponse(
+                    tool_id=self.tool_id,
+                    ok=False,
+                    output=None,
+                    error=f"at most {_MAX_POINTS} points per chart",
+                )
+            str_labels = [str(label) for label in labels]
+            svg = render_svg(
+                str(chart_type), str_labels, [], title=title, series=multi
+            )
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=True,
+                output=svg,
+                data={
+                    "svg": svg,
+                    "chart_type": chart_type,
+                    "point_count": len(labels),
+                    "series_count": len(multi),
+                },
+            )
+        if not isinstance(values, list) or not values:
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=False,
+                output=None,
+                error="'values' must be a non-empty array (or pass 'series' for multi-series)",
+            )
+        numbers = self._to_numbers(values)
+        if numbers is None:
             return ToolResponse(
                 tool_id=self.tool_id,
                 ok=False,
@@ -171,5 +318,35 @@ class PlotChartTool(Tool):
             tool_id=self.tool_id,
             ok=True,
             output=svg,
-            data={"svg": svg, "chart_type": chart_type, "point_count": len(numbers)},
+            data={
+                "svg": svg,
+                "chart_type": chart_type,
+                "point_count": len(numbers),
+                "series_count": 1,
+            },
         )
+
+    @staticmethod
+    def _to_numbers(values: object) -> list[float] | None:
+        """Coerce a values array to floats, splitting placeholder CSV strings.
+
+        The engine resolves a whole upstream text output (e.g. a numbers
+        step returning "0.82, 0.88") into ONE string element. Split
+        comma-separated strings back into points so one placeholder can
+        fill a whole series; empties are dropped (covers stray
+        leading/trailing commas from templates). Returns None when any
+        element is not numeric.
+        """
+        if not isinstance(values, list):
+            return None
+        flat: list[object] = []
+        for v in values:
+            if isinstance(v, str) and "," in v:
+                flat.extend(part.strip() for part in v.split(","))
+                continue
+            flat.append(v)
+        flat = [v for v in flat if not (isinstance(v, str) and v == "")]
+        try:
+            return [float(v) for v in flat]  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None

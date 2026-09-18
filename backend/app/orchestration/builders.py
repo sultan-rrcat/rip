@@ -78,7 +78,8 @@ def build_qa_no_docs(request_text: str) -> Plan:
     Empty-corpus path: emitting rag.query would provably return
     "(no chunks retrieved)" and force the grounded prompt to answer
     "not in the documents" — useless for general-knowledge questions
-    like "What is QLoRA?". Answer parametrically with a disclaimer.
+    like "What is QLoRA?". Answer from general knowledge instead
+    (verbatim request, no document-grounding wrapper).
     """
     return Plan(
         plan_id=str(uuid.uuid4()),
@@ -87,11 +88,7 @@ def build_qa_no_docs(request_text: str) -> Plan:
             PlanStep(
                 step_id="1",
                 agent_id="reasoning",
-                input={
-                    "message": (
-                        "{request_text}"
-                    )
-                },
+                input={"message": request_text},
                 expected_output_type="answer",
             )
         ],

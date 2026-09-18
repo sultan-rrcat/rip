@@ -6,8 +6,13 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ## Unreleased — empty-notebook routing (trace `ea48cb30`)
 
-- Factual questions on a notebook with no ready documents no longer burn a retrieval step that provably returns nothing: `qa_single` answers generally with a "not from the documents" disclaimer, while summarize/compare/quiz ask to upload or wait (single reasoning step, no `rag.query`). Files still processing yield a wait-and-retry clarification; an unreadable snapshot still attempts retrieval (the database, not the snapshot, is ground truth).
+- Factual questions on a notebook with no ready documents no longer burn a retrieval step that provably returns nothing: `qa_single` answers generally from general knowledge (verbatim request, no document-grounding wrapper), while summarize/compare/quiz ask to upload or wait (single reasoning step, no `rag.query`). Files still processing yield a wait-and-retry clarification; an unreadable snapshot still attempts retrieval (the database, not the snapshot, is ground truth).
 - The intent router now guarantees 1–3 search queries for document-grounded intents (post-filled from the request text when the model returns `[]`), and the mega-prompt carries an explicit zero-file rule so the L3 fallback cannot emit `rag.query` on an empty corpus. `qa_single` retrieval uses the unified `top_k: 4`.
+
+## Unreleased — no-docs parametric plots + multi-series `plot.chart` (trace `27dcf635`)
+
+- `plot.chart` now draws multi-series comparisons: shared `labels` plus `series: [{label, values}]` (at most 5 series, palette + legend; single-series `labels`+`values` unchanged). A plot request on a notebook with zero ready files no longer fails: the planner recalls approximate figures parametrically (one numbers-only step per series) and charts them with an "approximate" title instead of emitting an unguarded `plot.chart`.
+- The step-by-step fallback stops repeating itself: `rag.query` is refused on an empty corpus, repeats of a failed executor become idle turns instead of re-executing, and `code.sandbox` is advertised as unavailable when the host has no docker CLI (previously 4 of 6 iterations burned on two empty retrievals and two `docker CLI not found` failures).
 
 ## Unreleased — ReAct input contract + plot preference (trace `c9e59039`)
 

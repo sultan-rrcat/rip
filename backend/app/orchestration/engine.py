@@ -123,6 +123,14 @@ def _validation_feedback(plan_dump: str | None, error: str) -> str:
         parts.append(
             f"Rejected plan skeleton (fix it, do not repeat it): {skeleton[:600]}"
         )
+        if "NO-EXECUTOR" in skeleton:
+            # Trace 27dcf635 attempt 2: the model dropped tool_id entirely
+            # (input keys alone don't execute anything). Name the fix.
+            parts.append(
+                "The rejected step names NO executor — every step needs "
+                "agent_id or tool_id as a TOP-LEVEL key (rule 1), never "
+                "nested inside input."
+            )
     parts.append("Return a corrected plan satisfying every rule above.")
     return "\n".join(parts)
 

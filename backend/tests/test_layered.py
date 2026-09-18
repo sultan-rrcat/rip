@@ -301,6 +301,135 @@ def test_react_validation_hints_without_executing() -> None:
     assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
 
 
+def test_react_repeat_of_failed_executor_is_idle_turn() -> None:
+    # Trace 27dcf635: code.sandbox ×2 (same docker error), rag.query ×2
+    # (same empty result) — the second identical proposal must not execute.
+    from app.orchestration.react import run_react
+    from app.tools.base import Tool, ToolRequest, ToolResponse
+    from app.tools.registry import ToolRegistry
+
+    class _FailTool(Tool):
+        tool_id = "fail.tool"
+        name = "Fail"
+        description = "always fails"
+        effect_class = "read-only"  # type: ignore[assignment]
+
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, request: ToolRequest) -> ToolResponse:
+            self.calls += 1
+            return ToolResponse(
+                tool_id=self.tool_id, ok=False, output=None, error="boom"
+            )
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "try it", "executor": "fail.tool",
+         "input": {}, "is_final": False},
+        {"thought": "try it again", "executor": "fail.tool",
+         "input": {}, "is_final": False},
+        {"thought": "give up", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "failed over"},
+    ])
+    agents, _ = _react_orchestrator(provider)
+    fail_tool = _FailTool()
+    tools = ToolRegistry()
+    tools.register(fail_tool)
+    outcome = run_react(
+        "do the thing", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    # One proposal executes (plan_graph retries a failed step 3×: 1 + 2
+    # retries); the identical repeat never executes (6 calls without it).
+    assert fail_tool.calls == 3
+    assert outcome.result.step_results[-1].output == "failed over"
+    # r1 executed, r2 idle (no step), r3 final answer.
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+    assert provider.structured_calls == 3
+
+
+def test_react_refuses_rag_query_on_empty_corpus() -> None:
+    # Trace 27dcf635 iters 2+6: rag.query on "(no documents)" provably
+    # returns "(no chunks retrieved)" — refuse it as an idle turn.
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "need data", "executor": "rag.query",
+         "input": {"query": "gdp"}, "is_final": False},
+        {"thought": "answer directly", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "no docs answer"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "plot gdp", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="(no documents)",
+    )
+    assert outcome.result.step_results[-1].output == "no docs answer"
+    assert [s.step_id for s in outcome.plan.steps] == ["r2"]
+    assert provider.structured_calls == 2
+
+
+def test_react_prompt_advertises_missing_docker(monkeypatch) -> None:
+    import app.orchestration.react as react_mod
+    from app.orchestration.react import run_react
+
+    seen: list = []
+
+    class _ProbeProvider(FakeLayeredProvider):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0):
+            seen.append(messages)
+            return {"thought": "done", "executor": "reasoning",
+                    "input": {}, "is_final": True, "answer": "ok"}
+
+    monkeypatch.setattr(react_mod, "_sandbox_available", lambda: False)
+    agents, tools = _react_orchestrator(_ProbeProvider())
+    run_react("plot this", _ProbeProvider(), agents, tools,
+              trace_id="t", notebook_id="nb-1")
+    system = seen[0][0]["content"]
+    assert "code.sandbox is UNAVAILABLE" in system
+
+    seen.clear()
+    monkeypatch.setattr(react_mod, "_sandbox_available", lambda: True)
+    run_react("plot this", _ProbeProvider(), agents, tools,
+              trace_id="t", notebook_id="nb-1")
+    assert "UNAVAILABLE" not in seen[0][0]["content"]
+
+
+def test_react_prompt_allows_parametric_numbers_without_docs(monkeypatch) -> None:
+    import app.orchestration.react as react_mod
+    from app.orchestration.react import run_react
+
+    seen: list = []
+
+    class _ProbeProvider(FakeLayeredProvider):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0):
+            seen.append(messages)
+            return {"thought": "done", "executor": "reasoning",
+                    "input": {}, "is_final": True, "answer": "ok"}
+
+    monkeypatch.setattr(react_mod, "_sandbox_available", lambda: True)
+    agents, tools = _react_orchestrator(_ProbeProvider())
+    run_react("plot gdp", _ProbeProvider(), agents, tools,
+              trace_id="t", notebook_id="nb-1",
+              notebook_context="(no documents)")
+    system = seen[0][0]["content"]
+    assert "recall approximate figures with a reasoning step first" in system
+
+
+def test_validation_feedback_names_missing_executor() -> None:
+    # Trace 27dcf635 attempt 2: the model dropped tool_id entirely.
+    from app.orchestration.engine import _validation_feedback
+
+    dump = (
+        '{"goal": "g", "steps": [{"step_id": "1", '
+        '"input": {"chart_type": "line", "labels": ["a"]}}]}'
+    )
+    feedback = _validation_feedback(dump, "step 1 must set exactly one of agent_id/tool_id")
+    assert "NO-EXECUTOR" in feedback
+    assert "TOP-LEVEL" in feedback
+
+
 def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     from app.orchestration.react import run_react
 

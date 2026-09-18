@@ -127,6 +127,8 @@ class Planner:
           "*" — NEVER invented, NEVER a {{{{...}}}} placeholder (reasons
           in rule 5). Use it ONLY for convert/export/save-as requests.
         - plot.chart renders bar/line charts from explicit labels + values.
+          Single series: {{labels, values}}. Multi-series comparisons:
+          shared labels + series: [{{label, values}}] (at most 5 series).
         - code.sandbox runs a Python snippet in a locked-down container.
         - image.generate makes one image from a text prompt.
 
@@ -189,7 +191,8 @@ class Planner:
               present but all still uploading/processing/errored) → NEVER
               emit rag.query (it would provably return no chunks). A
               factual question becomes EXACTLY ONE reasoning step answering
-              generally ("not from the documents" disclaimer); summarize /
+              generally from general knowledge (verbatim request, no
+              document-grounding wrapper); summarize /
               compare / quiz become EXACTLY ONE reasoning clarification
               asking to upload or wait (expected_output_type
               "clarification"); convert follows the ambiguous-convert
@@ -241,13 +244,28 @@ class Planner:
              placeholders (",{{2}}", ",{{4}}") or text around a
              placeholder inside values: each values element is a number
              or a lone {{id}} (validator-enforced).
-           - Ambiguous convert (singular "convert it / the document" with
-             several ready files, or no target format stated, or the file
-             is still processing) → return EXACTLY ONE reasoning step
-             whose message asks the counter-question (e.g. "Which document
-             should I convert, and to which format: md, docx or pdf?").
-             The aggregator returns it verbatim as a clarification
-             question.
+            - Ambiguous convert (singular "convert it / the document" with
+              several ready files, or no target format stated, or the file
+              is still processing) → return EXACTLY ONE reasoning step
+              whose message asks the counter-question (e.g. "Which document
+              should I convert, and to which format: md, docx or pdf?").
+              The aggregator returns it verbatim as a clarification
+              question.
+            - Plot with ZERO ready files ("(no documents)", empty snapshot,
+              or files present but all still uploading/processing/errored)
+              and no user-given numbers → NEVER emit a bare plot.chart
+              (its values would be missing — rejected) and NEVER
+              code.sandbox for charting. Recall the figures parametrically:
+              ONE numbers-only reasoning step PER SERIES ("Recall
+              approximate <series> <x-axis> figures from general knowledge.
+              Return ONLY the raw numbers, comma-separated, no words. State
+              they are               approximate."), all in parallel (at most 5 series —
+              beyond that plot fewer), then ONE plot.chart with literal
+              labels plus series: [{{label: "<name>", values: [{{i}}]}}] —
+              exactly one lone placeholder per series, each resolving to a
+              numbers step — and a title noting figures are approximate
+              (e.g. "GDP comparison (approximate)"). Single-series plots
+              use values: [{{1}}] (Example B shape).
         9. PARALLELISM BUDGET (local single-model backend): steps with no
            depends_on run AT THE SAME TIME against one Ollama server.
            NEVER fan out more than 5 long-text reasoning steps in parallel

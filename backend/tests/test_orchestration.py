@@ -336,6 +336,75 @@ class TestValidator:
         )
         assert PlanValidator(agents, tools).validate(plan) is plan
 
+    def test_multiseries_plot_one_placeholder_per_series_passes(self):
+        # Trace 27dcf635 shape: parametric numbers per series + one plot.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="fake", input={"message": "usa"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", agent_id="fake", input={"message": "china"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="3", tool_id="plot.chart",
+                         input={"chart_type": "line",
+                                "labels": ["2000", "2010", "2020"],
+                                "series": [{"label": "USA", "values": ["{{1}}"]},
+                                           {"label": "China", "values": ["{{2}}"]}]},
+                         depends_on=["1", "2"], expected_output_type="chart"),
+            ],
+        )
+        assert PlanValidator(agents, tools).validate(plan) is plan
+
+    def test_plot_values_and_series_conflict_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="plot.chart",
+                         input={"chart_type": "bar", "labels": ["a"],
+                                "values": [1],
+                                "series": [{"label": "x", "values": [1]}]},
+                         expected_output_type="chart"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="exactly one"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_plot_missing_values_and_series_rejected(self):
+        # Trace 27dcf635 attempt-1 shape: labels + title, no data at all.
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="plot.chart",
+                         input={"chart_type": "line", "labels": ["USA", "China"],
+                                "title": "GDP"},
+                         expected_output_type="chart"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="missing required input"):
+            PlanValidator(agents, tools).validate(plan)
+
+    def test_multiseries_two_refs_in_one_series_rejected(self):
+        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", agent_id="fake", input={"message": "n1"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="2", agent_id="fake", input={"message": "n2"},
+                         expected_output_type="numbers"),
+                PlanStep(step_id="3", tool_id="plot.chart",
+                         input={"chart_type": "line", "labels": ["a", "b"],
+                                "series": [{"label": "x",
+                                            "values": ["{{1}}", "{{2}}"]}]},
+                         depends_on=["1", "2"], expected_output_type="chart"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="one placeholder per series"):
+            PlanValidator(agents, tools).validate(plan)
+
     def test_ungrounded_doc_generate_rejected(self):
         agents, tools = _registries(FakeAgent(), rag=FakeRAG())
         plan = Plan(

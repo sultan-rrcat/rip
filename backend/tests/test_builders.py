@@ -256,6 +256,17 @@ def test_summarize_plot_stays_l3() -> None:
     assert build("summarize and plot", route) is None
 
 
+def test_summarize_plot_empty_corpus_stays_l3() -> None:
+    # Trace 27dcf635: labels/series are model-derived even with no docs
+    # (placeholders carry whole text, so no deterministic shape can wire
+    # them) — the L3 zero-file plot rule owns this path, not a builder.
+    for intent in (Intent.SUMMARIZE_PLOT, Intent.PLOT_STANDALONE):
+        route = RouterResult(
+            intent=intent, queries=["gdp"], confidence=0.9, routed_by="llm",
+        )
+        assert build("plot gdp", route, "(no documents)") is None
+
+
 def test_deterministic_intents_all_dispatched() -> None:
     from app.orchestration.intents import DETERMINISTIC_INTENTS
 
@@ -275,13 +286,14 @@ def _qa_route(queries=None) -> RouterResult:
 
 def test_qa_single_empty_corpus_answers_generally() -> None:
     # Trace ea48cb30: "What is QLoRA?" on "(no documents)" must not emit
-    # rag.query — a single general-answer reasoning step instead.
+    # rag.query — a single general-answer reasoning step carrying the
+    # request verbatim (no document-grounding wrapper).
     plan = build("What is QLoRA?", _qa_route([]), "(no documents)")
     assert plan is not None and len(plan.steps) == 1
     assert plan.steps[0].agent_id == "reasoning"
     assert plan.steps[0].tool_id is None
     assert (plan.steps[0].expected_output_type or "").lower() == "answer"
-    assert "not from the" in str(plan.steps[0].input).lower()
+    assert plan.steps[0].input == {"message": "What is QLoRA?"}
     _validator().validate(plan)
 
 
@@ -324,3 +336,35 @@ def test_corpus_state_tristate() -> None:
     assert _corpus_state("(no documents)") == "empty"
     assert _corpus_state("1 file(s): big.pdf [processing] id=zzz") == "processing"
     assert _corpus_state(_SNAPSHOT) == "ready"
+
+
+def test_l3_prompt_carries_zero_file_plot_rule() -> None:
+    # Trace 27dcf635: the mega-prompt had no legal move for a plot with
+    # no docs and no user numbers → unguarded plot.chart, then garbage.
+    from app.agents.reasoning import ReasoningAgent
+    from app.orchestration.planner import Planner
+
+    seen: list = []
+
+    class _CaptureProvider(_FakeProvider):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0):
+            seen.append(messages)
+            return {
+                "goal": "g",
+                "steps": [
+                    {"step_id": "1", "agent_id": "reasoning",
+                     "input": {"message": "hi"},
+                     "depends_on": [], "expected_output_type": "text"}
+                ],
+            }
+
+    agents = AgentRegistry()
+    agents.register(ReasoningAgent(_FakeProvider()))
+    Planner(_CaptureProvider(), agents, get_default_tool_registry()).plan(
+        "Plot GDP comparison", notebook_context="(no documents)"
+    )
+    system = seen[0][0]["content"]
+    assert "ZERO ready files" in system
+    assert "emit a bare plot.chart" in system
+    assert "parametric" in system
+    assert "series:" in system
