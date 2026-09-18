@@ -25,7 +25,9 @@ from app.tools.base import Tool, ToolRequest, ToolResponse
 
 logger = logging.getLogger("tools.rag_query")
 
-_DEFAULT_TOP_K = 8
+_DEFAULT_TOP_K = 4
+
+_VALID_MODES = frozenset({"specific", "overview"})
 
 # Module-global singleton slot. Bound at lifespan (Phase 4.2 main.py calls
 # bind_rag_singleton(app.state.rag)) or directly in tests via RagQueryTool(rag=...).
@@ -65,16 +67,34 @@ def rag_query(
     top_k: int = _DEFAULT_TOP_K,
     *,
     rag: Any | None = None,
+    file_id: str | None = None,
+    file_name: str | None = None,
+    mode: str = "specific",
 ) -> list[dict]:
     """Search notebook documents; return chunk-level results with source metadata.
 
     Each result: {content, source (file name), section (H1>H2>H3 path),
-    rerank_score}. Raises RuntimeError when the singleton is unbound;
+    rerank_score}. ``file_id``/``file_name`` scope retrieval to one file
+    (literals from the notebook snapshot, never LLM-invented); ``mode``
+    is ``specific`` (topical rank) or ``overview`` (stratified one-per-H1
+    sample in doc order). Raises RuntimeError when the singleton is unbound;
     VectorRAG retrieval errors propagate to the caller (the Tool converts
     them to ok=False).
     """
     resolved = rag if rag is not None else get_rag_singleton()
-    context = resolved.retrieve_context(notebook_id, query, top_k=top_k)
+    try:
+        context = resolved.retrieve_context(
+            notebook_id,
+            query,
+            top_k=top_k,
+            file_id=file_id,
+            file_name=file_name,
+            mode=mode,
+        )
+    except TypeError:
+        # Back-compat with test doubles exposing the legacy
+        # retrieve_context(notebook_id, query, top_k) signature.
+        context = resolved.retrieve_context(notebook_id, query, top_k=top_k)
     results = context.get("results", [])
     if not isinstance(results, list):
         raise TypeError("VectorRAG returned a malformed context (no results list)")
@@ -86,7 +106,10 @@ class RagQueryTool(Tool):
     name = "RAG Query"
     description = (
         "Search the notebook's documents (vector + full-text, BGE reranked) "
-        "and return grounded chunks with source metadata."
+        "and return grounded chunks with source metadata. "
+        "Set file_id to scope to one file; mode='overview' returns a "
+        "stratified one-per-section sample, mode='specific' (default) "
+        "returns topical ranking."
     )
     input_schema: ClassVar[dict] = {
         "type": "object",
@@ -94,6 +117,9 @@ class RagQueryTool(Tool):
             "notebook_id": {"type": "string"},
             "query": {"type": "string"},
             "top_k": {"type": "integer"},
+            "file_id": {"type": "string"},
+            "file_name": {"type": "string"},
+            "mode": {"type": "string"},
         },
         "required": ["notebook_id", "query"],
     }
@@ -144,9 +170,46 @@ class RagQueryTool(Tool):
                 output=None,
                 error="'top_k' must be an integer",
             )
+        raw_file_id = request.input.get("file_id")
+        file_id = str(raw_file_id).strip() if isinstance(raw_file_id, str) else None
+        if file_id is not None and not file_id:
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=False,
+                output=None,
+                error="'file_id' must be a non-empty snapshot id when provided",
+            )
+        if file_id is not None and "{{" in file_id:
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=False,
+                output=None,
+                error="'file_id' must be a literal snapshot id, never a {{id}} placeholder",
+            )
+        raw_file_name = request.input.get("file_name")
+        file_name = (
+            str(raw_file_name).strip() if isinstance(raw_file_name, str) else None
+        )
+        if file_name is not None and not file_name:
+            file_name = None
+        raw_mode = request.input.get("mode", "specific")
+        mode = str(raw_mode).strip().lower() if raw_mode is not None else "specific"
+        if mode not in _VALID_MODES:
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=False,
+                output=None,
+                error="'mode' must be one of ['overview', 'specific']",
+            )
         try:
             results = rag_query(
-                str(notebook_id), str(query), top_k=top_k, rag=self._rag
+                str(notebook_id),
+                str(query),
+                top_k=top_k,
+                rag=self._rag,
+                file_id=file_id,
+                file_name=file_name,
+                mode=mode,
             )
         except RuntimeError as e:
             logger.warning("rag.query unbound/failed: %s", e)
@@ -172,5 +235,8 @@ class RagQueryTool(Tool):
                 "sources": sources,
                 "query": str(query),
                 "notebook_id": str(notebook_id),
+                "file_id": file_id,
+                "file_name": file_name,
+                "mode": mode,
             },
         )
