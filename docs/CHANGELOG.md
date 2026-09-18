@@ -10,6 +10,9 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 - When the planner still fails twice, the run now tries a step-by-step fallback (answer one small step at a time, up to 6 steps) before giving up; giving up still reports the original honest error.
 - Validator also rejects plans whose answer step merely *mentions* "step 1/2" or "retrieved chunks" in prose without actually linking the retrieval steps, with a one-retry fix hint.
 - Layered routing is now visible in Langfuse: a `router` span (sibling of `plan`, carrying intent/confidence/queries) shows which layer served the run (`L0-fast`/`L2-builder`/`L3-mega` on the `plan` span), and the step-by-step fallback traces as `react → react:iter-N → step:rN`. No behavior change; tracing stays opt-in.
+- Router precedence: any plot/draw/chart ask now routes to `summarize_plot` (never `compare_multi`, which is comparisons with no chart), and fan-out queries are requested distinct. The trace-observed "compare + plot answered with matplotlib code and no chart" misroute is addressed at the classification layer.
+- Deterministic builders for `quiz` (single-writer 2-step) and `convert_one`/`convert_all` (literal snapshot file ids, `"*"` for all; unresolvable falls through to the counter-question path). `summarize_plot` deliberately stays on the mega-prompt: chart labels are content-derived and no fixed shape may invent them.
+- Retrieval diversity: reranked results round-robin by file, so multi-document requests see every file even when one dominates global ranking (verified live: both compare queries went from single-file to mixed-file results).
 
 ## Unreleased — auto-hoist wiring keys nested in `input`
 
