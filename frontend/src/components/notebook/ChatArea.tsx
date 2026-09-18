@@ -1,5 +1,5 @@
 import SmartToyIcon from '@mui/icons-material/SmartToy'
-import { useRef, useEffect, memo } from 'react'
+import { useRef, useLayoutEffect, useEffect, memo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -68,6 +68,11 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns }: ChatA
   // Only stick to the bottom while the user is already near it, so scrolling
   // up to read mid-stream isn't yanked back on every token.
   const stickToBottomRef = useRef(true)
+  // Coalesce per-token autoscrolls to one scroll per frame. scrollIntoView
+  // is intentionally avoided: it scrolls every ancestor including the
+  // document, which pushed the h-screen shell (and Footer) mid-viewport
+  // during an active run. scrollTo on the chat container only moves ChatArea.
+  const rafRef = useRef(0)
 
   function handleScroll() {
     const el = scrollRef.current
@@ -76,16 +81,24 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns }: ChatA
     stickToBottomRef.current = distance < 80
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!stickToBottomRef.current) return
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    })
+    return () => cancelAnimationFrame(rafRef.current)
   }, [messages, activeRun])
+
+  useEffect(() => {
+    return () => cancelAnimationFrame(rafRef.current)
+  }, [])
 
   return (
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="m-1 space-y-6 flex-1 overflow-y-auto px-8 py-10 bg-white border border-gray-400 rounded-xl shadow-sm"
+      className="m-1 min-h-0 space-y-6 flex-1 overflow-y-auto overscroll-contain px-8 py-10 bg-white border border-gray-400 rounded-xl shadow-sm"
     >
       {messages.map((message) => {
         // The in-flight run renders its plan + artifacts inside the run's
@@ -232,7 +245,7 @@ function AssistantMessage({
                         {eot ? ` · ${eot}` : ''}
                         {badge ? ` · ${badge}` : ''}
                       </summary>
-                      <div className="whitespace-pre-wrap break-words text-[10px] text-gray-600">
+                      <div className="max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-[10px] text-gray-600">
                         {content}
                       </div>
                     </details>

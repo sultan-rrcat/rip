@@ -14,7 +14,7 @@ export default function Notebook() {
     useMessages(notebook_id)
 
   return (
-    <div className="flex h-screen bg-gray-200 overflow-hidden">
+    <div className="flex h-screen min-h-0 bg-gray-200 overflow-hidden">
       <LeftSidebar
         files={files}
         onUpload={handleUpload}
@@ -22,7 +22,7 @@ export default function Notebook() {
         notebookName={notebookName}
         onRenameNotebook={renameNotebook}
       />
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <ChatArea messages={messages} activeRun={activeRun} pastRuns={pastRuns} />
         <Footer
           onSendMessage={handleSendMessage}
