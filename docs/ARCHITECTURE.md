@@ -109,7 +109,7 @@ SSE vocabulary: `run_started · plan · step_started · delta · step_completed 
 
 Ingest (`services/file_processor.py`, background task): PDF→Markdown via the `RAG_PDF_LOADER` loader (Docling default, OpenDataLoader alternative; the other is the fallback) → `MarkdownHeaderTextSplitter` (H1/H2/H3 + `{source,H1,H2,H3}` metadata) → BGE-M3 embeddings → `embeddings` table.
 
-Retrieve (`rag/vector_rag.py:retrieve_context(notebook_id, query, top_k=8)`): pgvector cosine + full-text `ts_rank_cd` → dedupe → RRF (k=60) → BGE CrossEncoder rerank → threshold/filter. `rag.query` reuses the lifespan `VectorRAG` singleton (never re-instantiated — PyTorch weights are heavy).
+Retrieve (`rag/vector_rag.py:retrieve_context(notebook_id, query, top_k=4, file_id=None, mode=specific|overview)`): pgvector cosine + full-text `ts_rank_cd` → dedupe → RRF (k=60) → BGE CrossEncoder rerank → threshold/filter, capped at `top_k`. `file_id`/`file_name` scope both SQL paths to one file; `mode=overview` fetches `top_k*3` candidates, boosts overview sections (H1/H2/H3 keyword match), and stratifies one chunk per H1 in `chunk_index` order. Deterministic builders fan out one file-scoped shard per ready file (compare → `specific`, summarize/quiz → `overview`) into a single reduce step. `rag.query` reuses the lifespan `VectorRAG` singleton (never re-instantiated — PyTorch weights are heavy).
 
 ---
 

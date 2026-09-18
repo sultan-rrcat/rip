@@ -152,6 +152,20 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Consequences:** Happy path costs one extra cheap call (router) or zero (fast-path/deterministic hit); worst path is bounded (router + 2 plans + ≤6 single steps). New capabilities should land as intents + builders, not prompt appendices. `test_layered.py` pins the chain; recall-test queues carry a router-miss head.
 - **Observability amendment (Option A, trace-only):** the router emits a `router` span as a sibling of `plan` under `run` (explicit `run_ctx` parenting; no graph/state change), `plan` output carries `layer/intent/routed_by/confidence`, and the ReAct fallback traces as `react → react:iter-N → step:rN` with fixed `parent_span_ctx` threading. The SSE `plan` event carries additive `route: {intent, routed_by, confidence}`.
 
+## ADR-030: File-scoped intelligent retrieval (per-file shards + overview mode)
+
+- **Status:** Accepted (2026-09-18, trace `795abaf2` — both compare queries returned one document)
+- **Context:** `rag.query` was notebook-global (SQL filtered only `notebook_id`) and `build_compare_multi` fanned out by LLM query-angle, not by file. Two generic topical queries embed similarly and both retrieve the dominant document; the post-hoc `_interleave_by_source` cannot recover chunks that never passed the rerank threshold.
+- **Decision:** (1) Extend `rag.query`/`VectorRAG.retrieve_context` with optional `file_id`/`file_name` (SQL `AND file_id=...`, literals from snapshot only, never invented/placeholders) and `mode=specific|overview` (default `specific`). Overview fetches `top_k*3` candidates, applies a metadata section-keyword boost (introduction/summary/abstract/..., never slash-joined into the embedding query), then stratifies one chunk per H1 in `chunk_index` order. (2) Builders fan out per ready snapshot file (`top_k=4` each, ≤5 shards): compare → `specific` with request text; summarize/quiz → `overview` into one reduce/writer. `summarize` joins `DETERMINISTIC_INTENTS`; `>5` files fall through to L3. (3) Validator rejects empty/placeholder `file_id` and unknown `mode`. No new tool (tools stay LLM-free; reasoning agent still reduces), no schema change (`embeddings.file_id/chunk_index` already stored).
+- **Consequences:** Compare/summarize/quiz scale with file count (4 chunks/file); global `qa_single` unchanged. Separate `rag.summary` tool rejected (duplicate retrieval path, larger planner menu against ADR-029).
+
+## ADR-031: ReAct input contract + plot preference (trace `c9e59039`)
+
+- **Status:** Accepted (2026-09-18)
+- **Context:** `summarize_plot` stays on L3 (labels content-derived) and failed twice (nested-step + missing-placeholder plans); the ReAct fallback then burned all 6 iterations on input-shape errors — `{"agent": {"message": ...}}` for `rag.query`/`code.sandbox`, missing `target_format` for `doc.convert` — and picked `code.sandbox` over `plot.chart` for a bar-chart ask. The one successful `rag.query` (correct class table, file-scoped) was buried under joined failure lines.
+- **Decision:** (1) ReAct prompt states FLAT input shapes with per-tool one-liners + WRONG/RIGHT example and hard plot rule (bar/line → `plot.chart` with literals, never `code.sandbox`). (2) `react.py` normalizes (`agent.message` unwrap, stray `tool_id` drop, `message→query`/`message→code` aliases mirroring `RagQueryTool`) and pre-flight validates required fields before execution — malformed turns get a correct-shape scratchpad hint as an idle turn without consuming a step. (3) L3 prompt unified to `top_k: 4` + explicit "BOTH numbers and answer steps MUST contain `{{1}}`" line.
+- **Consequences:** Malformed-model turns no longer burn the 6-iteration budget; chart asks route to the deterministic SVG path. `summarize_plot` remains L3-only (no deterministic builder — label hallucination risk per ADR-027 stands).
+
 ---
 
 ## Historical (superseded, one line each)

@@ -4,6 +4,17 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — ReAct input contract + plot preference (trace `c9e59039`)
+
+- The step-by-step fallback no longer burns its 6-step budget on malformed tool inputs: `{"agent": {"message": …}}` shapes are normalized to flat fields (`message→query`/`code` aliases), stray `tool_id` keys dropped, and missing required fields get a correct-shape retry hint without executing. Bar/line chart asks route to `plot.chart` with literal numbers, never `code.sandbox`.
+- L3 planner prompt unified to `top_k: 4` (stale `8`s removed) with an explicit both-branches-need-`{{1}}` rule for summarize+plot plans.
+
+## Unreleased — file-scoped intelligent RAG (per-file shards + overview mode)
+
+- `rag.query` is now file-aware: optional `file_id`/`file_name` scopes retrieval to one file (literals from the snapshot, never invented/placeholders), and `mode` selects `specific` (topical ranking, default) vs `overview` (stratified one-per-H1 sample in doc order with section-keyword boost). Default `top_k` is now 4 per shard.
+- Deterministic builders fan out per file instead of per query-angle: `compare_multi` uses one `specific` shard per ready file (request text as query, so complexity/signal sections rank), `summarize`/`quiz` use one `overview` shard per file into a single reduce/writer step. `summarize` is now a deterministic intent; `>5` ready files fall through to the mega-prompt. Fixes the trace-observed single-document collapse on "compare both reports".
+- Validator rejects empty/placeholder `file_id` and unknown `mode`; planner prompt documents the file-scoped compare/summarize/quiz rule. Snapshot `file_id` parsing now strips trailing `;`/`,` separators.
+
 ## Unreleased — layered planning (router + builders + ReAct fallback)
 
 - Simple requests now skip the big planning prompt: greetings answer directly with no planning call, and single questions / compare-two-reports requests use a fixed, pre-validated plan shape (retrieval steps fanning into one grounded answer step) instead of asking the model to invent the wiring. The compare-two-reports failure from testing (answer asked the user to re-upload instead of reading the retrieved documents) is fixed by construction.
