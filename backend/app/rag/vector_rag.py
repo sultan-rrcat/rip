@@ -4,6 +4,34 @@ from app.core.db import pg_connection
 
 logger = setup_logging()
 
+def _interleave_by_source(items: list[dict]) -> list[dict]:
+    """Round-robin items so no single file starves the others.
+
+    Groups by ``metadata.source`` (first-seen file order decides the
+    rotation), preserving relative order within each file. Single-file
+    and empty inputs come back unchanged. Applied to the rerank-sorted
+    list, so global ranking still decides *within* a file — interleaving
+    only decides *across* files. Without this, a compare-two-documents
+    request collapses to whichever file ranks higher globally (observed
+    live: 2 ready files, both fan-out queries returned one document).
+    """
+    groups: dict[str, list[dict]] = {}
+    for item in items:
+        metadata = item.get("metadata") or {}
+        source = metadata.get("source", "unknown")
+        groups.setdefault(source, []).append(item)
+    if len(groups) <= 1:
+        return items
+    ordered = list(groups.values())
+    longest = max(len(g) for g in ordered)
+    merged: list[dict] = []
+    for i in range(longest):
+        for group in ordered:
+            if i < len(group):
+                merged.append(group[i])
+    return merged
+
+
 class VectorRAG(RagPipeline):
     def retrieve_context(
         self, notebook_id, user_prompt, top_k=5, vector_threshold=0.1, rerank_threshold=0.05
@@ -125,6 +153,10 @@ class VectorRAG(RagPipeline):
             else:
                 logger.info("No results found to rerank.")
                 final_list = sorted_contexts
+
+            # Diversity: round-robin by file so multi-document requests
+            # see every file even when one dominates global ranking.
+            final_list = _interleave_by_source(final_list)
 
             # logger.info(f"Rerank subset: {rerank_subset}")
 
