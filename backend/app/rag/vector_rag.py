@@ -315,8 +315,12 @@ class VectorRAG(RagPipeline):
             logger.info(f"Total unique contexts merged: {len(sorted_contexts)}")
             # logger.info(f"RRF Contexts : {sorted_contexts}")
 
-            # Reranking (overview reranks the full candidate pool for stratification)
-            rerank_k = len(sorted_contexts) if normalized_mode == "overview" else top_k * 3
+            # Reranking (overview reranks a bounded pool for stratification).
+            # Full-pool rerank kept CrossEncoder work unbounded (trace
+            # cfbaa9c3: two parallel overviews timed out at 30s); cap at
+            # top_k*3 (12 for the standard top_k=4) so latency stays flat
+            # while stratification still sees a stratified candidate set.
+            rerank_k = min(len(sorted_contexts), top_k * 3) if normalized_mode == "overview" else top_k * 3
             rerank_subset = sorted_contexts[:rerank_k]
 
             if rerank_subset:

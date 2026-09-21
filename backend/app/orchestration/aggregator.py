@@ -25,14 +25,20 @@ Type-aware deterministic rules (ADR-023 as amended):
 from __future__ import annotations
 
 import logging
+import re
 
 from pydantic import BaseModel, Field
 
 from app.agents.base import StepStatus
 from app.orchestration.plan import Plan
-from app.orchestration.results import ExecutionResult
+from app.orchestration.results import ExecutionResult, StepResult
 
 logger = logging.getLogger("orchestration.aggregator")
+
+#: Unresolved {{id}} placeholders must never reach the user (trace cfbaa9c3:
+#: a reasoning step answered "I don't have access to {{1}} and {{2}}...").
+#: Outputs carrying them are treated as ungrounded failures, not answers.
+_UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[A-Za-z0-9_-]+\s*\}\}")
 
 #: Placeholder replacing raw chart SVG in the user-visible summary. The SVG
 #: bytes stay on StepResult.output (placeholder resolution, traces) and are
@@ -139,6 +145,43 @@ class Aggregator:
             return meta.executor_id == "notebook.inspect"
 
         shown = [r for r in ordered_successful if not _hidden(r.step_id)]
+        # Ungrounded-leak guard: a terminal output still carrying {{id}}
+        # means placeholder resolution failed upstream (validator bypass or
+        # pre-validation plan). Showing it leaks internals ("paste {{1}}");
+        # demote to a failure line so the run retries honestly instead.
+        leaked = [r for r in shown if _UNRESOLVED_PLACEHOLDER.search(r.output or "")]
+        if leaked:
+            shown = [r for r in shown if r not in leaked]
+            for r in leaked:
+                failed.append(
+                    StepResult(
+                        step_id=r.step_id,
+                        agent_id=r.agent_id,
+                        status=StepStatus.FAILURE,
+                        error="ungrounded response (unresolved placeholders)",
+                    )
+                )
+            # Recompute status: demoted terminals are failures now.
+            effective_success = [r for r in ordered_successful if r not in leaked]
+            if effective_success and failed:
+                status = "partial"
+            elif not effective_success:
+                status = "failed"
+            plan_incomplete = True
+        # Duplicate-output guard: identical terminal outputs (trace 07fb4f59
+        # plotted the same Avg-Tokens SVG twice, r2 then r3) would render
+        # the same plot/text twice in chat. Keep the first, hide the rest —
+        # the content is already visible, nothing is lost.
+        if len(shown) > 1:
+            seen_outputs: set[str] = set()
+            deduped = []
+            for r in shown:
+                key = r.output or ""
+                if key in seen_outputs:
+                    continue
+                seen_outputs.add(key)
+                deduped.append(r)
+            shown = deduped
         if shown:
             if len(shown) == 1:
                 summary = _summarizable(shown[0].output)

@@ -140,18 +140,29 @@ def _try_numeric(s: str) -> int | float | str:
     return s
 
 
+#: Fail-closed marker substituted for placeholders whose upstream step did
+#: not succeed (timed out / failed / unknown). Matches the rag.query empty
+#: output so grounded prompts ("Say 'not in the documents' when the chunks
+#: are empty") trigger instead of leaking literal "{{id}}" to the LLM
+#: (trace cfbaa9c3: summarize ran reasoning on "{{1}} {{2}}" after two
+#: overview timeouts and asked the user to paste chunks).
+_EMPTY_CHUNKS_MARKER = "(no chunks retrieved)"
+
+
 def _resolve_value(value: object, outputs: dict[str, str]) -> object:
     if isinstance(value, str):
         # Check if the entire string is a single placeholder (e.g. "{{1}}").
         # If so, resolve and try numeric conversion — enables tool steps to
         # receive numeric values from upstream step outputs.
-        m = _PLACEHOLDER.fullmatch(value)
+        m = _PLACEHOLDER.fullmatch(value.strip())
         if m:
-            resolved = outputs.get(m.group(1), m.group(0))
+            resolved = outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER)
             return _try_numeric(resolved)
-        # Embedded placeholder (e.g. "Result is {{1}}") — string substitution only.
+        # Embedded placeholder (e.g. "Result is {{1}}") — string substitution
+        # only; unknown/failed refs become the empty-chunks marker so the
+        # downstream LLM never sees raw "{{id}}" internals.
         return _PLACEHOLDER.sub(
-            lambda m: outputs.get(m.group(1), m.group(0)),
+            lambda m: outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER),
             value,
         )
     if isinstance(value, dict):
@@ -342,9 +353,20 @@ def _step_timeout_ms(step: PlanStep, default_ms: int) -> int:
     Agent steps stream long text out of a single local Ollama server
     (observed 25–77s for a 5-MCQ write on qwen2.5:14b); they get the
     provider budget (`ollama_timeout_ms`, 120s). Deterministic tool steps
-    (rag.query, plot.chart, …) stay on the tight default (30s).
+    (rag.query, plot.chart, …) stay on the tight default (30s) — except
+    `rag.query` in `overview` mode, which reranks a 3x candidate pool for
+    stratification (trace cfbaa9c3: two parallel overviews both hit 30s).
+    Overview shards get double the default so summarize/quiz fan-outs
+    survive BGE rerank on CPU.
     """
     if step.tool_id:
+        if step.tool_id == "rag.query":
+            try:
+                mode = str((step.input or {}).get("mode", "")).strip().lower()
+            except (AttributeError, TypeError):
+                mode = ""
+            if mode == "overview":
+                return default_ms * 2
         return default_ms
     return settings.ollama_timeout_ms
 

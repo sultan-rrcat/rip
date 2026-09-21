@@ -4,6 +4,12 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — fail-closed summarize path (trace `cfbaa9c3`)
+
+- "Summarize the docs" no longer leaks `{{1}} {{2}}` internals: a retrieval step that times out now resolves downstream placeholders to `(no chunks retrieved)` so the writer answers "not in the documents" (plus honest failure lines that trigger the one-retry recall) instead of asking the user to paste chunks. Terminal outputs still carrying `{{id}}` are demoted to failure lines by the aggregator rather than shown.
+- Overview retrieval fits the timeout budget: `overview` shards get double the tool deadline (60s) and rerank at most `top_k*3` candidates (12 at the standard `top_k=4`) instead of the unbounded pool.
+- The step-by-step fallback retrieves broadly and finishes with prose: summarize/compare/quiz asks default `rag.query` to `mode=overview`, and an exhausted loop synthesizes one grounded answer from its observations instead of returning a truncated raw chunk dump.
+
 ## Unreleased — empty-notebook routing (trace `ea48cb30`)
 
 - Factual questions on a notebook with no ready documents no longer burn a retrieval step that provably returns nothing: `qa_single` answers generally from general knowledge (verbatim request, no document-grounding wrapper), while summarize/compare/quiz ask to upload or wait (single reasoning step, no `rag.query`). Files still processing yield a wait-and-retry clarification; an unreadable snapshot still attempts retrieval (the database, not the snapshot, is ground truth).

@@ -163,7 +163,9 @@ def build_qa_single(query: str, request_text: str) -> Plan:
                     "message": (
                         f"Answer the user's request using ONLY these retrieved "
                         f"chunks {{{{1}}}}. Say 'not in the documents' when the "
-                        f"chunks are empty. Request: {request_text}"
+                        f"chunks are empty or read '(no chunks retrieved)'. "
+                        f"Never mention chunk ids or placeholders. "
+                        f"Request: {request_text}"
                     )
                 },
                 depends_on=["1"],
@@ -232,7 +234,9 @@ def build_compare_multi(
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), address the "
                     f"request. Say 'not in the documents' for anything the "
-                    f"chunks do not cover. Request: {request_text}"
+                    f"chunks do not cover, including when they read "
+                    f"'(no chunks retrieved)'. Never mention chunk ids or "
+                    f"placeholders. Request: {request_text}"
                 )
             },
             depends_on=dep_ids,
@@ -289,7 +293,9 @@ def build_summarize(request_text: str, notebook_context: str | None = None) -> P
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), write the "
                     f"requested summary. Say 'not in the documents' when the "
-                    f"chunks are empty. Request: {request_text}"
+                    f"chunks are empty or read '(no chunks retrieved)'. "
+                    f"Never mention chunk ids or placeholders. "
+                    f"Request: {request_text}"
                 )
             },
             depends_on=dep_ids,
@@ -337,7 +343,9 @@ def build_quiz(
                     "message": (
                         f"Using ONLY these retrieved chunks ({refs}), "
                         f"write the requested questions/quiz. Say 'not in "
-                        f"the documents' when the chunks are empty. "
+                        f"the documents' when the chunks are empty or read "
+                        f"'(no chunks retrieved)'. Never mention chunk ids "
+                        f"or placeholders. "
                         f"Request: {request_text}"
                     )
                 },
@@ -367,7 +375,9 @@ def build_quiz(
                     "message": (
                         f"Using ONLY these retrieved chunks {{{{1}}}}, "
                         f"write the requested questions/quiz. Say 'not in "
-                        f"the documents' when the chunks are empty. "
+                        f"the documents' when the chunks are empty or read "
+                        f"'(no chunks retrieved)'. Never mention chunk ids "
+                        f"or placeholders. "
                         f"Request: {request_text}"
                     )
                 },

@@ -1517,3 +1517,98 @@ class TestPlaceholderEdges:
         assert result.status == "success" and result.summary == "final"
         assert "{{1}}" not in agent.seen[0]["message"]
         assert "chunk-one" in agent.seen[0]["message"]
+
+
+# --- Fail-closed placeholders (trace cfbaa9c3: summarize timeouts) ---
+
+
+class TestFailClosedPlaceholders:
+    def test_missing_placeholder_resolves_to_empty_marker(self):
+        from app.orchestration.plan_graph import _resolve_value
+
+        assert _resolve_value("{{1}}", {}) == "(no chunks retrieved)"
+        out = _resolve_value("Using ONLY ({{1}} {{2}}), summarize", {"1": "ABC"})
+        assert "{{" not in out and "(no chunks retrieved)" in out
+
+    def test_dependent_runs_on_empty_marker_after_upstream_timeout(self):
+        class _TimeoutRAG:
+            def retrieve_context(self, *a, **k):
+                import time as _t
+                _t.sleep(5)
+                return {"query": "x", "results": []}
+
+        agent = FakeAgent(output="seen")
+        agents = AgentRegistry()
+        agents.register(agent)
+        tools = get_default_tool_registry(rag=_TimeoutRAG())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query",
+                         input={"query": "x", "top_k": 1},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "summarize {{1}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        result = run_plan_graph(
+            plan, agents, tool_registry=tools, trace_id="t", timeout_ms=50,
+        )
+        assert result.step_results[0].status is StepStatus.FAILURE
+        assert result.step_results[1].status is StepStatus.SUCCESS
+        assert "{{1}}" not in agent.seen[0]["message"]
+        assert "(no chunks retrieved)" in agent.seen[0]["message"]
+
+    def test_overview_shard_gets_double_tool_budget(self):
+        from app.orchestration.plan_graph import _step_timeout_ms
+
+        overview = PlanStep(step_id="1", tool_id="rag.query",
+                            input={"query": "x", "mode": "overview"})
+        specific = PlanStep(step_id="2", tool_id="rag.query",
+                            input={"query": "x", "mode": "specific"})
+        assert _step_timeout_ms(overview, 30000) == 60000
+        assert _step_timeout_ms(specific, 30000) == 30000
+
+    def test_aggregator_demotes_answer_with_unresolved_placeholders(self):
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="reasoning",
+                         input={"message": "m"}, depends_on=["1"],
+                         expected_output_type="answer"),
+            ],
+        )
+        res = ExecutionResult(trace_id="t", step_results=[
+            _fail("1", "step timed out", "rag.query"),
+            _ok("2", "sorry, no access to {{1}} chunks"),
+        ])
+        agg = Aggregator().aggregate(plan, res)
+        assert "{{1}}" not in agg.summary
+        assert agg.shown == [] or all(s != "2" for s in agg.shown)
+        assert agg.status in ("partial", "failed")
+
+    def test_aggregator_collapses_identical_chart_outputs(self):
+        # Trace 07fb4f59 r2/r3: the same SVG surfaced twice, so the
+        # frontend showed the same plot twice. Identical terminal outputs
+        # keep the first step shown; the rest hide.
+        svg = "<svg xmlns='x'><title>same chart</title></svg>"
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="plot.chart",
+                         input={"chart_type": "bar"}, expected_output_type="chart"),
+                PlanStep(step_id="2", tool_id="plot.chart",
+                         input={"chart_type": "bar"}, expected_output_type="chart"),
+            ],
+        )
+        res = ExecutionResult(trace_id="t", step_results=[
+            _ok("1", svg, "plot.chart"),
+            _ok("2", svg, "plot.chart"),
+        ])
+        agg = Aggregator().aggregate(plan, res)
+        assert agg.shown == ["1"]
+        assert agg.hidden == ["2"]
+        assert agg.summary.count("Chart generated") == 1
