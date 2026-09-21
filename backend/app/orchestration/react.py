@@ -136,15 +136,58 @@ def _validate_react_input(executor: str, action_input: dict) -> str | None:
     if executor == "plot.chart":
         labels = action_input.get("labels")
         values = action_input.get("values")
-        if (
-            str(action_input.get("chart_type", "")).strip()
-            and isinstance(labels, list)
-            and labels
-            and isinstance(values, list)
-            and values
-        ):
+        series = action_input.get("series")
+        if not str(action_input.get("chart_type", "")).strip():
+            return _TOOL_INPUT_HINTS["plot.chart"]
+        if not isinstance(labels, list) or not labels:
+            return _TOOL_INPUT_HINTS["plot.chart"]
+        if "series_labels" in action_input:
+            # Trace 07fb4f59 iter-4 shape: invented key alongside nested
+            # values — the tool reads `series`, never `series_labels`.
+            return (
+                "plot.chart has no 'series_labels' field; for grouped "
+                "comparisons pass 'series: [{label, values}]' with shared "
+                "'labels', never nested 'values' arrays"
+            )
+        if series is not None:
+            if values is not None:
+                return (
+                    "plot.chart takes either 'values' (single series) or "
+                    "'series' (multi-series comparison), never both"
+                )
+            if not isinstance(series, list) or not series:
+                return _TOOL_INPUT_HINTS["plot.chart"]
+            for entry in series:
+                if not isinstance(entry, dict) or not str(entry.get("label", "")).strip():
+                    return (
+                        "plot.chart 'series' entries must be "
+                        "{label, values} objects with a non-empty label"
+                    )
+                entry_values = entry.get("values")
+                if (
+                    not isinstance(entry_values, list)
+                    or not entry_values
+                    or any(isinstance(v, (list, dict)) for v in entry_values)
+                ):
+                    return (
+                        f"plot.chart series {entry.get('label')!r} 'values' "
+                        "must be a flat array of numbers"
+                    )
             return None
-        return _TOOL_INPUT_HINTS["plot.chart"]
+        # Single-series: values must be a flat array of numbers. Nested
+        # arrays (trace 07fb4f59 iters 1+4) fail in the tool with
+        # "'values' must all be numbers" — catch here as an idle turn so
+        # the iteration budget is preserved for a corrected shape.
+        if not isinstance(values, list) or not values:
+            return _TOOL_INPUT_HINTS["plot.chart"]
+        if any(isinstance(v, (list, dict)) for v in values):
+            return (
+                "plot.chart 'values' must be a flat array of numbers "
+                "(one per label); for grouped comparisons use "
+                "'series: [{label, values}]' with shared 'labels' instead "
+                "of nesting arrays inside 'values'"
+            )
+        return None
     if executor == "doc.convert":
         if str(action_input.get("file_id", "")).strip() and str(
             action_input.get("target_format", "")
@@ -186,6 +229,93 @@ def _action_signature(executor: str, action_input: dict) -> str:
         return executor + "\0" + json.dumps(action_input, sort_keys=True, default=str)
     except (TypeError, ValueError):
         return executor + "\0" + str(sorted(action_input))
+
+
+def _plot_data_key(action_input: dict) -> tuple | None:
+    """Normalized data identity for a plot.chart proposal.
+
+    Same chart data under cosmetic tweaks (retitled, relabeled — trace
+    07fb4f59 r5/r6 re-plotted [229, 135] with different labels) renders the
+    same bars, so the frontend would show the same plot twice. The key
+    covers chart_type + the numeric data only, ignoring title/labels/legend
+    cosmetics. Returns None when the numbers cannot be read (validation
+    owns that shape — this is a dedupe helper, not a validator).
+    """
+    try:
+        chart_type = str(action_input.get("chart_type", "")).strip()
+        series = action_input.get("series")
+        if isinstance(series, list) and series:
+            parts = []
+            for entry in series:
+                if not isinstance(entry, dict):
+                    return None
+                numbers = tuple(float(v) for v in (entry.get("values") or []))
+                parts.append(numbers)
+            return (chart_type, tuple(parts))
+        values = action_input.get("values")
+        if not isinstance(values, list):
+            return None
+        flat: list[float] = []
+        for v in values:
+            if isinstance(v, (list, dict)):
+                return None
+            flat.append(float(v))
+        return (chart_type, tuple(flat))
+    except (TypeError, ValueError):
+        return None
+
+
+def _chart_observation(action_input: dict) -> str:
+    """Short scratchpad line for a successful chart — never raw SVG.
+
+    Raw SVG observations (multi-KB) flood the scratchpad/synthesis context
+    and teach the model nothing; the chart itself travels via the SSE
+    artifacts event. Trace 07fb4f59's r-final redrew the charts as ASCII
+    blocks because all it could see was SVG soup.
+    """
+    title = str(action_input.get("title", "") or "").strip()
+    labels = action_input.get("labels")
+    if title:
+        return f"chart generated: {title}"
+    if isinstance(labels, list) and labels:
+        return f"chart generated for labels {labels}"
+    return "chart generated"
+
+
+def _synthesis_evidence_line(result) -> str:
+    """One evidence line for the final-synthesis prompt.
+
+    Chart successes collapse to a one-liner (the SVG bytes already travel
+    via Artifacts; pasting them here only invites ASCII redraws like trace
+    07fb4f59's r-final). Everything else keeps its truncated text.
+    """
+    if result.agent_id == "plot.chart" or (result.output or "").lstrip().startswith("<svg"):
+        return f"[{result.step_id} (plot.chart)] chart already generated and shown in Artifacts"
+    return f"[{result.step_id} ({result.agent_id})]\n{(result.output or '')[:1500]}"
+
+
+#: Request keywords that need breadth (stratified sample), not topical rank.
+#: The ReAct model defaults rag.query to mode=specific; without this hint a
+#: "summarize the docs" loop retrieves REFERENCES sections repeatedly
+#: (trace cfbaa9c3) instead of overview content.
+_OVERVIEW_HINTS = (
+    "summar", "overview", "compare", "contrast", "quiz",
+    "overall", "main topics", "key points",
+)
+
+
+def _default_react_mode(request_text: str, action_input: dict) -> dict:
+    """Default broad asks to overview retrieval (stratified one-per-H1).
+
+    Pure helper: sets mode=overview only when the model left it unset and
+    the request needs breadth. Single-fact QA keeps the specific default.
+    """
+    if str(action_input.get("mode", "")).strip():
+        return action_input
+    lowered = (request_text or "").lower()
+    if any(h in lowered for h in _OVERVIEW_HINTS):
+        action_input["mode"] = "overview"
+    return action_input
 
 
 class ReactResult:
@@ -232,6 +362,15 @@ def run_react(
     # empty result). A proposed repeat becomes an idle turn — no execution,
     # budget preserved for a different executor or a final answer.
     failed_actions: dict[str, str] = {}
+    # Signatures of SUCCESSFUL executions (trace 07fb4f59 plotted the
+    # identical Avg-Tokens chart twice, r2 then r3 verbatim). An exact
+    # repeat becomes an idle turn — the chart/answer already exists.
+    seen_actions: set[str] = set()
+    # Normalized chart data already plotted (chart_type + numbers, ignoring
+    # title/labels cosmetics — trace 07fb4f59 r5/r6 re-plotted [229, 135]
+    # under different labels). Re-plotting the same data renders the same
+    # bars, so the frontend would show the same plot twice.
+    plotted_data: set[tuple] = set()
     # rag.query is provably useless when the snapshot holds zero ready
     # files (same argument as the L2 empty-corpus short-circuit) — refuse
     # it once instead of burning iterations on "(no chunks retrieved)".
@@ -248,6 +387,7 @@ def run_react(
     # contextvars dependence across the thread hops below. No-op when
     # tracing is off.
     react_ctx = parent_span_ctx if parent_span_ctx is not None else _get_trace_context()
+    final_answered = False
     for iteration in range(1, max_iterations + 1):
         with _manual_span(
             f"react:iter-{iteration}",
@@ -287,12 +427,18 @@ def run_react(
                 "the tool reads top-level fields, so this fails with "
                 "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
                 "Prefer rag.query first when documents are available. "
+                "For summarize/compare/quiz or 'overall content' asks use "
+                "rag.query mode='overview' (stratified one-per-section "
+                "sample); single-fact QA keeps the specific default. "
                 "When the notebook has no documents and no observation "
                 "holds numbers, recall approximate figures with a reasoning "
                 "step first (state they are approximate), then plot.chart. "
                 "Bar/line charts MUST use plot.chart with literal numbers "
                 "from observations (or a prior reasoning step) — never "
-                "code.sandbox for charting. "
+                "code.sandbox for charting. Each plot.chart must cover a "
+                "DIFFERENT metric — never re-plot numbers already charted; "
+                "grouped comparisons use series:[{label, values}] with "
+                "shared labels, never nested values arrays. "
                 + (
                     ""
                     if sandbox_available
@@ -369,6 +515,7 @@ def run_react(
                         status=StepStatus.SUCCESS, output=str(answer),
                     )
                 )
+                final_answered = True
                 iter_obs.update(output={
                     "status": "success",
                     "thought": thought_in,
@@ -398,6 +545,8 @@ def run_react(
             action_input = _normalize_react_input(
                 executor, dict(raw_input) if isinstance(raw_input, dict) else {}
             )
+            if executor == "rag.query":
+                action_input = _default_react_mode(request_text, action_input)
             if executor in known_tools:
                 hint = _validate_react_input(executor, action_input)
                 if hint is not None:
@@ -473,6 +622,48 @@ def run_react(
                     "error": _truncate(f"repeat of failed {executor}", 500),
                 })
                 continue
+            if sig in seen_actions:
+                idle_turns += 1
+                if idle_turns >= 2:
+                    iter_obs.update(output={
+                        "status": "failed",
+                        "error": _truncate(f"{executor} already did this exact step", 500),
+                    })
+                    break
+                scratchpad.append(
+                    f"{executor} with these exact inputs already succeeded; "
+                    "do something different (a new metric, or answer from "
+                    "what you have)."
+                )
+                iter_obs.update(output={
+                    "status": "retry",
+                    "thought": thought_in,
+                    "executor": executor,
+                    "error": _truncate(f"repeat of successful {executor}", 500),
+                })
+                continue
+            if executor == "plot.chart":
+                data_key = _plot_data_key(action_input)
+                if data_key is not None and data_key in plotted_data:
+                    idle_turns += 1
+                    if idle_turns >= 2:
+                        iter_obs.update(output={
+                            "status": "failed",
+                            "error": "chart data already plotted",
+                        })
+                        break
+                    scratchpad.append(
+                        "these numbers are already plotted in an earlier "
+                        "chart; plot a DIFFERENT metric or answer from what "
+                        "you have — never re-plot the same data."
+                    )
+                    iter_obs.update(output={
+                        "status": "retry",
+                        "thought": thought_in,
+                        "executor": executor,
+                        "error": "chart data already plotted",
+                    })
+                    continue
             idle_turns = 0
             step_id = f"r{iteration}"
             is_tool = executor in known_tools
@@ -522,17 +713,25 @@ def run_react(
             steps.append(mini.steps[0])
             step_results.append(outcome)
             idle_turns = 0  # an executed step is progress, even on tool failure
+            seen_actions.add(sig)
             thought = str(raw.get("thought", ""))[:300]
             if outcome.status is StepStatus.SUCCESS:
+                if is_tool and executor == "plot.chart":
+                    data_key = _plot_data_key(action_input)
+                    if data_key is not None:
+                        plotted_data.add(data_key)
+                    observation = _chart_observation(action_input)
+                else:
+                    observation = (outcome.output or "")[:1500]
                 scratchpad.append(
                     f"step {step_id} ({executor}) thought: {thought} "
-                    f"observation: {(outcome.output or '')[:1500]}"
+                    f"observation: {observation}"
                 )
                 iter_obs.update(output={
                     "status": "success",
                     "thought": thought_in,
                     "executor": executor,
-                    "observation": _truncate(outcome.output, 2000),
+                    "observation": _truncate(observation, 2000),
                 })
             else:
                 failed_actions[sig] = outcome.error or "unknown error"
@@ -545,6 +744,61 @@ def run_react(
                     "executor": executor,
                     "error": _truncate(outcome.error, 500),
                 })
+    if not final_answered:
+        # Exhausted iterations without is_final (trace cfbaa9c3: six
+        # rag.query observations, final summary was a truncated raw chunk
+        # dump via the aggregator anti-blank fallback). Synthesize one
+        # grounded answer from the successful observations so the user gets
+        # prose covering every retrieved document instead of raw chunks.
+        successes = [
+            r for r in step_results
+            if r.status is StepStatus.SUCCESS and (r.output or "").strip()
+        ]
+        if successes and not (cancel_event is not None and cancel_event.is_set()):
+            synth_id = "reasoning" if "reasoning" in known_agents else (agent_ids[0] if agent_ids else "")
+            if synth_id:
+                evidence = "\n\n".join(
+                    _synthesis_evidence_line(r) for r in successes[-4:]
+                )
+                synth_message = (
+                    f"Synthesize the final answer to the request using ONLY "
+                    f"these observations. Cover every document below; do not "
+                    f"ask the user to upload or paste anything. Charts are "
+                    f"already rendered in Artifacts — describe each chart's "
+                    f"takeaway and give a summary table, but NEVER redraw "
+                    f"charts as ASCII/text blocks. "
+                    f"Request: {request_text}\n\nObservations:\n{evidence}"
+                )
+                try:
+                    synth_plan = Plan(
+                        plan_id=f"react-final-{uuid.uuid4().hex[:8]}",
+                        goal=request_text,
+                        steps=[
+                            PlanStep(
+                                step_id="r-final", agent_id=synth_id,
+                                input={"message": synth_message},
+                                expected_output_type="answer",
+                            )
+                        ],
+                    )
+                    synth_result = run_plan_graph(
+                        synth_plan, agents, tool_registry=tools,
+                        trace_id=trace_id, notebook_id=notebook_id,
+                        context=context, fallback_message=request_text,
+                        timeout_ms=timeout_ms or settings.default_timeout_ms,
+                        on_event=on_event, cancel_event=cancel_event,
+                        parent_span_ctx=_get_trace_context(),
+                    )
+                    synth_outcome = (
+                        synth_result.step_results[0]
+                        if synth_result.step_results else None
+                    )
+                    if synth_outcome is not None and synth_outcome.status is StepStatus.SUCCESS:
+                        steps.append(synth_plan.steps[0])
+                        step_results.append(synth_outcome)
+                        final_answered = True
+                except Exception as e:  # noqa: BLE001 - synthesis miss keeps raw steps
+                    logger.warning("react final synthesis failed: %s", e)
     plan = Plan(
         plan_id=str(uuid.uuid4()), goal=request_text,
         steps=steps or [

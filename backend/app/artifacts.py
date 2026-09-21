@@ -70,6 +70,10 @@ def collect_artifacts(
         Path(upload_dir) / str(notebook_id) / "artifacts" / str(run_id)
     )
     found: list[dict] = []
+    # Content hashes of charts already collected: identical SVG bytes
+    # (trace 07fb4f59 r2/r3 plotted the same data twice) would otherwise
+    # surface the same plot twice in the frontend Artifacts panel.
+    seen_charts: set[str] = set()
     for result in step_results:
         if getattr(result.status, "value", result.status) != "success":
             continue
@@ -78,7 +82,10 @@ def collect_artifacts(
             continue
         step_id = _safe(str(getattr(result, "step_id", "step")))
         found.extend(
-            _collect_from_data(data, run_dir=run_dir, run_id=str(run_id), step_id=step_id)
+            _collect_from_data(
+                data, run_dir=run_dir, run_id=str(run_id), step_id=step_id,
+                seen_charts=seen_charts,
+            )
         )
     if found:
         _write_index(run_dir, found)
@@ -86,7 +93,8 @@ def collect_artifacts(
 
 
 def _collect_from_data(
-    data: dict, *, run_dir: Path, run_id: str, step_id: str
+    data: dict, *, run_dir: Path, run_id: str, step_id: str,
+    seen_charts: set[str] | None = None,
 ) -> list[dict]:
     out: list[dict] = []
 
@@ -96,7 +104,10 @@ def _collect_from_data(
         for entry in conversions:
             if isinstance(entry, dict):
                 out.extend(
-                    _collect_from_data(entry, run_dir=run_dir, run_id=run_id, step_id=step_id)
+                    _collect_from_data(
+                        entry, run_dir=run_dir, run_id=run_id, step_id=step_id,
+                        seen_charts=seen_charts,
+                    )
                 )
         return out
 
@@ -134,7 +145,20 @@ def _collect_from_data(
 
     svg = data.get("svg")
     if isinstance(svg, str) and svg.lstrip().startswith("<svg"):
-        add("chart", MIME_SVG, f"{step_id}.svg", svg.encode("utf-8"))
+        import hashlib as _hashlib
+
+        digest = _hashlib.sha256(svg.encode("utf-8")).hexdigest()
+        if seen_charts is not None:
+            if digest in seen_charts:
+                logger.info(
+                    "artifact duplicate chart skipped run=%s step=%s",
+                    run_id, step_id,
+                )
+            else:
+                seen_charts.add(digest)
+                add("chart", MIME_SVG, f"{step_id}.svg", svg.encode("utf-8"))
+        else:
+            add("chart", MIME_SVG, f"{step_id}.svg", svg.encode("utf-8"))
 
     image_b64 = data.get("image_b64")
     if isinstance(image_b64, str) and image_b64:

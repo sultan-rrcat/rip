@@ -4,6 +4,11 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — no repeated plots (trace `07fb4f59`)
+
+- "DocBench vs MMLongBench in a bar graph" no longer renders the same plot twice: the step-by-step fallback treats an exact repeat of a successful step as an idle turn, refuses to re-plot already-charted numbers under retitled/relabeled cosmetics, and rejects nested-`values` / `series_labels` chart shapes with a corrective hint before executing (previously two failed executions plus two duplicate charts in one run).
+- Duplicate charts collapse downstream too: identical SVG bytes are collected as one artifact, and identical terminal outputs keep the first step shown. Chart successes log a one-line observation (never raw SVG), and the final synthesis describes charts plus a table instead of redrawing them as ASCII blocks.
+
 ## Unreleased — fail-closed summarize path (trace `cfbaa9c3`)
 
 - "Summarize the docs" no longer leaks `{{1}} {{2}}` internals: a retrieval step that times out now resolves downstream placeholders to `(no chunks retrieved)` so the writer answers "not in the documents" (plus honest failure lines that trigger the one-retry recall) instead of asking the user to paste chunks. Terminal outputs still carrying `{{id}}` are demoted to failure lines by the aggregator rather than shown.

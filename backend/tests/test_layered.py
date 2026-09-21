@@ -690,3 +690,179 @@ def test_compare_empty_notebook_yields_clarification() -> None:
     assert len(result.step_results) == 1
     assert result.shown == ["1"] and result.hidden == []
     assert provider.structured_calls == 1
+
+
+def test_react_broad_ask_defaults_rag_query_to_overview() -> None:
+    # Trace cfbaa9c3: "summarize the docs" loop retrieved REFERENCES via
+    # specific ranking instead of overview stratification.
+    from app.orchestration.react import _default_react_mode, run_react
+
+    assert _default_react_mode("summarize the docs", {"query": "x"})["mode"] == "overview"
+    assert "mode" not in _default_react_mode("what is QLoRA?", {"query": "x"})
+    assert _default_react_mode("summarize", {"query": "x", "mode": "specific"})["mode"] == "specific"
+
+    provider = FakeLayeredProvider(
+        text="synthesized",
+        queued=[
+            {"thought": "need docs", "executor": "rag.query",
+             "input": {"query": "summarize"}, "is_final": False},
+            {"thought": "have chunks", "executor": "reasoning",
+             "input": {}, "is_final": True, "answer": "react final"},
+        ],
+    )
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "summarize the docs", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    rag_steps = [s for s in outcome.plan.steps if s.tool_id == "rag.query"]
+    assert rag_steps and all(s.input.get("mode") == "overview" for s in rag_steps)
+
+
+def test_react_synthesizes_answer_when_iterations_exhaust() -> None:
+    # Trace cfbaa9c3 iter-6: no is_final, final summary was a truncated raw
+    # chunk dump. The loop must synthesize prose from observations instead.
+    from app.orchestration.aggregator import Aggregator
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(
+        text="synthesized summary covering both docs",
+        queued=[
+            {"thought": "get more", "executor": "rag.query",
+             "input": {"query": "summarize"}, "is_final": False},
+            {"thought": "get even more", "executor": "rag.query",
+             "input": {"query": "summarize again"}, "is_final": False},
+        ],
+    )
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "summarize the docs", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1", max_iterations=2,
+    )
+    assert outcome.result.step_results[-1].agent_id == "reasoning"
+    assert outcome.result.step_results[-1].output == "synthesized summary covering both docs"
+    agg = Aggregator().aggregate(outcome.plan, outcome.result)
+    assert agg.summary == "synthesized summary covering both docs"
+    assert agg.shown == ["r-final"]
+
+
+def test_react_plot_nested_values_is_idle_hint() -> None:
+    # Trace 07fb4f59 iters 1+4: nested `values` arrays (and an invented
+    # `series_labels` key) burned executions on "'values' must all be
+    # numbers". Malformed shapes must get a corrective hint WITHOUT
+    # executing so the iteration budget survives for a fixed shape.
+    from app.orchestration.react import _validate_react_input, run_react
+
+    hint = _validate_react_input(
+        "plot.chart",
+        {"chart_type": "bar", "labels": ["Documents", "Pages"],
+         "values": [[229, 135], [66, 47.5]]},
+    )
+    assert hint is not None and "flat" in hint and "series" in hint
+    hint2 = _validate_react_input(
+        "plot.chart",
+        {"chart_type": "bar", "labels": ["A", "B"], "values": [1, 2],
+         "series_labels": ["Documents"]},
+    )
+    assert hint2 is not None and "series_labels" in hint2
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "bad shape", "executor": "plot.chart",
+         "input": {"chart_type": "bar", "labels": ["Documents", "Pages"],
+                   "values": [[229, 135], [66, 47.5]]}, "is_final": False},
+        {"thought": "fixed shape", "executor": "plot.chart",
+         "input": {"chart_type": "bar", "labels": ["DocBench", "MMLongBench"],
+                   "values": [229, 135], "title": "docs"}, "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "have chart"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "compare docs as bar graph", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    # Malformed r1 never executed: only the fixed r2 chart + final answer.
+    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
+    assert outcome.result.step_results[-1].output == "have chart"
+
+
+def test_react_exact_successful_repeat_is_idle() -> None:
+    # Trace 07fb4f59 r2/r3: the identical Avg-Tokens chart executed twice.
+    # An exact repeat of a success must idle, not re-execute.
+    from app.orchestration.react import run_react
+
+    chart = {"chart_type": "bar", "labels": ["A", "B"],
+             "values": [46377, 21214], "title": "tokens"}
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "plot tokens", "executor": "plot.chart",
+         "input": dict(chart), "is_final": False},
+        {"thought": "plot tokens again", "executor": "plot.chart",
+         "input": dict(chart), "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "have chart"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "plot tokens as bar graph", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+    assert outcome.result.step_results[-1].output == "have chart"
+
+
+def test_react_replot_same_data_is_idle() -> None:
+    # Trace 07fb4f59 r5/r6: [229, 135] re-plotted under different
+    # labels/title renders the same bars. Same data (ignoring cosmetics)
+    # must idle so the frontend never shows the same plot twice.
+    from app.orchestration.react import _plot_data_key, run_react
+
+    assert _plot_data_key(
+        {"chart_type": "bar", "labels": ["A", "B"], "values": [229, 135],
+         "title": "Number of Documents"}
+    ) == _plot_data_key(
+        {"chart_type": "bar", "labels": ["A (x)", "B (x)"], "values": [229, 135]}
+    )
+    assert _plot_data_key(
+        {"chart_type": "bar", "labels": ["A", "B"], "values": [229, 135]}
+    ) != _plot_data_key(
+        {"chart_type": "bar", "labels": ["A", "B"], "values": [46377, 21214]}
+    )
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "plot docs", "executor": "plot.chart",
+         "input": {"chart_type": "bar",
+                   "labels": ["DocBench (documents)", "MMLongBench (documents)"],
+                   "values": [229, 135], "title": "Number of Documents"},
+         "is_final": False},
+        {"thought": "plot docs again", "executor": "plot.chart",
+         "input": {"chart_type": "bar", "labels": ["DocBench", "MMLongBench"],
+                   "values": [229, 135]}, "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "have chart"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "plot docs as bar graph", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+
+
+def test_react_synthesis_evidence_collapses_charts() -> None:
+    # Trace 07fb4f59 r-final: raw SVG evidence invited an ASCII redraw.
+    # Chart successes must collapse to a one-liner in synthesis evidence.
+    from app.agents.base import StepStatus
+    from app.orchestration.react import _synthesis_evidence_line
+    from app.orchestration.results import StepResult
+
+    chart = StepResult(
+        step_id="r2", agent_id="plot.chart", status=StepStatus.SUCCESS,
+        output="<svg xmlns='x'>...</svg>",
+    )
+    line = _synthesis_evidence_line(chart)
+    assert "<svg" not in line and "Artifacts" in line
+    text = StepResult(
+        step_id="r1", agent_id="rag.query", status=StepStatus.SUCCESS,
+        output="chunk text here",
+    )
+    assert "chunk text here" in _synthesis_evidence_line(text)

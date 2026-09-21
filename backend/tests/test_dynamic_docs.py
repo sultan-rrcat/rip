@@ -249,6 +249,32 @@ class TestConvertArtifacts:
         )
         assert found == []
 
+    def test_duplicate_chart_svg_collected_once(self, tmp_path):
+        # Trace 07fb4f59 r2/r3: identical SVG bytes collected twice, so
+        # the frontend Artifacts panel showed the same plot twice.
+        svg = "<svg xmlns='x'><title>same chart</title></svg>"
+        other = "<svg xmlns='x'><title>other chart</title></svg>"
+        steps = [
+            StepResult(
+                step_id="r2", agent_id="plot.chart", status=StepStatus.SUCCESS,
+                output=svg, data={"svg": svg},
+            ),
+            StepResult(
+                step_id="r3", agent_id="plot.chart", status=StepStatus.SUCCESS,
+                output=svg, data={"svg": svg},
+            ),
+            StepResult(
+                step_id="r5", agent_id="plot.chart", status=StepStatus.SUCCESS,
+                output=other, data={"svg": other},
+            ),
+        ]
+        found = collect_artifacts(
+            steps, upload_dir=str(tmp_path), notebook_id="nb", run_id="run-3"
+        )
+        charts = [a for a in found if a["kind"] == "chart"]
+        assert len(charts) == 2
+        assert {a["step_id"] for a in charts} == {"r2", "r5"}
+
 
 class _FakeProvider:
     def __init__(self, plan):
