@@ -1,13 +1,47 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import Home from '@/pages/Home'
 import Notebook from '@/pages/Notebook'
+import Login from '@/pages/Login'
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((res) => {
+        if (res.ok) {
+          setIsAuthenticated(true)
+        } else {
+          setIsAuthenticated(false)
+        }
+      })
+      .catch(() => setIsAuthenticated(false))
+  }, [])
+
+  if (isAuthenticated === null) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-100">
+        <p>Loading...</p>
+      </div>
+    )
+  }
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/notebook/:notebook_id" element={<Notebook />} />
+        <Route
+          path="/login"
+          element={isAuthenticated ? <Navigate to="/" replace /> : <Login />}
+        />
+        <Route
+          path="/"
+          element={isAuthenticated ? <Home /> : <Navigate to="/login" replace />}
+        />
+        <Route
+          path="/notebook/:notebook_id"
+          element={isAuthenticated ? <Notebook /> : <Navigate to="/login" replace />}
+        />
       </Routes>
     </BrowserRouter>
   )
