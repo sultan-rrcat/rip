@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any, ClassVar
 
+from app.core.config import settings
 from app.services.chat import extract_sources, format_context_for_llm
 from app.tools.base import Tool, ToolRequest, ToolResponse
 
@@ -55,9 +56,7 @@ def get_rag_singleton() -> Any:
         ) from e
     rag = getattr(getattr(fastapi_app, "state", None), "rag", None)
     if rag is None:
-        raise RuntimeError(
-            "VectorRAG singleton is not bound (lifespan has not run)"
-        )
+        raise RuntimeError("VectorRAG singleton is not bound (lifespan has not run)")
     return rag
 
 
@@ -133,10 +132,11 @@ class RagQueryTool(Tool):
     effect_class = "read-only"  # type: ignore[assignment]
     cost_class = "medium"
 
-    def __init__(self, rag: Any | None = None) -> None:
+    def __init__(self, rag: Any | None = None, provider: Any | None = None) -> None:
         # Explicit rag wins (tests, direct construction); otherwise the
         # module-global lifespan singleton resolves at execution time.
         self._rag = rag
+        self._provider = provider
 
     def bind_rag(self, rag: Any) -> None:
         """Direct binding for the worker and non-factory construction."""
@@ -201,16 +201,73 @@ class RagQueryTool(Tool):
                 output=None,
                 error="'mode' must be one of ['overview', 'specific']",
             )
+        # Generate sub-queries via LLM, always.
+        generated_queries: list[str] = [str(query)]
+        if self._provider:
+            try:
+                schema = {
+                    "type": "object",
+                    "properties": {
+                        "queries": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["queries"],
+                }
+                sys_prompt = (
+                    "You are a retrieval query planner for a Retrieval-Augmented Generation (RAG) system. "
+                    "Decompose the user's request into 1-3 distinct, concise document search queries. "
+                    "Rewrite queries ONLY for document retrieval; do not answer the user. "
+                    "Preserve the original information need, important entities, concepts, attributes, "
+                    "relationships, constraints, names, IDs, acronyms, and technical terms. "
+                    "Add a small number of useful synonyms or terminology variants that may appear in documents. "
+                    "Remove conversational filler. Do not invent facts, entities, technologies, dates, or assumptions. "
+                    "Avoid excessive or unrelated keywords. Preserve all important parts of multi-part questions. "
+                    "Queries do not need to be grammatically correct; optimize for retrieval. "
+                    "Return ONLY the list of rewritten search queries, with no explanation, answer, labels, JSON, "
+                    "markdown, or reasoning."
+                )
+
+                raw_q = self._provider.generate_structured(
+                    model=getattr(settings, "ollama_default_model", "qwen2.5:14b"),
+                    messages=[
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": str(query)},
+                    ],
+                    schema=schema,
+                    temperature=0,
+                )
+                qs = raw_q.get("queries", []) if isinstance(raw_q, dict) else []
+                qs = [q.strip() for q in qs if isinstance(q, str) and q.strip()][:3]
+                if qs:
+                    generated_queries = qs
+            except Exception as e:
+                logger.warning(
+                    "rag query generation failed, falling back to original query: %s", e
+                )
+        # Execute retrieval for each sub-query and merge results
+        all_results: list[dict] = []
+        seen = set()
         try:
-            results = rag_query(
-                str(notebook_id),
-                str(query),
-                top_k=top_k,
-                rag=self._rag,
-                file_id=file_id,
-                file_name=file_name,
-                mode=mode,
-            )
+            for sub_q in generated_queries:
+                try:
+                    sub_results = rag_query(
+                        str(notebook_id),
+                        sub_q,
+                        top_k=top_k,
+                        rag=self._rag,
+                        file_id=file_id,
+                        file_name=file_name,
+                        mode=mode,
+                    )
+                except Exception as e:
+                    logger.warning("rag sub-query failed for '%s': %s", sub_q, e)
+                    continue
+                for r in sub_results or []:
+                    # simple dedupe by chunk text
+                    key = r.get("chunk_text") or r.get("content")
+                    if key and key in seen:
+                        continue
+                    seen.add(key)
+                    all_results.append(r)
         except RuntimeError as e:
             logger.warning("rag.query unbound/failed: %s", e)
             return ToolResponse(
@@ -224,6 +281,7 @@ class RagQueryTool(Tool):
                 output=None,
                 error=f"retrieval failed: {e}",
             )
+        results = all_results
         sources = extract_sources({"results": results})
         output = format_context_for_llm({"results": results})
         return ToolResponse(
@@ -234,6 +292,7 @@ class RagQueryTool(Tool):
                 "results": results,
                 "sources": sources,
                 "query": str(query),
+                "generated_queries": generated_queries,
                 "notebook_id": str(notebook_id),
                 "file_id": file_id,
                 "file_name": file_name,
