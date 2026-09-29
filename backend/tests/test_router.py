@@ -18,7 +18,6 @@ class FakeRouterProvider(ModelProvider):
     def __init__(self, payload: dict | None = None, fail: bool = False):
         self.payload = payload or {
             "intent": "compare_multi",
-            "queries": ["fire report", "faultbook report"],
             "confidence": 0.9,
         }
         self.fail = fail
@@ -55,24 +54,22 @@ def test_greeting_goes_through_llm() -> None:
 
 def test_chat_intent_maps() -> None:
     provider = FakeRouterProvider(
-        {"intent": "chat", "queries": [], "confidence": 0.95}
+        {"intent": "chat", "confidence": 0.95}
     )
     result = Router(provider).route("hello there friend, how are you doing?")
     assert result.intent is Intent.CHAT
-    assert result.queries == []
 
 
 def test_llm_classification_maps() -> None:
     router = Router(FakeRouterProvider())
     result = router.route("compare both reports and rank them")
     assert result.intent is Intent.COMPARE_MULTI
-    assert result.queries == ["fire report", "faultbook report"]
     assert result.confidence == 0.9
 
 
 def test_low_confidence_falls_to_unknown() -> None:
     provider = FakeRouterProvider(
-        {"intent": "qa_single", "queries": ["x"], "confidence": 0.2}
+        {"intent": "qa_single", "confidence": 0.2}
     )
     result = Router(provider).route("something vague here with length over limit x")
     assert result.intent is Intent.UNKNOWN
@@ -80,7 +77,7 @@ def test_low_confidence_falls_to_unknown() -> None:
 
 def test_bad_intent_string_falls_to_unknown() -> None:
     provider = FakeRouterProvider(
-        {"intent": "not_a_real_intent", "queries": [], "confidence": 0.95}
+        {"intent": "not_a_real_intent", "confidence": 0.95}
     )
     result = Router(provider).route("a long enough request that needs the llm path")
     assert result.intent is Intent.UNKNOWN
@@ -123,12 +120,11 @@ def test_compare_without_chart_stays_compare_multi() -> None:
         "compare both report and rank them based on complexity"
     )
     assert result.intent is Intent.COMPARE_MULTI
-    assert len(result.queries) == 2
 
 
 def test_convert_slots_parsed() -> None:
     provider = FakeRouterProvider(
-        {"intent": "convert_one", "queries": [], "confidence": 0.9,
+        {"intent": "convert_one", "confidence": 0.9,
          "file_hint": "Faultbook", "target_format": "MD"}
     )
     result = Router(provider).route("convert the faultbook report to MD please!")
@@ -139,7 +135,7 @@ def test_convert_slots_parsed() -> None:
 
 def test_convert_slots_default_empty_and_bad_format_dropped() -> None:
     provider = FakeRouterProvider(
-        {"intent": "convert_all", "queries": [], "confidence": 0.9,
+        {"intent": "convert_all", "confidence": 0.9,
          "file_hint": "*", "target_format": "exe"}
     )
     result = Router(provider).route("convert all documents to exe somehow here")
@@ -154,27 +150,25 @@ def test_convert_slots_default_empty_and_bad_format_dropped() -> None:
 
 
 def test_doc_intent_empty_queries_postfilled() -> None:
-    # Trace ea48cb30: qa_single returned queries=[] — the router must now
-    # post-fill from the request text so builders never see an empty list.
+    # Router no longer returns queries; query generation moves to rag.query tool.
     provider = FakeRouterProvider(
-        {"intent": "qa_single", "queries": [], "confidence": 0.95}
+        {"intent": "qa_single", "confidence": 0.95}
     )
     result = Router(provider).route("What is QLoRA?")
     assert result.intent is Intent.QA_SINGLE
-    assert result.queries == ["What is QLoRA?"]
 
 
 def test_non_doc_intent_empty_queries_stay_empty() -> None:
     provider = FakeRouterProvider(
-        {"intent": "chat", "queries": [], "confidence": 0.95}
+        {"intent": "chat", "confidence": 0.95}
     )
     result = Router(provider).route("hello there friend, how are you doing?")
     assert result.intent is Intent.CHAT
-    assert result.queries == []
 
 
 def test_router_prompt_requires_queries_for_doc_intents() -> None:
     provider = FakeRouterProvider()
     Router(provider).route("compare both reports and rank them")
     system = provider.messages[0]["content"]
-    assert "never" in system and "empty list" in system
+    # Router prompt no longer mentions queries; query generation moved to rag tool
+    assert "queries" not in system.lower() or "never" not in system

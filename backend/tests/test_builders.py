@@ -102,7 +102,7 @@ def test_quiz_multi_file_overview() -> None:
 def test_compare_too_many_files_falls_to_react() -> None:
     snapshot = "; ".join(f"f{i}.pdf [ready] id=id{i}" for i in range(6))
     route = RouterResult(
-        intent=Intent.COMPARE_MULTI, queries=["a", "b"], confidence=0.9,
+        intent=Intent.COMPARE_MULTI, confidence=0.9,
         routed_by="llm",
     )
     assert build("compare many", route, snapshot) is None
@@ -148,7 +148,6 @@ def test_rag_query_mode_validation() -> None:
 def test_build_dispatch() -> None:
     route = RouterResult(
         intent=Intent.COMPARE_MULTI,
-        queries=["a", "b"],
         confidence=0.9,
         routed_by="llm",
     )
@@ -170,7 +169,7 @@ _SNAPSHOT = (
 
 def test_quiz_single_writer_shape() -> None:
     route = RouterResult(
-        intent=Intent.QUIZ, queries=["key concepts"], confidence=0.85,
+        intent=Intent.QUIZ, confidence=0.85,
         routed_by="llm",
     )
     plan = build("make 10 MCQs", route)
@@ -250,7 +249,7 @@ def test_convert_one_skips_unready_files() -> None:
 def test_summarize_plot_goes_to_react() -> None:
     # Plot labels are content-derived: no fixed shape may invent them.
     route = RouterResult(
-        intent=Intent.SUMMARIZE_PLOT, queries=["x"], confidence=0.9,
+        intent=Intent.SUMMARIZE_PLOT, confidence=0.9,
         routed_by="llm",
     )
     assert build("summarize and plot", route) is None
@@ -262,7 +261,7 @@ def test_summarize_plot_empty_corpus_goes_to_react() -> None:
     # them) — L3 ReAct owns this path, not a builder.
     for intent in (Intent.SUMMARIZE_PLOT, Intent.PLOT_STANDALONE):
         route = RouterResult(
-            intent=intent, queries=["gdp"], confidence=0.9, routed_by="llm",
+            intent=intent, confidence=0.9, routed_by="llm",
         )
         assert build("plot gdp", route, "(no documents)") is None
 
@@ -279,7 +278,7 @@ def test_deterministic_intents_all_dispatched() -> None:
 
 def _qa_route(queries=None) -> RouterResult:
     return RouterResult(
-        intent=Intent.QA_SINGLE, queries=list(queries or []),
+        intent=Intent.QA_SINGLE,
         confidence=0.95, routed_by="llm",
     )
 
@@ -321,7 +320,7 @@ def test_qa_single_unknown_snapshot_still_retrieves() -> None:
 def test_doc_intents_empty_corpus_yield_clarification() -> None:
     for intent in (Intent.SUMMARIZE, Intent.COMPARE_MULTI, Intent.QUIZ):
         route = RouterResult(
-            intent=intent, queries=["x"], confidence=0.9, routed_by="llm",
+            intent=intent, confidence=0.9, routed_by="llm",
         )
         plan = build("summarize/compare/quiz with no docs", route, "(no documents)")
         assert plan is not None and len(plan.steps) == 1, intent
