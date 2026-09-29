@@ -8,7 +8,7 @@
 from contextlib import asynccontextmanager
 
 from dotenv import find_dotenv, load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Load FIRST, before any app.* import: the settings singleton is built at
@@ -22,7 +22,7 @@ from app.api import admin, deps, health, runs  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.observability.langfuse import flush as langfuse_flush  # noqa: E402
 from app.observability.langfuse import init_langfuse  # noqa: E402
-from app.routes import files, messages, notebooks  # noqa: E402
+from app.routes import auth, files, messages, notebooks  # noqa: E402
 
 logger = setup_logging()
 init_langfuse()
@@ -126,18 +126,21 @@ logger.info("Logging has been successfully set up.")
 app = FastAPI(lifespan=lifespan)
 
 # RIP document/notebook API (existing, kept).
-app.include_router(notebooks.router)
-app.include_router(files.router)
-app.include_router(messages.router)
+app.include_router(notebooks.router, dependencies=[Depends(auth.get_current_user)])
+app.include_router(files.router, dependencies=[Depends(auth.get_current_user)])
+app.include_router(messages.router, dependencies=[Depends(auth.get_current_user)])
 # NOTE (Phase 4.3): app/routes/llm.py deleted — the old prompt endpoints are
 # gone with no shim. Replacement: POST /v1/runs + GET /v1/runs/{id}/events.
 
 # Run lifecycle + admin stub (/v1/*, bare JSON — no envelope).
-app.include_router(runs.router)
-app.include_router(admin.router)
+app.include_router(runs.router, dependencies=[Depends(auth.get_current_user)])
+app.include_router(admin.router, dependencies=[Depends(auth.get_current_user)])
 
 # Liveness probes: /api/health (RIP alias, kept) + /health (canonical).
 app.include_router(health.router)
+
+# Auth routes (login/logout/me) — no auth dependency on these.
+app.include_router(auth.router)
 
 
 @app.get("/api/health")

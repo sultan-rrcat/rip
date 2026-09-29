@@ -154,3 +154,38 @@ CREATE TABLE IF NOT EXISTS public.run_events
 
 CREATE INDEX IF NOT EXISTS idx_run_events_run_seq
     ON public.run_events (run_id, seq);
+
+-- ─── users ───────────────────────────────────────────────────────────────────
+-- Simple internal auth: username + salted password hash.
+
+CREATE TABLE IF NOT EXISTS public.users
+(
+    user_id       uuid NOT NULL DEFAULT gen_random_uuid(),
+    username      text COLLATE pg_catalog."default" NOT NULL,
+    password_hash text COLLATE pg_catalog."default" NOT NULL,
+    created_at    timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT users_pkey PRIMARY KEY (user_id),
+    CONSTRAINT users_username_key UNIQUE (username)
+) TABLESPACE pg_default;
+
+-- ─── sessions ────────────────────────────────────────────────────────────────
+-- Opaque bearer tokens stored server-side; cookie holds only the token.
+
+CREATE TABLE IF NOT EXISTS public.sessions
+(
+    token      text COLLATE pg_catalog."default" NOT NULL,
+    user_id    uuid NOT NULL,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    expires_at timestamp without time zone NOT NULL,
+    CONSTRAINT sessions_pkey PRIMARY KEY (token),
+    CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id)
+        REFERENCES public.users (user_id)
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
+) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user
+    ON public.sessions (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires
+    ON public.sessions (expires_at);
