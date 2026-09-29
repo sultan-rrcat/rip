@@ -67,6 +67,59 @@ def _matches_overview_section(metadata: dict) -> bool:
     return False
 
 
+def _section_prefix(metadata: dict) -> str:
+    """`Section: H1 > H2 > H3` from chunk metadata, or `""` when headerless.
+
+    MarkdownHeaderTextSplitter keeps section titles in metadata only, so the
+    highest-signal phrase of a chunk (e.g. `2.1 Functional Requirements`) is
+    invisible to the reranker and the LLM. Observed live: the answer chunks
+    scored 0.015/0.017 text-only vs 0.68/0.22 with the prefix — without it
+    they never reach the answer step.
+    """
+    path = " > ".join(
+        filter(
+            None,
+            [
+                (metadata or {}).get("H1"),
+                (metadata or {}).get("H2"),
+                (metadata or {}).get("H3"),
+            ],
+        )
+    )
+    return f"Section: {path}" if path else ""
+
+
+def _rerank_text(item: dict) -> str:
+    """Text the CrossEncoder scores: section prefix + chunk text."""
+    prefix = _section_prefix(item.get("metadata") or {})
+    text = str(item.get("text", ""))
+    return f"{prefix}\n{text}" if prefix else text
+
+
+def _select_top(
+    final_list: list[dict], top_k: int, rerank_threshold: float
+) -> list[dict]:
+    """Threshold filter topped up to `top_k` in rerank order.
+
+    The threshold expresses preference, not a quota: returning fewer than
+    `top_k` when scored candidates exist starves the answer step (observed
+    live: 4 candidates in, 3 out, answer lost). Below-threshold items fill
+    the remainder best-first; an empty pass falls back to list order.
+    """
+    top_results = [c for c in final_list if c.get("rerank_score", 0) > rerank_threshold][
+        :top_k
+    ]
+    if len(top_results) < top_k:
+        seen_ids = {id(c) for c in top_results}
+        for c in final_list:
+            if len(top_results) >= top_k:
+                break
+            if id(c) not in seen_ids:
+                top_results.append(c)
+                seen_ids.add(id(c))
+    return top_results
+
+
 def _stratify_overview(items: list[dict], top_k: int) -> list[dict]:
     """Pick at most one top chunk per H1 section, in document order.
 
@@ -123,8 +176,11 @@ class VectorRAG(RagPipeline):
             fid = (file_id or "").strip() or None
             fname = (file_name or "").strip() or None
             file_scoped = fid is not None or fname is not None
-            # Overview needs a wider candidate pool for stratification.
-            fetch_k = top_k * 3 if normalized_mode == "overview" else top_k
+            # Wide candidate pool in both modes: a narrow LIMIT cuts
+            # relevant chunks before the reranker ever sees them (observed
+            # live: answer chunks at vector ranks 9/11 with LIMIT 4).
+            # The reranker + top_k cut below restore precision.
+            fetch_k = top_k * 3
 
             prompt_embeddings = self.embedding_model.embed_query(user_prompt)
 
@@ -325,7 +381,9 @@ class VectorRAG(RagPipeline):
 
             if rerank_subset:
                 # logger.info(f"Sending {len(rerank_subset)} candidates to reranker model")
-                pairs = [(user_prompt, str(c.get("text", ""))) for c in rerank_subset]
+                # Score section-prefixed text: headers live in metadata only,
+                # and the pair must match what the LLM receives below.
+                pairs = [(user_prompt, _rerank_text(c)) for c in rerank_subset]
                 scores = self.reranker_model.predict(pairs)
 
                 for i, score in enumerate(scores):
@@ -360,16 +418,11 @@ class VectorRAG(RagPipeline):
 
             # logger.info(f"Rerank subset: {rerank_subset}")
 
-            # Adding threshold
-            filtered = [
-                c for c in final_list if c.get("rerank_score", 0) > rerank_threshold
-            ]
-
-            if not filtered:
+            # Threshold preference, topped up to top_k (never starve the
+            # answer step when scored candidates exist).
+            if not any(c.get("rerank_score", 0) > rerank_threshold for c in final_list):
                 logger.warning("⚠️ No reranked results passed threshold — using fallback")
-                filtered = final_list[:3]
-
-            top_results = filtered[:top_k]
+            top_results = _select_top(final_list, top_k, rerank_threshold)
 
             logger.info(f"Retrieved top {len(top_results)} final contexts")
 
@@ -378,7 +431,11 @@ class VectorRAG(RagPipeline):
                 "mode": normalized_mode,
                 "results": [
                     {
-                        "content": c["text"],
+                        # Same section-prefixed text the reranker scored:
+                        # the LLM needs the section title inline to ground
+                        # the answer (and to say "not in the documents"
+                        # honestly when it is absent).
+                        "content": _rerank_text(c),
                         "source": c["metadata"].get("source", "unknown"),
                         "section": " > ".join(
                             filter(

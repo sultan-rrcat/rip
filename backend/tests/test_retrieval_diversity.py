@@ -17,6 +17,9 @@ if BACKEND_DIR not in sys.path:
 from app.rag.vector_rag import (
     _interleave_by_source,
     _matches_overview_section,
+    _rerank_text,
+    _section_prefix,
+    _select_top,
     _stratify_overview,
 )
 
@@ -96,3 +99,44 @@ def test_stratify_single_section_truncates() -> None:
 
 def test_stratify_empty() -> None:
     assert _stratify_overview([], 4) == []
+
+
+def test_section_prefix_joins_headers() -> None:
+    assert (
+        _section_prefix({"H1": "Sys Req", "H2": "2. System", "H3": "2.1 Functional"})
+        == "Section: Sys Req > 2. System > 2.1 Functional"
+    )
+    assert _section_prefix({"H2": "Abstract"}) == "Section: Abstract"
+    assert _section_prefix({}) == ""
+    assert _section_prefix(None) == ""
+
+
+def test_rerank_text_prefixed_and_bare() -> None:
+    item = {"text": "body", "metadata": {"H3": "2.1 Functional Requirements"}}
+    assert _rerank_text(item) == "Section: 2.1 Functional Requirements\nbody"
+    assert _rerank_text({"text": "body", "metadata": {}}) == "body"
+    assert _rerank_text({"text": "body"}) == "body"
+
+
+def _scored(text: str, score: float) -> dict:
+    return {"text": text, "metadata": {}, "rerank_score": score}
+
+
+def test_select_top_prefers_above_threshold_then_tops_up() -> None:
+    # Trace shape: 4 candidates, 3 above 0.05 — the answer step must still
+    # receive top_k=4, with the below-threshold best filling the last slot.
+    items = [_scored("a", 0.58), _scored("b", 0.45), _scored("c", 0.058), _scored("d", 0.009)]
+    out = _select_top(items, 4, 0.05)
+    assert [c["text"] for c in out] == ["a", "b", "c", "d"]
+
+
+def test_select_top_none_passing_falls_back_in_order() -> None:
+    items = [_scored("a", 0.01), _scored("b", 0.02)]
+    out = _select_top(items, 4, 0.05)
+    assert [c["text"] for c in out] == ["a", "b"]
+
+
+def test_select_top_truncates_to_top_k() -> None:
+    items = [_scored(f"t{i}", 0.9 - i * 0.1) for i in range(6)]
+    out = _select_top(items, 4, 0.05)
+    assert [c["text"] for c in out] == ["t0", "t1", "t2", "t3"]
