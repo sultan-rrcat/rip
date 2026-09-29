@@ -458,8 +458,7 @@ def build(
             return build_qa_no_docs(request_text)
         if state == "processing":
             return build_no_docs_clarification(request_text, processing=True)
-        query = route.queries[0] if route.queries else request_text
-        return build_qa_single(query, request_text)
+        return build_qa_single(request_text, request_text)
     if route.intent is Intent.COMPARE_MULTI:
         state = _corpus_state(notebook_context)
         if state in ("empty", "processing"):
@@ -469,7 +468,7 @@ def build(
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
             return None  # too many files: fall through to L3 ReAct
-        return build_compare_multi(route.queries, request_text, notebook_context)
+        return build_compare_multi([], request_text, notebook_context)
     if route.intent is Intent.SUMMARIZE:
         state = _corpus_state(notebook_context)
         if state in ("empty", "processing"):
@@ -486,11 +485,10 @@ def build(
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing")
             )
-        query = route.queries[0] if route.queries else request_text
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
             return None
-        return build_quiz(query, request_text, notebook_context)
+        return build_quiz(request_text, request_text, notebook_context)
     if route.intent is Intent.CONVERT_ALL:
         if not route.target_format:
             return None
