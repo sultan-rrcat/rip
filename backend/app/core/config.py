@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     # Model defaults
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
-    default_timeout_ms: int = 60000
+    default_timeout_ms: int = 120000
 
     # Code sandbox
     sandbox_image: str = "python:3.11-slim"
