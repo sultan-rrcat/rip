@@ -61,7 +61,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 7-tool set, direct execution (no approval gate) |
 | `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py`, `code_sandbox.py`, `image_generate.py` | The seven tools |
 | `orchestration/plan.py`, `results.py` | Plan DAG models, step/execution results |
-| `orchestration/planner.py` | Sole planning LLM call (`generate_structured` vs `PLAN_SCHEMA`) |
+| `orchestration/planner.py` | Thin provider holder shared by the L1 router and L3 ReAct (no DAG prompt) |
 | `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget, plot/report grounding |
 | `orchestration/engine.py` | Outer LangGraph: `plan → execute → aggregate` (+ `plan_error → END`) |
 | `orchestration/plan_graph.py` | Inner per-request DAG: edges = `depends_on`, parallel siblings, placeholder resolution, scoped memory context (terminal prose agents only; tools get none), retry, timeout, cancel |
@@ -95,7 +95,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 1. Frontend persists the user message: `POST /api/notebooks/{id}/messages`.
 2. Frontend creates the run: `POST /v1/runs {notebook_id, message}` → `202 {run_id}` (bare JSON, no envelope).
 3. Worker loads `conversation_summary` + messages + file snapshot → `build_memory_context()` → `orchestrator.run(..., context=..., notebook_context=...)`.
-4. **Planner** emits `{goal, steps}` (summarize+plot uses split numbers + answer branches, plot depending on numbers only); **Validator** checks it, including plot/report grounding. Layered path first (ADR-029): L0 fast-path for greetings, L1 intent router + L2 deterministic builders for `chat/qa_single/compare_multi/quiz/convert_one/convert_all` (wiring by construction; `summarize_plot` stays on the mega-prompt since chart labels are content-derived), else the mega-prompt; double plan failure falls back to the ReAct loop before failing honestly. Empty plans are repaired to a single `reasoning` step (ADR-026); malformed or ungrounded plans replan once with feedback (ADR-028) then fail honestly via `plan_error → END`; partial/failed executions likewise get one recall, clarifications never do.
+4. **Router** (L1, sole dispatcher, one cheap `generate_structured` call per request) classifies intent + slots; **Builders** (L2) emit fixed DAGs for `chat/qa_single/compare_multi/summarize/quiz/convert_one/convert_all` (wiring by construction; `summarize_plot` goes to ReAct since chart labels are content-derived); **Validator** checks plot/report grounding. Builder misses (unknown intent, non-deterministic shapes, unresolvable converts, `>5` files) return `plan_error → END` and the orchestrator runs **ReAct** (L3: thought → action → observation, max 6 iterations, no placeholders) before failing honestly. Empty plans are repaired to a single `reasoning` step (ADR-026). No planner recall: partial/failed runs surface honestly; clarifications never replan (ADR-032).
 5. **Engine** executes the DAG (`notebook_id` injected into tool inputs, never LLM-generated; memory `context` scoped to terminal prose agent steps, tools get none). `rag.query` completions emit SSE `sources`.
 6. **Aggregator** assembles the answer deterministically (ADR-023, type-aware): single terminal output → verbatim (chart/SVG outputs → placeholder `Chart generated — see Artifacts below.`); multiple → labeled concat (same placeholder per chart step); intermediates (`chunks`/`numbers`/`notebook.inspect`) hidden unless sole output; clarification → verbatim; all-failed → joined errors; partial failures always appended.
 7. Worker persists updated memory, writes the terminal run row, emits `artifacts` (download URLs; charts render inline as `<img>`) + `summary` + `run_completed`. Frontend persists the assistant message once, with sources + artifacts.
@@ -125,13 +125,13 @@ One trace per run worker (`session_id = notebook_id`, `trace_name = run`). Span 
 
 ```
 run
-├─ router → llm.generate_structured (L1 intent router; zero generations on L0 fast-path)
-├─ plan → llm.generate_structured (L3 mega-prompt; absent on L2 builder hit)
+├─ router → llm.generate_structured (L1 intent router; one call per request)
+├─ plan (L2 builder hit only; absent when delegating to ReAct)
 │  └─ step:{id} → llm.generate[.stream] (agent LLM)
 ├─ aggregate (deterministic, no LLM)
-└─ react → react:iter-N → step:rN (L4 fallback only, max 6 iterations)
+└─ react → react:iter-N → step:rN (L3 ReAct, max 6 iterations)
 ```
 
-`router` is a trace-only sibling of `plan` under `run` (explicit `trace_context` parenting; the code still runs inside the plan node — no graph/state change). `plan` output carries `layer` (`L0-fast`/`L2-builder`/`L3-mega`) + `intent`/`routed_by`/`confidence`; `router` output carries `intent`/`confidence`/`routed_by`/`queries`; each `react:iter-N` output carries `thought`/`executor`/`observation`. The SSE `plan` event carries an additive `route: {intent, routed_by, confidence}` object (old clients ignore it).
+`router` is a trace-only sibling of `plan` under `run` (explicit `trace_context` parenting; the code still runs inside the plan node — no graph/state change). `plan` output carries `layer` (`L2-builder`) + `intent`/`routed_by`/`confidence`; `router` output carries `intent`/`confidence`/`routed_by`/`queries`; each `react:iter-N` output carries `thought`/`executor`/`observation`. The SSE `plan` event carries an additive `route: {intent, routed_by, confidence}` object (old clients ignore it) and a constant `attempt: 1` (no recall; kept for old clients).
 
 Enabled only with `LANGFUSE_ENABLED=true` + keys + backend restart; disabled path is behavior-identical. See `docs/CAVEATS.md` for host/proxy/API notes.

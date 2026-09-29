@@ -49,8 +49,8 @@ class FakeProvider(ModelProvider):
         self.structured = structured or {"goal": "g", "steps": []}
         self.text = text
         self.models: list[str] = []
-        # Sequential plans for recall tests; every structured prompt kept
-        # so tests can assert on RETRY FEEDBACK content.
+        # Sequential payloads for router/react tests; every structured
+        # prompt kept so tests can assert on prompt content.
         self.queued = list(queued) if queued else None
         self.prompts: list = []
 
@@ -904,41 +904,30 @@ class TestPlanGraph:
         assert result.step_results == []
 
 
-# --- Planner ---
+# --- Planner (thin provider holder; L3 mega-prompt removed) ---
 
 
 class TestPlanner:
-    def test_plan_uses_ollama_default_model(self):
-        provider = FakeProvider(
-            structured={"goal": "answer things", "steps": []}
-        )
+    def test_exposes_provider(self):
+        provider = FakeProvider()
         agents, tools = _registries(FakeAgent(), rag=FakeRAG())
-        plan = Planner(provider, agents, tools).plan("hello")
-        assert plan.goal == "answer things" and plan.steps == []
-        assert provider.models == [settings.ollama_default_model]
+        planner = Planner(provider, agents, tools)
+        assert planner.provider is provider
 
-    def test_feedback_absent_by_default(self):
-        provider = FakeProvider(structured={"goal": "g", "steps": []})
-        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
-        Planner(provider, agents, tools).plan("hello")
-        system = provider.prompts[-1][0]["content"]
-        assert "RETRY FEEDBACK" not in system
-
-    def test_feedback_appended_when_given(self):
-        provider = FakeProvider(structured={"goal": "g", "steps": []})
-        agents, tools = _registries(FakeAgent(), rag=FakeRAG())
-        Planner(provider, agents, tools).plan("hello", feedback="fix the values")
-        system = provider.prompts[-1][0]["content"]
-        assert "RETRY FEEDBACK" in system and "fix the values" in system
+    def test_has_no_mega_prompt(self):
+        assert not hasattr(Planner, "plan"), "L3 mega-prompt Planner.plan removed"
 
 
-# --- Bounded planner recall (one retry = two plans max) ---
+class ReasoningFakeAgent(FakeAgent):
+    """FakeAgent registered as `reasoning` so L2 builder plans validate."""
+
+    agent_id = "reasoning"
 
 
 def _recall_orchestrator(plans: list[dict], agent=None, rag=None):
     provider = FakeProvider(queued=plans)
     agents = AgentRegistry()
-    agents.register(agent or FakeAgent(output="recovered"))
+    agents.register(agent or ReasoningFakeAgent(output="recovered"))
     tools = get_default_tool_registry(rag=rag or FakeRAG())
     orch = Orchestrator(
         Planner(provider, agents, tools),
@@ -949,97 +938,61 @@ def _recall_orchestrator(plans: list[dict], agent=None, rag=None):
 
 
 def _router_miss() -> dict:
-    """Layered-planning head: router reports unknown so the run exercises L3.
+    """Router reports unknown so the run exercises L3 ReAct.
 
-    The engine routes once (first attempt) before the mega-prompt, so every
-    queued recall test consumes one router payload first. Confidence 0.0 also
-    covers the low-confidence → unknown path.
+    The engine routes once before delegating; every queued test consumes
+    one router payload first. Confidence 0.0 also covers the
+    low-confidence → unknown path.
     """
     return {"intent": "unknown", "queries": [], "confidence": 0.0}
 
 
-def _good_text_step():
+def _react_final(answer: str) -> dict:
     return {
-        "goal": "g",
-        "steps": [
-            {"step_id": "1", "agent_id": "fake", "input": {"message": "hi"},
-             "depends_on": [], "expected_output_type": "text"}
-        ],
+        "thought": "answer directly", "executor": "reasoning",
+        "input": {}, "is_final": True, "answer": answer,
     }
 
 
-def _bad_plot_step():
-    return {
-        "goal": "g",
-        "steps": [
-            {"step_id": "1", "agent_id": "fake", "input": {"message": "n"},
-             "depends_on": [], "expected_output_type": "numbers"},
-            {"step_id": "2", "tool_id": "plot.chart",
-             "input": {"chart_type": "bar", "labels": ["a"], "values": [50]},
-             "depends_on": ["1"], "expected_output_type": "chart"},
-        ],
-    }
-
-
-class TestPlannerRecall:
-    def test_validation_retry_recovers(self):
-        provider, orch = _recall_orchestrator(
-            [_router_miss(), _bad_plot_step(), _good_text_step()]
-        )
-        result = orch.run("plot it", "nb-1")
-        assert result.status == "success" and result.summary == "recovered"
-        assert len(provider.models) == 3  # router + planner + planner-retry
-        retry_system = provider.prompts[-1][0]["content"]
-        assert "RETRY FEEDBACK" in retry_system and "hardcoded" in retry_system
-
-    def test_double_validation_failure_aborts_honest(self):
-        provider, orch = _recall_orchestrator(
-            [_router_miss(), _bad_plot_step(), _bad_plot_step()]
-        )
-        with pytest.raises(OrchestrationError, match="hardcoded"):
-            orch.run("plot it", "nb-1")
-        # 3 planning calls + 2 idle react turns (exhausted queue yields
-        # executor-less payloads; idle cap), then the original honest error.
-        assert len(provider.models) == 5
-
-    def test_clarification_never_replans(self):
-        provider, orch = _recall_orchestrator(
-            [_router_miss(),
-             {
-                "goal": "g",
-                "steps": [
-                    {"step_id": "1", "agent_id": "fake",
-                     "input": {"message": "Which file?"},
-                     "depends_on": [], "expected_output_type": "clarification"}
-                ],
-             }],
-            agent=FakeAgent(output="Which file?", clarify=True),
-        )
-        result = orch.run("convert it", "nb-1")
-        assert result.summary == "Which file?" and result.needs_clarification
-        assert len(provider.models) == 2  # router + planner
-
-    def test_partial_execution_replans_once(self):
+class TestReactFallback:
+    def test_builder_miss_runs_react(self):
         provider, orch = _recall_orchestrator([
             _router_miss(),
-            {
-                "goal": "g",
-                "steps": [
-                    {"step_id": "1", "tool_id": "plot.chart",
-                     "input": {"chart_type": "nope", "labels": ["a"], "values": [1]},
-                     "depends_on": []}
-                ],
-            },
-            _good_text_step(),
+            {"thought": "need docs", "executor": "rag.query",
+             "input": {"query": "x"}, "is_final": False},
+            _react_final("react rescued"),
         ])
-        result = orch.run("plot it", "nb-1")
-        assert result.status == "success" and result.summary == "recovered"
-        assert len(provider.models) == 3
-        retry_system = provider.prompts[-1][0]["content"]
-        assert "RETRY FEEDBACK" in retry_system
+        result = orch.run("a vague request with no clear shape", "nb-1")
+        assert result.status == "success" and result.summary == "react rescued"
+        assert len(provider.models) == 3  # router + 2 react turns
 
-    def test_cancel_suppresses_recall(self):
-        provider, orch = _recall_orchestrator([_bad_plot_step(), _good_text_step()])
+    def test_react_failure_surfaces_honest(self):
+        provider, orch = _recall_orchestrator([
+            _router_miss(),
+            {"thought": "bad pick", "executor": "ghost",
+             "input": {}, "is_final": False},
+            {"thought": "bad pick again", "executor": "ghost",
+             "input": {}, "is_final": False},
+        ])
+        with pytest.raises(OrchestrationError, match="L3 ReAct required"):
+            orch.run("a vague request with no clear shape", "nb-1")
+        assert len(provider.models) == 3  # router + 2 idle react turns, no retry
+
+    def test_builder_clarification_is_terminal(self):
+        provider, orch = _recall_orchestrator(
+            [{"intent": "compare_multi", "queries": ["x"], "confidence": 0.9}],
+            agent=ReasoningFakeAgent(output="Please upload documents", clarify=True),
+        )
+        result = orch.run(
+            "compare both reports in this empty notebook please",
+            "nb-1", notebook_context="(no documents)",
+        )
+        assert result.summary == "Please upload documents"
+        assert result.needs_clarification
+        assert len(provider.models) == 1  # router only; builder plan, no ReAct
+
+    def test_cancel_suppresses_react(self):
+        provider, orch = _recall_orchestrator([_router_miss(), _react_final("x")])
         event = threading.Event()
         event.set()
         with pytest.raises(OrchestrationError, match="cancelled"):
@@ -1051,33 +1004,20 @@ class TestPlannerRecall:
 
 
 class TestOrchestrator:
-    def _orchestrator(self, structured: dict, rag=None, stream=False):
-        provider = FakeProvider(structured=structured)
-        agent = FakeAgent(output="final answer", stream=stream)
+    def _orchestrator(self, queued: list[dict], rag=None, stream=False,
+                      output="final answer"):
+        provider = FakeProvider(queued=queued)
+        agent = ReasoningFakeAgent(output=output, stream=stream)
         agents = AgentRegistry()
         agents.register(agent)
         tools = get_default_tool_registry(rag=rag or FakeRAG())
         planner = Planner(provider, agents, tools)
         validator = PlanValidator(agents, tools)
-        return Orchestrator(planner, validator, Aggregator(), agents, tools)
+        return provider, Orchestrator(planner, validator, Aggregator(), agents, tools)
 
     def test_rag_plan_end_to_end(self):
-        orch = self._orchestrator(
-            {
-                "goal": "answer from docs",
-                "steps": [
-                    {
-                        "step_id": "1", "tool_id": "rag.query",
-                        "input": {"query": "hello"},
-                        "depends_on": [], "expected_output_type": "chunks",
-                    },
-                    {
-                        "step_id": "2", "agent_id": "fake",
-                        "input": {"message": "answer it using {{1}}"},
-                        "depends_on": ["1"], "expected_output_type": "answer",
-                    },
-                ],
-            }
+        provider, orch = self._orchestrator(
+            [{"intent": "qa_single", "queries": ["hello"], "confidence": 0.9}],
         )
         events: list[dict] = []
         result = orch.run(
@@ -1089,57 +1029,51 @@ class TestOrchestrator:
         # are hidden, so the terminal answer surfaces verbatim.
         assert result.summary == "final answer"
         assert "Step 1 (rag.query)" not in (result.summary or "")
-        assert result.goal == "answer from docs"
+        assert result.goal == "what do docs say?"
         types = [e["type"] for e in events]
         assert "step_started" in types and "step_completed" in types
+        assert len(provider.models) == 1  # router only; L2 builder, no ReAct
 
     def test_streaming_delta_events(self):
-        orch = self._orchestrator(
-            {
-                "goal": "g",
-                "steps": [
-                    {
-                        "step_id": "1", "agent_id": "fake",
-                        "input": {"message": "hi"},
-                        "depends_on": [], "expected_output_type": "text",
-                    }
-                ],
-            },
+        _provider, orch = self._orchestrator(
+            [{"intent": "chat", "queries": [], "confidence": 0.95}],
             stream=True,
         )
         events: list[dict] = []
-        orch.run("hi", "nb-1", on_event=events.append)
+        orch.run("hi there friend, how are you doing today?", "nb-1",
+                 on_event=events.append)
         deltas = [e for e in events if e["type"] == "delta"]
         assert deltas and deltas[0]["step_id"] == "1"
 
-    def test_trivial_plan_falls_back_to_single_step(self):
-        orch = self._orchestrator({"goal": "nothing", "steps": []})
-        result = orch.run("hi", "nb-1")
+    def test_chat_builder_single_step(self):
+        _provider, orch = self._orchestrator(
+            [{"intent": "chat", "queries": [], "confidence": 0.95}],
+        )
+        result = orch.run("hi there friend, how are you doing today?", "nb-1")
         assert result.status == "success" and not result.plan_incomplete
         assert len(result.step_results) == 1
         assert result.summary == "final answer"
 
-    def test_plan_error_raises(self):
-        orch = self._orchestrator(
-            {
-                "goal": "g",
-                "steps": [
-                    {
-                        "step_id": "1", "agent_id": "ghost",
-                        "input": {}, "depends_on": [],
-                    }
-                ],
-            }
-        )
+    def test_builder_miss_with_failed_react_raises(self):
+        _provider, orch = self._orchestrator([
+            {"intent": "unknown", "queries": [], "confidence": 0.0},
+            {"thought": "bad pick", "executor": "ghost",
+             "input": {}, "is_final": False},
+            {"thought": "bad pick again", "executor": "ghost",
+             "input": {}, "is_final": False},
+        ])
         with pytest.raises(OrchestrationError):
-            orch.run("hi", "nb-1")
+            orch.run("a vague request with no clear shape here", "nb-1")
 
     def test_cancelled_run_raises(self):
-        orch = self._orchestrator({"goal": "g", "steps": []})
+        provider, orch = self._orchestrator(
+            [{"intent": "chat", "queries": [], "confidence": 0.95}])
         event = threading.Event()
         event.set()
         with pytest.raises(OrchestrationError, match="cancelled"):
-            orch.run("hi", "nb-1", cancel_event=event)
+            orch.run("hi there friend, how are you doing?", "nb-1",
+                     cancel_event=event)
+        assert len(provider.models) == 0
 
     def test_signature_has_notebook_id_and_context(self):
         import inspect
@@ -1149,40 +1083,19 @@ class TestOrchestrator:
             "request_text", "notebook_id", "on_event", "context",
         ]
 
-    def test_execution_failure_recalls_once_then_fails_honest(self):
-        # Bounded recall supersedes the old no-replan lock: a failing step
-        # triggers exactly ONE replan; the repeat failure surfaces honestly.
-        provider = FakeProvider(
-            structured={
-                "goal": "g",
-                "steps": [
-                    {
-                        "step_id": "1", "tool_id": "plot.chart",
-                        "input": {"chart_type": "nope", "labels": ["a"], "values": [1]},
-                        "depends_on": [],
-                    }
-                ],
-            }
-        )
-        plans = []
-        orig = provider.generate_structured
-
-        def counting(*a, **k):
-            plans.append(1)
-            return orig(*a, **k)
-
-        provider.generate_structured = counting  # type: ignore[method-assign]
-        agents = AgentRegistry()
-        agents.register(FakeAgent())
-        tools = get_default_tool_registry(rag=FakeRAG())
-        orch = Orchestrator(
-            Planner(provider, agents, tools),
-            PlanValidator(agents, tools),
-            Aggregator(), agents, tools,
-        )
-        result = orch.run("plot it", "nb-1")
-        assert plans == [1, 1, 1]  # router + planner + planner-retry
-        assert result.status == "failed" and result.plan_incomplete
+    def test_failed_react_surfaces_honest_without_retry(self):
+        # No planner recall: builder miss → L3 ReAct → honest error.
+        # Router + 2 idle react turns, then the original error surfaces.
+        provider, orch = self._orchestrator([
+            {"intent": "unknown", "queries": [], "confidence": 0.0},
+            {"thought": "bad pick", "executor": "ghost",
+             "input": {}, "is_final": False},
+            {"thought": "bad pick again", "executor": "ghost",
+             "input": {}, "is_final": False},
+        ])
+        with pytest.raises(OrchestrationError, match="L3 ReAct required"):
+            orch.run("a vague request with no clear shape here", "nb-1")
+        assert len(provider.models) == 3
 
 
 # --- Nested executor ids (live trace: model buries agent_id/tool_id in input) ---
@@ -1246,36 +1159,6 @@ class TestNestedExecutorHoist:
             PlanValidator(agents, tools).validate(plan)
         assert "TOP-LEVEL" not in str(exc.value)
 
-    def test_e2e_nested_ids_execute(self):
-        provider = FakeProvider(
-            structured={
-                "goal": "g",
-                "steps": [
-                    {
-                        "step_id": "1",
-                        "input": {"tool_id": "rag.query", "query": "hello"},
-                        "depends_on": [], "expected_output_type": "chunks",
-                    },
-                    {
-                        "step_id": "2",
-                        "input": {"agent_id": "fake", "message": "answer {{1}}"},
-                        "depends_on": ["1"], "expected_output_type": "answer",
-                    },
-                ],
-            }
-        )
-        agents = AgentRegistry()
-        agents.register(FakeAgent(output="final"))
-        tools = get_default_tool_registry(rag=FakeRAG())
-        orch = Orchestrator(
-            Planner(provider, agents, tools),
-            PlanValidator(agents, tools),
-            Aggregator(), agents, tools,
-        )
-        result = orch.run("hi", "nb-1")
-        assert result.status == "success" and result.summary == "final"
-
-
 # --- Structural repair (live traces 77930808/26e4974f: stray elements,
 # nested step objects, omitted eot) ---
 
@@ -1336,20 +1219,6 @@ class TestStructuralRepair:
         )
         with pytest.raises(PlanValidationError, match="buries step"):
             PlanValidator(agents, tools).validate(plan)
-
-    def test_plan_skeleton_flags_shapes(self):
-        from app.orchestration.engine import _plan_skeleton
-
-        dump = (
-            '{"goal": "g", "steps": ['
-            '{"step_id": "1", "tool_id": "rag.query", '
-            '"input": {"query": "x"}, "depends_on": []}, '
-            '"step_id"]}'
-        )
-        skeleton = _plan_skeleton(dump)
-        assert "executor=rag.query" in skeleton
-        assert "NOT AN OBJECT" in skeleton
-
 
 # --- Wiring-key hoist (live trace 214e7509: ornith-1.5:9b nests
 # depends_on/expected_output_type inside input, twice running) ---
@@ -1488,33 +1357,30 @@ class TestPlaceholderEdges:
         with pytest.raises(PlanValidationError, match="unknown step"):
             PlanValidator(agents, tools).validate(plan)
 
-    def test_e2e_autowired_mcq_shape_resolves_chunks(self):
-        # End-to-end: planner omits the edge; from_model wires it so the
-        # writer sees resolved chunks instead of literal "{{1}}".
-        provider = FakeProvider(
-            structured={
-                "goal": "Create 15 MCQs",
-                "steps": [
-                    {"step_id": "1", "tool_id": "rag.query",
-                     "input": {"query": "hello"},
-                     "depends_on": [], "expected_output_type": "chunks"},
-                    {"step_id": "2", "agent_id": "fake",
-                     "input": {"message": "write MCQs from {{1}}"},
-                     "expected_output_type": "answer"},
-                ],
-            }
+    def test_autowired_mcq_shape_resolves_chunks(self):
+        # Plan-level: from_model wires the missing edge so the writer sees
+        # resolved chunks instead of literal "{{1}}" (executed via
+        # run_plan_graph to bypass L1 routing).
+        plan = Plan.from_model(
+            "p", "Create 15 MCQs",
+            [
+                {"step_id": "1", "tool_id": "rag.query",
+                 "input": {"query": "hello"},
+                 "depends_on": [], "expected_output_type": "chunks"},
+                {"step_id": "2", "agent_id": "fake",
+                 "input": {"message": "write MCQs from {{1}}"},
+                 "expected_output_type": "answer"},
+            ],
         )
         agent = FakeAgent(output="final")
         agents = AgentRegistry()
         agents.register(agent)
         tools = get_default_tool_registry(rag=FakeRAG())
-        orch = Orchestrator(
-            Planner(provider, agents, tools),
-            PlanValidator(agents, tools),
-            Aggregator(), agents, tools,
+        result = run_plan_graph(
+            plan, agents, tool_registry=tools, trace_id="t",
+            notebook_id="nb-1",
         )
-        result = orch.run("hi", "nb-1")
-        assert result.status == "success" and result.summary == "final"
+        assert result.step_results[1].status is StepStatus.SUCCESS
         assert "{{1}}" not in agent.seen[0]["message"]
         assert "chunk-one" in agent.seen[0]["message"]
 

@@ -99,7 +99,7 @@ def test_quiz_multi_file_overview() -> None:
     _validator().validate(plan)
 
 
-def test_compare_too_many_files_falls_to_l3() -> None:
+def test_compare_too_many_files_falls_to_react() -> None:
     snapshot = "; ".join(f"f{i}.pdf [ready] id=id{i}" for i in range(6))
     route = RouterResult(
         intent=Intent.COMPARE_MULTI, queries=["a", "b"], confidence=0.9,
@@ -192,7 +192,7 @@ def test_convert_all_star_shape() -> None:
     _validator().validate(plan)
 
 
-def test_convert_all_without_format_falls_to_l3() -> None:
+def test_convert_all_without_format_falls_to_react() -> None:
     route = RouterResult(
         intent=Intent.CONVERT_ALL, confidence=0.9, routed_by="llm",
         file_hint="*",
@@ -211,7 +211,7 @@ def test_convert_one_resolves_literal_id() -> None:
     _validator().validate(plan)
 
 
-def test_convert_one_unresolvable_falls_to_l3() -> None:
+def test_convert_one_unresolvable_falls_to_react() -> None:
     hint = RouterResult(
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
         file_hint="missing", target_format="md",
@@ -229,7 +229,7 @@ def test_convert_one_unresolvable_falls_to_l3() -> None:
     assert build("convert faultbook", no_format, _SNAPSHOT) is None
 
 
-def test_convert_one_ambiguous_match_falls_to_l3() -> None:
+def test_convert_one_ambiguous_match_falls_to_react() -> None:
     snapshot = "2 file(s): report-a.pdf [ready] id=1; report-b.pdf [ready] id=2"
     route = RouterResult(
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
@@ -247,7 +247,7 @@ def test_convert_one_skips_unready_files() -> None:
     assert build("convert big to pdf", route, snapshot) is None
 
 
-def test_summarize_plot_stays_l3() -> None:
+def test_summarize_plot_goes_to_react() -> None:
     # Plot labels are content-derived: no fixed shape may invent them.
     route = RouterResult(
         intent=Intent.SUMMARIZE_PLOT, queries=["x"], confidence=0.9,
@@ -256,10 +256,10 @@ def test_summarize_plot_stays_l3() -> None:
     assert build("summarize and plot", route) is None
 
 
-def test_summarize_plot_empty_corpus_stays_l3() -> None:
+def test_summarize_plot_empty_corpus_goes_to_react() -> None:
     # Trace 27dcf635: labels/series are model-derived even with no docs
     # (placeholders carry whole text, so no deterministic shape can wire
-    # them) — the L3 zero-file plot rule owns this path, not a builder.
+    # them) — L3 ReAct owns this path, not a builder.
     for intent in (Intent.SUMMARIZE_PLOT, Intent.PLOT_STANDALONE):
         route = RouterResult(
             intent=intent, queries=["gdp"], confidence=0.9, routed_by="llm",
@@ -338,11 +338,11 @@ def test_corpus_state_tristate() -> None:
     assert _corpus_state(_SNAPSHOT) == "ready"
 
 
-def test_l3_prompt_carries_zero_file_plot_rule() -> None:
-    # Trace 27dcf635: the mega-prompt had no legal move for a plot with
-    # no docs and no user numbers → unguarded plot.chart, then garbage.
-    from app.agents.reasoning import ReasoningAgent
-    from app.orchestration.planner import Planner
+def test_react_prompt_carries_zero_file_plot_rule() -> None:
+    # Trace 27dcf635: a plot with no docs and no user numbers must recall
+    # figures parametrically via reasoning before plot.chart — L3 ReAct
+    # owns this path (mega-prompt removed).
+    from app.orchestration.react import run_react
 
     seen: list = []
 
@@ -350,21 +350,23 @@ def test_l3_prompt_carries_zero_file_plot_rule() -> None:
         def generate_structured(self, model, messages, schema, *, temperature=0.0):
             seen.append(messages)
             return {
-                "goal": "g",
-                "steps": [
-                    {"step_id": "1", "agent_id": "reasoning",
-                     "input": {"message": "hi"},
-                     "depends_on": [], "expected_output_type": "text"}
-                ],
+                "thought": "done",
+                "executor": "reasoning",
+                "input": {},
+                "is_final": True,
+                "answer": "ok",
             }
 
-    agents = AgentRegistry()
-    agents.register(ReasoningAgent(_FakeProvider()))
-    Planner(_CaptureProvider(), agents, get_default_tool_registry()).plan(
-        "Plot GDP comparison", notebook_context="(no documents)"
+    from app.agents.registry import get_default_agent_registry
+
+    agents = get_default_agent_registry(_FakeProvider())
+    tools = get_default_tool_registry()
+    run_react(
+        "Plot GDP comparison", _CaptureProvider(), agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="(no documents)",
     )
     system = seen[0][0]["content"]
-    assert "ZERO ready files" in system
-    assert "emit a bare plot.chart" in system
-    assert "parametric" in system
-    assert "series:" in system
+    assert "no documents" in system.lower() or "(no documents)" in system
+    assert "approximate" in system
+    assert "plot.chart" in system

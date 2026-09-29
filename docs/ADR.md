@@ -133,7 +133,7 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-028: Bounded planner recall (one retry)
 
-- **Status:** Accepted (experiment — measure retry conversion in traces)
+- **Status:** Superseded by ADR-032 (recall loop removed with the mega-prompt)
 - **Context:** The deterministic gates (ADR-023/027) turn planner mistakes into honest failures, but the planner (`qwen2.5:14b`) repeats the same malformation across runs (garbled `",{{2}}"` plot values 3/3 despite explicit prompt rules) — each failure previously cost a full run with nothing learned. The merge-era "no replanning" rule explicitly no longer holds.
 - **Decision:** One recall = two planner outputs max per run. A rejected plan replans with short validation feedback (rejected plan excerpt + exact validator message + one-line fix); a partial/failed aggregation replans with execution feedback (failed step ids + errors + prior plan, failed outputs only). Guards: clarifications never replan; cancellations suppress recall; second failure surfaces honestly; ADR-026 trivial repair sits outside the attempt budget; no resumption — retries re-execute fully. Feedback rides a `RETRY FEEDBACK` block appended after the planner examples plus an additive `attempt` field on the SSE `plan` event (second `plan` resets the frontend accumulators; attempt-1 artifact files orphan on disk).
 - **Consequences:** Failure-path planning latency roughly doubles (~40–50s per plan call on the office model); execution retries re-spend RAG + step LLMs; success path unchanged. If trace-measured retry conversion stays low, stop tuning text and change the model or decoding instead.
@@ -168,6 +168,13 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Decision:** (1) ReAct prompt states FLAT input shapes with per-tool one-liners + WRONG/RIGHT example and hard plot rule (bar/line → `plot.chart` with literals, never `code.sandbox`). (2) `react.py` normalizes (`agent.message` unwrap, stray `tool_id` drop, `message→query`/`message→code` aliases mirroring `RagQueryTool`) and pre-flight validates required fields before execution — malformed turns get a correct-shape scratchpad hint as an idle turn without consuming a step. (3) L3 prompt unified to `top_k: 4` + explicit "BOTH numbers and answer steps MUST contain `{{1}}`" line.
 - **Consequences:** Malformed-model turns no longer burn the 6-iteration budget; chart asks route to the deterministic SVG path. `summarize_plot` remains L3-only (no deterministic builder — label hallucination risk per ADR-027 stands).
 
+## ADR-032: Remove L0 fast-path and L3 mega-prompt; L1 dispatches to L2 builders or L3 ReAct
+
+- **Status:** Accepted
+- **Context:** The mega-prompt grew with every hardening rule and forced intent classification + DAG shape + placeholder wiring into one call; the L0 fast-path saved one cheap router call on greetings at the cost of a named layer and a parallel routing path. Operator decision: accept up to 6 ReAct iterations for non-deterministic requests; route low-confidence/`unknown` directly to ReAct instead of failing honestly.
+- **Decision:** (1) Delete L0 (`intents.classify_fast_path`): every request — including greetings — goes through the L1 router LLM. (2) Delete the L3 mega-prompt (`planner.py` becomes a thin provider holder; `PLAN_SCHEMA`, retry-feedback builders, and the `attempt`/`planner_feedback` recall loop are removed). (3) L1 is the sole dispatcher: `{intent, queries, confidence, file_hint, target_format}` → L2 deterministic builder on hit, else `plan_error → END` and the orchestrator runs L3 ReAct (promoted from L4) before failing honestly. Router failures fail open to ReAct. (4) No recall: the aggregate node never replans; partial/failed runs surface honestly. The SSE `plan` event keeps a constant `attempt: 1` for old clients. `summarize_plot` stays builder-less (ADR-027 label risk stands) and is served by ReAct.
+- **Consequences:** Happy path costs exactly one router call + builder execution; worst path is bounded (router + ≤6 ReAct steps). Greetings now spend one router call. New capabilities land as intents + builders, never prompt appendices. `test_layered.py` pins router→builder and router→ReAct; recall tests were replaced with ReAct-fallback tests.
+
 ---
 
 ## Historical (superseded, one line each)
@@ -176,3 +183,4 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **ADR-003** (on-premise OpenAI-compatible `LLM_URL`): superseded — Ollama-only via `OLLAMA_BASE_URL`.
 - **ADR-006** (deferred Agentic RAG stub): superseded — agentic behavior lives in orchestration.
 - **ADR-008–013** (merge mechanics: Ollama-only, `backend/app/` root, single messages table, rolling summary, SSE break, keep LangGraph): fulfilled during the merge; kept state is recorded above.
+- **ADR-028** (bounded planner recall): superseded by ADR-032.

@@ -1,7 +1,8 @@
-"""Layered planning chain tests: L2 builder hit, L3 mega fallback, L0 fast-path.
+"""Layered planning chain tests: L2 builder hit, L3 ReAct fallback.
 
-Uses the real default registries (reasoning agent + rag.query tool) with a
-fake provider/RAG — no Ollama, no DB.
+L1 router (sole dispatcher, every request via LLM) → L2 deterministic
+builders → L3 ReAct. Uses the real default registries (reasoning agent +
+rag.query tool) with a fake provider/RAG — no Ollama, no DB.
 """
 
 from __future__ import annotations
@@ -104,31 +105,27 @@ def test_compare_request_uses_builder_plan_without_mega_call() -> None:
     assert result.shown == ["3"] and result.hidden == ["1", "2"]
 
 
-def test_unknown_intent_falls_back_to_mega_prompt() -> None:
-    mega = {
-        "goal": "mega goal",
-        "steps": [
-            {"step_id": "1", "agent_id": "reasoning",
-             "input": {"message": "mega answer"},
-             "depends_on": [], "expected_output_type": "text"}
-        ],
-    }
-    provider = FakeLayeredProvider(
-        queued=[{"intent": "unknown", "queries": [], "confidence": 0.0}, mega]
-    )
+def test_unknown_intent_falls_back_to_react() -> None:
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "unknown", "queries": [], "confidence": 0.0},
+        {"thought": "answer directly", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "react answer"},
+    ])
     result = _orchestrator(provider).run(
         "a vague long request with no clear shape at all here", "nb-1"
     )
-    assert result.status == "success" and result.goal == "mega goal"
-    assert provider.structured_calls == 2  # router + planner
+    assert result.status == "success" and result.summary == "react answer"
+    assert provider.structured_calls == 2  # router + react turn
 
 
-def test_greeting_fast_path_spends_no_structured_call() -> None:
-    provider = FakeLayeredProvider()
+def test_greeting_goes_through_router_to_builder() -> None:
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "chat", "queries": [], "confidence": 0.95},
+    ])
     result = _orchestrator(provider).run("hi", "nb-1")
     assert result.status == "success" and result.summary == "layered answer"
     assert len(result.step_results) == 1
-    assert provider.structured_calls == 0  # fast-path: no router, no planner
+    assert provider.structured_calls == 1  # L1 router, then L2 builder (no LLM)
 
 
 def _prose_validator():
@@ -417,19 +414,6 @@ def test_react_prompt_allows_parametric_numbers_without_docs(monkeypatch) -> Non
     assert "recall approximate figures with a reasoning step first" in system
 
 
-def test_validation_feedback_names_missing_executor() -> None:
-    # Trace 27dcf635 attempt 2: the model dropped tool_id entirely.
-    from app.orchestration.engine import _validation_feedback
-
-    dump = (
-        '{"goal": "g", "steps": [{"step_id": "1", '
-        '"input": {"chart_type": "line", "labels": ["a"]}}]}'
-    )
-    feedback = _validation_feedback(dump, "step 1 must set exactly one of agent_id/tool_id")
-    assert "NO-EXECUTOR" in feedback
-    assert "TOP-LEVEL" in feedback
-
-
 def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     from app.orchestration.react import run_react
 
@@ -450,21 +434,16 @@ def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     assert "plot.chart" in system and "never code.sandbox for charting" in system
 
 
-def test_orchestrator_falls_back_to_react_on_double_plan_failure() -> None:
-    ghost = {
-        "goal": "g",
-        "steps": [{"step_id": "1", "agent_id": "ghost", "input": {}}],
-    }
+def test_orchestrator_falls_back_to_react_on_builder_miss() -> None:
     provider = FakeLayeredProvider(queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
-        ghost, ghost,
         {"thought": "need docs", "executor": "rag.query",
          "input": {"query": "x"}, "is_final": False},
         {"thought": "done", "executor": "reasoning",
          "input": {}, "is_final": True, "answer": "react rescued"},
     ])
     assert _orchestrator(provider).run("a long failing request here", "nb-1").summary == "react rescued"
-    assert provider.structured_calls == 5  # router + 2 planners + 2 react turns
+    assert provider.structured_calls == 3  # router + 2 react turns
 
 
 # --- Option A observability: router sibling span, plan enrichment, react spans.
@@ -537,24 +516,32 @@ def test_plan_event_carries_routing_fields() -> None:
     assert route.get("confidence") == 0.9
 
 
-def test_greeting_plan_event_fast_path_route() -> None:
+def test_greeting_plan_event_llm_route() -> None:
     events: list[dict] = []
-    result = _orchestrator(FakeLayeredProvider()).run(
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "chat", "queries": [], "confidence": 0.95},
+    ])
+    result = _orchestrator(provider).run(
         "hi", "nb-1", on_event=events.append,
     )
     assert result.status == "success"
     plans = [e for e in events if e.get("type") == "plan"]
     assert len(plans) == 1
     route = plans[0].get("route") or {}
-    assert route.get("routed_by") == "fast_path"
+    assert route.get("routed_by") == "llm"
     assert route.get("intent") == "chat"
 
 
 def test_router_span_is_sibling_of_plan_under_run(monkeypatch) -> None:
-    from app.orchestration import engine
+    from app.orchestration import engine, plan_graph
 
     recorder = _SpanRecorder()
     monkeypatch.setattr(engine, "manual_span", recorder)
+    # Hermetic step spans: when a real Langfuse client is primed (full
+    # suite via app.main lifespan), the sentinel plan-span ctx below would
+    # otherwise reach the real plan_graph.manual_span and raise on the
+    # invalid IDs. Step-span parenting is not under test here.
+    monkeypatch.setattr(plan_graph, "manual_span", recorder)
     # Distinct well-formed sentinel for the plan-span context: proves the
     # router span does NOT parent under `plan` (it must carry the run ctx
     # instead). Well-formed (dict with trace_id/parent_span_id) so the
@@ -576,30 +563,25 @@ def test_router_span_is_sibling_of_plan_under_run(monkeypatch) -> None:
     assert plans[0]["output"]["intent"] == "compare_multi"
 
 
-def test_plan_span_output_carries_layer_on_mega_fallback(monkeypatch) -> None:
+def test_builder_miss_emits_no_plan_span_and_runs_react(monkeypatch) -> None:
     from app.orchestration import engine
 
     recorder = _SpanRecorder()
     monkeypatch.setattr(engine, "manual_span", recorder)
-    mega = {
-        "goal": "mega goal",
-        "steps": [
-            {"step_id": "1", "agent_id": "reasoning",
-             "input": {"message": "mega answer"},
-             "depends_on": [], "expected_output_type": "text"}
-        ],
-    }
-    provider = FakeLayeredProvider(
-        queued=[{"intent": "unknown", "queries": [], "confidence": 0.0}, mega]
-    )
+    provider = FakeLayeredProvider(queued=[
+        {"intent": "unknown", "queries": [], "confidence": 0.0},
+        {"thought": "answer directly", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "react answer"},
+    ])
     result = _orchestrator(provider).run(
         "a vague long request with no clear shape at all here", "nb-1"
     )
     assert result.status == "success"
-    plans = recorder.by_name("plan")
-    assert len(plans) == 1
-    assert plans[0]["output"]["layer"] == "L3-mega"
-    assert plans[0]["output"]["intent"] == "unknown"
+    # Builder miss delegates to L3 ReAct: no L2 plan span is emitted.
+    assert recorder.by_name("plan") == []
+    routers = recorder.by_name("router")
+    assert len(routers) == 1
+    assert routers[0]["output"]["intent"] == "unknown"
 
 
 def test_react_iteration_spans(monkeypatch) -> None:
@@ -639,13 +621,8 @@ def test_orchestrator_react_span(monkeypatch) -> None:
     # same recorder. engine/plan_graph keep the real no-op here.
     monkeypatch.setattr(lf, "manual_span", recorder)
     monkeypatch.setattr(react_mod, "_manual_span", recorder)
-    ghost = {
-        "goal": "g",
-        "steps": [{"step_id": "1", "agent_id": "ghost", "input": {}}],
-    }
     provider = FakeLayeredProvider(queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
-        ghost, ghost,
         {"thought": "need docs", "executor": "rag.query",
          "input": {"query": "x"}, "is_final": False},
         {"thought": "done", "executor": "reasoning",

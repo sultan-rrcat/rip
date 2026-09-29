@@ -42,12 +42,24 @@ class FakeRouterProvider(ModelProvider):
         return [{"id": "fake"}]
 
 
-def test_fast_path_skips_llm() -> None:
-    router = Router(FakeRouterProvider())
-    result = router.route("hello")
+def test_greeting_goes_through_llm() -> None:
+    # L0 removed: every request — including greetings — is classified by
+    # the L1 LLM. The canned payload here returns compare_multi, proving
+    # a router call was spent even on short input.
+    provider = FakeRouterProvider()
+    result = Router(provider).route("hello")
+    assert provider.calls == 1
+    assert result.routed_by == "llm"
+    assert result.intent is Intent.COMPARE_MULTI
+
+
+def test_chat_intent_maps() -> None:
+    provider = FakeRouterProvider(
+        {"intent": "chat", "queries": [], "confidence": 0.95}
+    )
+    result = Router(provider).route("hello there friend, how are you doing?")
     assert result.intent is Intent.CHAT
-    assert result.routed_by == "fast_path"
-    assert router._provider.calls == 0
+    assert result.queries == []
 
 
 def test_llm_classification_maps() -> None:

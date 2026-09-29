@@ -277,57 +277,90 @@ class TestConvertArtifacts:
 
 
 class _FakeProvider:
-    def __init__(self, plan):
-        self._plan = plan
+    def __init__(self, payload):
+        self._payload = payload
         self.seen_messages = None
 
     def generate_structured(self, model, messages, schema, temperature=0):
         self.seen_messages = messages
-        return self._plan
+        return dict(self._payload)
 
 
-class TestPlannerDocAwareness:
-    def test_snapshot_rendered_in_prompt(self):
-        from app.agents.registry import AgentRegistry
-        from app.orchestration.planner import Planner
-        from app.tools.registry import ToolRegistry
+class TestRouterDocAwareness:
+    def test_router_prompt_covers_convert_slots(self):
+        from app.orchestration.router import Router
 
-        plan_json = {
-            "goal": "g",
-            "steps": [{"step_id": "1", "agent_id": "reasoning", "input": {"message": "hi"}, "depends_on": []}],
-        }
-        provider = _FakeProvider(plan_json)
-        planner = Planner(provider, AgentRegistry(), ToolRegistry())
-        planner.plan("hi", notebook_context="1 file(s): a.pdf [ready] id=fid-1")
+        provider = _FakeProvider(
+            {"intent": "convert_one", "queries": [], "confidence": 0.9,
+             "file_hint": "a.pdf", "target_format": "md"}
+        )
+        result = Router(provider).route("convert a.pdf to md please")
+        assert result.file_hint == "a.pdf" and result.target_format == "md"
         system = provider.seen_messages[0]["content"]
+        assert "file_hint" in system and "target_format" in system
+
+    def test_react_prompt_renders_snapshot(self):
+        from app.agents.registry import get_default_agent_registry
+        from app.orchestration.react import run_react
+        from app.providers.base import ModelProvider
+        from app.tools.registry import get_default_tool_registry
+
+        seen: list = []
+
+        class _Probe(ModelProvider):
+            def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+                return "ok"
+
+            def generate_structured(self, model, messages, schema, *, temperature=0.0):
+                seen.append(messages)
+                return {"thought": "done", "executor": "reasoning",
+                        "input": {}, "is_final": True, "answer": "ok"}
+
+            def embed(self, model: str, text: str) -> list[float]:
+                raise NotImplementedError("test fake")
+
+            def list_available_models(self) -> list[dict]:
+                return [{"id": "fake"}]
+
+        probe = _Probe()
+        agents = get_default_agent_registry(probe)
+        tools = get_default_tool_registry()
+        run_react(
+            "what do docs say?", probe, agents, tools,
+            trace_id="t", notebook_id="nb-1",
+            notebook_context="1 file(s): a.pdf [ready] id=fid-1",
+        )
+        system = seen[0][0]["content"]
         assert "a.pdf" in system
-        assert "notebook.inspect" in system
-        assert "doc.convert" in system
 
-    def test_no_docs_snapshot(self):
-        from app.agents.registry import AgentRegistry
-        from app.orchestration.planner import Planner
-        from app.tools.registry import ToolRegistry
+    def test_no_docs_react_snapshot(self):
+        from app.agents.registry import get_default_agent_registry
+        from app.orchestration.react import run_react
+        from app.providers.base import ModelProvider
+        from app.tools.registry import get_default_tool_registry
 
-        plan_json = {
-            "goal": "g",
-            "steps": [{"step_id": "1", "agent_id": "reasoning", "input": {"message": "hi"}, "depends_on": []}],
-        }
-        provider = _FakeProvider(plan_json)
-        Planner(provider, AgentRegistry(), ToolRegistry()).plan("hi")
-        assert "(no documents)" in provider.seen_messages[0]["content"]
+        seen: list = []
 
-    def test_rag_top_k_unified_and_numbers_placeholder_emphasized(self):
-        from app.agents.registry import AgentRegistry
-        from app.orchestration.planner import Planner
-        from app.tools.registry import ToolRegistry
+        class _Probe(ModelProvider):
+            def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+                return "ok"
 
-        plan_json = {
-            "goal": "g",
-            "steps": [{"step_id": "1", "agent_id": "reasoning", "input": {"message": "hi"}, "depends_on": []}],
-        }
-        provider = _FakeProvider(plan_json)
-        Planner(provider, AgentRegistry(), ToolRegistry()).plan("hi")
-        system = provider.seen_messages[0]["content"]
-        assert '"top_k": 8' not in system
-        assert "BOTH the numbers step" in system
+            def generate_structured(self, model, messages, schema, *, temperature=0.0):
+                seen.append(messages)
+                return {"thought": "done", "executor": "reasoning",
+                        "input": {}, "is_final": True, "answer": "ok"}
+
+            def embed(self, model: str, text: str) -> list[float]:
+                raise NotImplementedError("test fake")
+
+            def list_available_models(self) -> list[dict]:
+                return [{"id": "fake"}]
+
+        probe = _Probe()
+        agents = get_default_agent_registry(probe)
+        tools = get_default_tool_registry()
+        run_react(
+            "what do docs say?", probe, agents, tools,
+            trace_id="t", notebook_id="nb-1",
+        )
+        assert "(no documents)" in seen[0][0]["content"]

@@ -4,6 +4,11 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — remove L0 fast-path and L3 mega-prompt (ADR-032)
+
+- Planning is now L1 router (sole dispatcher, one call per request including greetings) → L2 deterministic builders → L3 step-by-step ReAct. The single-shot DAG prompt and its one-retry recall loop are gone: builder misses (unknown intent, `summarize_plot`, unresolvable converts, `>5` files) go straight to the ReAct loop (max 6 steps), and partial/failed runs fail honestly instead of replanning.
+- Worst-path cost drops from router + 2 plans + 6 steps to router + 6 steps; greetings now spend one router call. The SSE `plan` event keeps a constant `attempt: 1` so old frontends keep working.
+
 ## Unreleased — no repeated plots (trace `07fb4f59`)
 
 - "DocBench vs MMLongBench in a bar graph" no longer renders the same plot twice: the step-by-step fallback treats an exact repeat of a successful step as an idle turn, refuses to re-plot already-charted numbers under retitled/relabeled cosmetics, and rejects nested-`values` / `series_labels` chart shapes with a corrective hint before executing (previously two failed executions plus two duplicate charts in one run).
