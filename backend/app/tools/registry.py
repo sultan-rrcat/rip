@@ -72,7 +72,7 @@ def get_default_tool_registry(
     from app.tools.rag_query import RagQueryTool
 
     registry = ToolRegistry()
-    registry.register(RagQueryTool(rag=rag))
+    registry.register(RagQueryTool(rag=rag, provider=provider))
     registry.register(PlotChartTool())
     registry.register(DocGenerateTool())
     registry.register(DocConvertTool())
