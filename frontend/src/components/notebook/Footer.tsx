@@ -93,7 +93,7 @@ const Footer = memo(function Footer({
           </div>
           <div className="flex justify-between bg-gray-100 px-3 py-3 rounded-xl">
             <div className="flex items-center font-medium text-sm">
-              Qwen 2.5
+              Local Model
             </div>
             <div className="border-none">
               {isRunning ? (
