@@ -140,13 +140,11 @@ def _make_plan_node(
                     "intent": route.intent.value,
                     "routed_by": route.routed_by,
                     "confidence": route.confidence,
-                    "queries": list(route.queries or []),
                 }
                 router_obs.update(output={
                     "intent": route.intent.value,
                     "confidence": route.confidence,
                     "routed_by": route.routed_by,
-                    "queries": [truncate(q, 200) for q in (route.queries or [])],
                 })
                 candidate = build_layered_plan(
                     state["request_text"],
