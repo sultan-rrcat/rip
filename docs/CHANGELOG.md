@@ -27,7 +27,7 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 ## Unreleased — empty-notebook routing (trace `ea48cb30`)
 
 - Factual questions on a notebook with no ready documents no longer burn a retrieval step that provably returns nothing: `qa_single` answers generally from general knowledge (verbatim request, no document-grounding wrapper), while summarize/compare/quiz ask to upload or wait (single reasoning step, no `rag.query`). Files still processing yield a wait-and-retry clarification; an unreadable snapshot still attempts retrieval (the database, not the snapshot, is ground truth).
-- The intent router now guarantees 1–3 search queries for document-grounded intents (post-filled from the request text when the model returns `[]`), and the mega-prompt carries an explicit zero-file rule so the L3 fallback cannot emit `rag.query` on an empty corpus. `qa_single` retrieval uses the unified `top_k: 4`.
+- Query generation moved from the L1 router into `rag.query`: the router now emits intent only, and the retrieval tool decomposes the request into 1–3 sub-queries via an injected LLM provider. The mega-prompt carries an explicit zero-file rule so the L3 fallback cannot emit `rag.query` on an empty corpus. `qa_single` retrieval uses the unified `top_k: 4`.
 
 ## Unreleased — no-docs parametric plots + multi-series `plot.chart` (trace `27dcf635`)
 

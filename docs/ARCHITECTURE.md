@@ -132,6 +132,6 @@ run
 └─ react → react:iter-N → step:rN (L3 ReAct, max 6 iterations)
 ```
 
-`router` is a trace-only sibling of `plan` under `run` (explicit `trace_context` parenting; the code still runs inside the plan node — no graph/state change). `plan` output carries `layer` (`L2-builder`) + `intent`/`routed_by`/`confidence`; `router` output carries `intent`/`confidence`/`routed_by`/`queries`; each `react:iter-N` output carries `thought`/`executor`/`observation`. The SSE `plan` event carries an additive `route: {intent, routed_by, confidence}` object (old clients ignore it) and a constant `attempt: 1` (no recall; kept for old clients).
+`router` is a trace-only sibling of `plan` under `run` (explicit `trace_context` parenting; the code still runs inside the plan node — no graph/state change). `plan` output carries `layer` (`L2-builder`) + `intent`/`routed_by`/`confidence`; `router` output carries `intent`/`confidence`/`routed_by`; each `react:iter-N` output carries `thought`/`executor`/`observation`. The SSE `plan` event carries an additive `route: {intent, routed_by, confidence}` object (old clients ignore it) and a constant `attempt: 1` (no recall; kept for old clients).
 
 Enabled only with `LANGFUSE_ENABLED=true` + keys + backend restart; disabled path is behavior-identical. See `docs/CAVEATS.md` for host/proxy/API notes.
