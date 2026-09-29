@@ -6,7 +6,7 @@ import Box from '@mui/material/Box'
 import Typography from '@mui/material/Typography'
 import Alert from '@mui/material/Alert'
 
-export default function Login() {
+export default function Login({ onLogin }: { onLogin: () => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -31,6 +31,7 @@ export default function Login() {
         throw new Error(data.detail || 'Login failed')
       }
 
+      onLogin()
       navigate('/')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')
