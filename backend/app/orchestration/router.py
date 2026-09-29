@@ -1,9 +1,10 @@
 """L1 intent router — one tiny structured LLM call, the sole dispatcher.
 
 Classifies the user request into exactly one intent plus slot values
-(queries, file_hint, target_format). Returns Intent + confidence; callers
+(file_hint, target_format). Returns Intent + confidence; callers
 route < threshold to UNKNOWN (→ L3 ReAct). Every request — including
 greetings — goes through the LLM; there is no deterministic fast-path.
+Query generation is performed inside rag.query, not by the router.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ ROUTER_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "intent": {"type": "string"},
-        "queries": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": "number"},
         "file_hint": {"type": "string"},
         "target_format": {"type": "string"},
@@ -37,23 +37,9 @@ ROUTER_SCHEMA: dict = {
 #: Formats doc.convert accepts; anything else means "format unstated".
 _CONVERT_FORMATS = frozenset({"md", "docx", "pdf"})
 
-#: Intents grounded in notebook documents: the router must always supply
-#: at least one search query for these (post-filled from the request text
-#: when the model returns an empty list — trace ea48cb30 returned
-#: qa_single with queries=[] and masked the miss downstream).
-_DOC_GROUNDED_INTENTS = frozenset({
-    Intent.QA_SINGLE,
-    Intent.COMPARE_MULTI,
-    Intent.SUMMARIZE,
-    Intent.SUMMARIZE_PLOT,
-    Intent.REPORT,
-    Intent.QUIZ,
-})
-
 
 class RouterResult(BaseModel):
     intent: Intent = Intent.UNKNOWN
-    queries: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     routed_by: str = "llm"
     # Convert slots: file_hint names one file (or "*" for all) and
@@ -79,22 +65,16 @@ class Router:
         )
         system_prompt = (
             "You are an intent router. Classify the user request into exactly "
-            "one intent and propose 1-3 short document search queries "
-            "(empty list when the intent needs no documents).\n"
+            "one intent. Query generation for document retrieval is performed "
+            "inside rag.query, not by you.\n"
             f"Intents:\n{lines}\n"
-            "Document-grounded intents (qa_single, compare_multi, summarize, "
-            "summarize_plot, report, quiz) MUST return 1-3 queries — never "
-            "an empty list. Non-document intents (chat, convert_*, code, "
-            "image, vision, plot_standalone, unknown) return [].\n"
             "Precedence: plot/draw/chart/show-as-graph (from document data) "
             "is always summarize_plot, even when the request also says "
-            "compare; compare_multi is only for comparisons with no chart. "
-            "Make the queries distinct from each other (one angle per query).\n"
+            "compare; compare_multi is only for comparisons with no chart.\n"
             "Convert intents only: file_hint is the named file (or \"*\" when "
             "the request says all/every documents, else \"\"), target_format "
             "is md|docx|pdf when stated (else \"\").\n"
-            "Return intent as the exact value string, queries as a list, "
-            "confidence as 0.0-1.0."
+            "Return intent as the exact value string and confidence as 0.0-1.0."
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -114,10 +94,6 @@ class Router:
             intent = Intent(str(raw.get("intent", "unknown")).strip().lower())
         except ValueError:
             intent = Intent.UNKNOWN
-        queries = raw.get("queries", []) or []
-        queries = [q.strip() for q in queries if isinstance(q, str) and q.strip()][
-            :3
-        ]
         try:
             confidence = float(raw.get("confidence", 0.0))
         except (TypeError, ValueError):
@@ -133,14 +109,8 @@ class Router:
             target_format = ""
         if confidence < ROUTER_CONFIDENCE_THRESHOLD:
             intent = Intent.UNKNOWN
-        if intent in _DOC_GROUNDED_INTENTS and not queries:
-            queries = [request_text.strip()][:1]
-            logger.info(
-                "router post-filled empty queries for intent=%s", intent.value
-            )
         return RouterResult(
             intent=intent,
-            queries=queries,
             confidence=confidence,
             file_hint=file_hint,
             target_format=target_format,
