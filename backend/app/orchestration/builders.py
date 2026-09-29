@@ -1,4 +1,4 @@
-"""L2a deterministic builders — code-built DAGs, no DAG-LLM.
+"""L2 deterministic builders — code-built DAGs, no DAG-LLM.
 
 For intents in DETERMINISTIC_INTENTS the plan shape is fixed; only slot
 values (queries, request text) vary. Wiring (depends_on + {{id}}
@@ -7,9 +7,9 @@ placeholders) is set by construction, so the ecd93eb4 failure class
 
 Deliberately NOT built: summarize_plot — a plot needs content-derived
 `labels` no deterministic shape can know (inventing them would be the
-hallucinated-chart class ADR-027 exists to prevent), so it stays on the
-L3 mega-prompt (Example E). Convert builders resolve literal file ids
-from the notebook snapshot; anything unresolvable returns None → L3.
+hallucinated-chart class ADR-027 exists to prevent), so it goes to
+L3 ReAct. Convert builders resolve literal file ids from the notebook
+snapshot; anything unresolvable returns None → L3 ReAct.
 """
 
 from __future__ import annotations
@@ -424,8 +424,8 @@ def _resolve_convert_file_id(
     """Resolve a router file_hint to a literal snapshot file_id.
 
     Returns None when unresolvable (no hint, no snapshot, no/ambiguous
-    match, or match not ready) — caller falls through to L3, which asks
-    the counter-question. Never invents an id.
+    match, or match not ready) — caller falls through to L3 ReAct, which
+    asks the counter-question. Never invents an id.
     """
     hint = (file_hint or "").strip()
     if not hint or hint == "*":
@@ -448,7 +448,7 @@ def build(
     """Dispatch router result to a deterministic builder.
 
     Returns None for intents without a fixed shape — caller falls through
-    to L2b specialist / L3 mega-prompt.
+    to L3 ReAct.
     """
     if route.intent is Intent.CHAT:
         return build_chat(request_text)
@@ -468,7 +468,7 @@ def build(
             )
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
-            return None  # too many files: fall through to L3 mega-prompt
+            return None  # too many files: fall through to L3 ReAct
         return build_compare_multi(route.queries, request_text, notebook_context)
     if route.intent is Intent.SUMMARIZE:
         state = _corpus_state(notebook_context)

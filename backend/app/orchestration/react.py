@@ -1,4 +1,4 @@
-"""L4 ReAct fallback — last resort when the mega-prompt fails twice.
+"""L3 ReAct — general fallback when no L2 deterministic builder applies.
 
 Unlike upfront DAG planning, ReAct interleaves thought → action → observation:
 each iteration proposes exactly ONE step, executes it immediately, and appends

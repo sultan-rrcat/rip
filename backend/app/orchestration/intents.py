@@ -1,14 +1,14 @@
 """Intent taxonomy for layered planning.
 
-L1 router classifies into these intents; L2 builders/specialists handle each.
-L3 (existing mega-prompt) stays the fallback for UNKNOWN/low-confidence.
+L1 router classifies into these intents; L2 builders handle the
+deterministic subset. Everything else (including UNKNOWN/low-confidence)
+goes to L3 ReAct.
 
-Pure data + tiny deterministic fast-path. NO LLM here.
+Pure data. NO LLM here.
 """
 
 from __future__ import annotations
 
-import re
 from enum import Enum
 
 
@@ -30,7 +30,7 @@ class Intent(str, Enum):
     UNKNOWN = "unknown"
 
 
-#: Router confidence below this routes to UNKNOWN (→ L3 mega-prompt → ReAct).
+#: Router confidence below this routes to UNKNOWN (→ L3 ReAct).
 ROUTER_CONFIDENCE_THRESHOLD = 0.6
 
 #: One line per intent for the tiny router prompt (kept here so prompts stay small).
@@ -55,7 +55,7 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
 #: Intents served by deterministic code-built DAGs (no DAG-LLM needed).
 #: SUMMARIZE_PLOT is deliberately excluded: a plot needs content-derived
 #: `labels` no fixed shape can know (inventing them would be the
-#: hallucinated-chart class ADR-027 prevents), so it stays on L3.
+#: hallucinated-chart class ADR-027 prevents), so it goes to L3 ReAct.
 #: SUMMARIZE is included: per-file overview shards (mode=overview) fan
 #: into one reduce step — wiring set by construction like compare_multi.
 DETERMINISTIC_INTENTS = frozenset(
@@ -69,19 +69,3 @@ DETERMINISTIC_INTENTS = frozenset(
         Intent.QUIZ,
     }
 )
-
-_GREETING_RE = re.compile(
-    r"^\s*(hi+|hii+|hello|hey|yo|thanks|thank you|bye|good\s?(morning|afternoon|evening))\b",
-    re.IGNORECASE,
-)
-
-
-def classify_fast_path(text: str | None) -> Intent | None:
-    """L0 deterministic fast-path: greetings/empty → CHAT, else None (needs router)."""
-    if text is None or not text.strip():
-        return Intent.CHAT
-    stripped = text.strip()
-    # Greeting-led short messages only — "hey compare both reports" must NOT match.
-    if len(stripped) <= 24 and _GREETING_RE.match(stripped):
-        return Intent.CHAT
-    return None

@@ -1,8 +1,9 @@
-"""L1 intent router — one tiny structured LLM call (or no call on fast-path).
+"""L1 intent router — one tiny structured LLM call, the sole dispatcher.
 
-Replaces the mega-prompt's implicit intent classification with an explicit,
-cheap step. Returns Intent + search-query slots + confidence; callers route
-< threshold to UNKNOWN (→ L3 mega-prompt → ReAct).
+Classifies the user request into exactly one intent plus slot values
+(queries, file_hint, target_format). Returns Intent + confidence; callers
+route < threshold to UNKNOWN (→ L3 ReAct). Every request — including
+greetings — goes through the LLM; there is no deterministic fast-path.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from app.orchestration.intents import (
     INTENT_DESCRIPTIONS,
     ROUTER_CONFIDENCE_THRESHOLD,
     Intent,
-    classify_fast_path,
 )
 from app.providers.base import ModelProvider
 
@@ -55,10 +55,10 @@ class RouterResult(BaseModel):
     intent: Intent = Intent.UNKNOWN
     queries: list[str] = Field(default_factory=list)
     confidence: float = 0.0
-    routed_by: str = "llm"  # "fast_path" when classify_fast_path hit
+    routed_by: str = "llm"
     # Convert slots: file_hint names one file (or "*" for all) and
     # target_format is md|docx|pdf. Empty = unstated → caller falls
-    # through to L3 (which asks the counter-question) instead of
+    # through to L3 ReAct (which asks the counter-question) instead of
     # guessing a conversion.
     file_hint: str = ""
     target_format: str = ""
@@ -74,11 +74,6 @@ class Router:
         self._model = model or settings.ollama_default_model
 
     def route(self, request_text: str) -> RouterResult:
-        fast = classify_fast_path(request_text)
-        if fast is not None:
-            return RouterResult(
-                intent=fast, queries=[], confidence=1.0, routed_by="fast_path"
-            )
         lines = "\n".join(
             f"- {intent.value}: {INTENT_DESCRIPTIONS[intent]}" for intent in Intent
         )
@@ -112,7 +107,7 @@ class Router:
                 schema=ROUTER_SCHEMA,
                 temperature=0,
             )
-        except Exception as e:  # noqa: BLE001 - fail-open to L3 fallback
+        except Exception as e:  # noqa: BLE001 - fail-open to L3 ReAct
             logger.warning("router LLM failed, falling back to unknown: %s", e)
             return RouterResult(intent=Intent.UNKNOWN, routed_by="llm")
         try:

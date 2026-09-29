@@ -129,17 +129,16 @@ class Orchestrator:
                 "plan_error": None,
                 "step_results": {},
                 "aggregation": None,
-                "attempt": 0,
-                "planner_feedback": None,
                 "plan_span_ctx": None,
             },
             config=config,  # type: ignore[call-overload]
         )
 
         if final["plan_error"]:
-            # L4 last resort: the mega-prompt failed twice (bounded recall
-            # exhausted). Try the ReAct loop before failing honestly —
-            # cancellations skip it and raise immediately.
+            # L3 general fallback: no L2 deterministic builder applied
+            # (unknown intent, non-deterministic shape, routing miss).
+            # Try the ReAct loop before failing honestly — cancellations
+            # skip it and raise immediately.
             if cancel_event is not None and cancel_event.is_set():
                 logger.warning("orchestration aborted: %s", final["plan_error"])
                 raise OrchestrationError(final["plan_error"])

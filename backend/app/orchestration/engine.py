@@ -2,20 +2,21 @@
 
 The whole round trip is one compiled StateGraph:
 
-    START ──► plan ──(plan ok?)──► execute ──► aggregate ──► END
-                    │                  (fail-honest: a rejected plan
-                    └─(plan_error, ─► plan (once)   never reaches execution
-                       attempts left)              unless retried)
+    START ──► plan ──(builder hit?)──► execute ──► aggregate ──► END
+                      │ (miss → plan_error → END; the orchestrator
+                      │  runs L3 ReAct before failing honest)
 
-Bounded planner recall (one retry = two plans max): a rejected plan or a
-partial/failed aggregation routes back to `plan` once with short,
-instance-specific feedback; the second failure surfaces honestly.
-Clarifications never replan. No resumption: retries re-execute fully.
+Planning is L1 → L2 → L3:
 
-- plan node: Planner (+ retry feedback) + Validator
+- plan node: L1 Router (sole dispatcher, every request via LLM) + L2
+  deterministic builders + Validator. Builder misses (unknown intent,
+  non-deterministic shapes, unresolvable converts, >5 files) return
+  plan_error so the orchestrator runs L3 ReAct. Router failures fail
+  open the same way. No mega-prompt, no planner recall.
 - execute node: builds + streams the per-request inner plan graph
   (plan_graph.run_plan_graph), forwarding step events to on_event
-- aggregate node: deterministic Aggregator (Q36, no LLM)
+- aggregate node: deterministic Aggregator (Q36, no LLM), no retry —
+  partial/failed runs surface honestly; clarifications are the answer.
 
 Per-request state that must NOT live in graph state:
 - `on_event` (per-request callback) and `notebook_id` (run-scoped truth
@@ -46,7 +47,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from app.agents.base import StepStatus
 from app.agents.registry import AgentRegistry
 from app.observability.langfuse import get_trace_context, manual_span, truncate
 from app.orchestration.aggregator import AggregationResult, Aggregator
@@ -80,10 +80,6 @@ def _cancelled(config: RunnableConfig) -> bool:
     return event is not None and event.is_set()
 
 
-#: Retry budget: one recall = two planner outputs max per run.
-_MAX_PLAN_ATTEMPTS = 2
-
-
 class OrchestrationState(TypedDict):
     """Outer graph state — serializable, checkpoint-safe."""
 
@@ -96,81 +92,15 @@ class OrchestrationState(TypedDict):
     plan_error: str | None
     step_results: dict[str, StepResult]
     aggregation: AggregationResult | None
-    attempt: int
-    planner_feedback: str | None
-    #: Explicit Langfuse parent for `step:{id}` spans: the current attempt's
-    #: plan-span context ({"trace_id", "parent_span_id"}), captured inside
-    #: the plan span. None when tracing is off or the plan failed. Lets
-    #: steps nest INSIDE `plan` instead of sitting beside it under `run`.
+    #: Explicit Langfuse parent for `step:{id}` spans: the plan-span context
+    #: ({"trace_id", "parent_span_id"}), captured inside the plan span.
+    #: None when tracing is off or the plan failed. Lets steps nest INSIDE
+    #: `plan` instead of sitting beside it under `run`.
     plan_span_ctx: dict[str, str] | None
 
 
 def _configurable(config: RunnableConfig) -> dict:
     return config.get("configurable") or {}
-
-
-def _validation_feedback(plan_dump: str | None, error: str) -> str:
-    """Short, instance-specific retry signal for a rejected plan.
-
-    A raw JSON dump gets truncated before the malformation (observed live:
-    the dangling `"step_id": "3"` element sat past the 800-char cut), so
-    lead with a per-step skeleton that always fits: step ids, executors and
-    input keys expose nesting/stray-element slips at a glance.
-    """
-    parts = [f"Your previous plan was REJECTED: {error}"]
-    if plan_dump:
-        skeleton = _plan_skeleton(plan_dump)
-        parts.append(
-            f"Rejected plan skeleton (fix it, do not repeat it): {skeleton[:600]}"
-        )
-        if "NO-EXECUTOR" in skeleton:
-            # Trace 27dcf635 attempt 2: the model dropped tool_id entirely
-            # (input keys alone don't execute anything). Name the fix.
-            parts.append(
-                "The rejected step names NO executor — every step needs "
-                "agent_id or tool_id as a TOP-LEVEL key (rule 1), never "
-                "nested inside input."
-            )
-    parts.append("Return a corrected plan satisfying every rule above.")
-    return "\n".join(parts)
-
-
-def _plan_skeleton(plan_dump: str) -> str:
-    """One line per step: id, executor, input keys. Never raises."""
-    import json as _json
-
-    try:
-        data = _json.loads(plan_dump)
-        steps = data.get("steps", [])
-    except (ValueError, AttributeError, TypeError):
-        return plan_dump[:600]
-    lines: list[str] = []
-    for i, s in enumerate(steps):
-        if not isinstance(s, dict):
-            lines.append(f"[{i}] NOT AN OBJECT: {str(s)[:100]!r}")
-            continue
-        ex = s.get("agent_id") or s.get("tool_id") or "NO-EXECUTOR"
-        raw_input = s.get("input")
-        keys = sorted(raw_input) if isinstance(raw_input, dict) else type(raw_input).__name__
-        lines.append(
-            f"step {s.get('step_id', '?')}: executor={ex} input_keys={keys} "
-            f"depends_on={s.get('depends_on', 'MISSING')}"
-        )
-    return "; ".join(lines) or plan_dump[:600]
-
-
-def _execution_feedback(plan_dump: str, failed: list[StepResult]) -> str:
-    """Short retry signal for a partial/failed execution."""
-    lines = [
-        f"- step {r.step_id} ({r.agent_id}): {r.error or 'unknown error'}"
-        + (f" [output was: {r.output[:200]}]" if r.output else "")
-        for r in failed
-    ]
-    return (
-        "Your previous plan executed with FAILURES:\n" + "\n".join(lines) + "\n"
-        f"Previous plan (keep what worked, change only what the errors implicate): {plan_dump[:800]}\n"
-        "Return a corrected plan satisfying every rule above."
-    )
 
 
 def _make_plan_node(
@@ -181,101 +111,83 @@ def _make_plan_node(
         # on planning; the error terminal unwinds the graph.
         if _cancelled(config):
             return {"plan": None, "plan_error": "run cancelled"}
-        attempt = int(state.get("attempt") or 0) + 1
-        feedback_in = state.get("planner_feedback")
         run_ctx = _configurable(config).get(_TRACE_CTX)
-        # Layered planning (L1/L2): route + deterministic builders run
-        # BEFORE the mega-prompt (L3), but only on the first attempt —
-        # retries already carry instance-specific feedback for the
-        # mega-prompt, so they stay on it. A validated builder plan is
-        # used directly — wiring is set by construction, so the
-        # ecd93eb4 ungrounded-fan-in class cannot occur. Any miss
-        # (unknown intent, validation failure, router error) falls
-        # through to the existing planner below, unchanged.
+        # L1 (sole dispatcher) → L2 (deterministic builders). Any miss
+        # (unknown intent, non-deterministic shape, unresolvable convert,
+        # >5 files, validation failure, router error) returns plan_error so
+        # the orchestrator runs L3 ReAct before failing honest.
         # Routing runs BEFORE the plan span opens: the router span is a
         # strict temporal-predecessor sibling (run → router → plan) in the
         # trace timeline, even though both live in this node (Option A: no
         # graph or state changes). Disabled path is a no-op.
-        layered: Plan | None = None
         route_info: dict = {
-            "layer": "L3-mega",
+            "layer": "L3-react",
             "intent": "unknown",
             "routed_by": "none",
             "confidence": 0.0,
             "queries": [],
         }
-        if feedback_in is None:
-            with manual_span(
-                "router",
-                as_type="span",
-                input={"request": truncate(state["request_text"], 2000)},
-                trace_context=run_ctx,
-            ) as router_obs:
-                try:
-                    route = Router(planner.provider).route(state["request_text"])
-                    route_info = {
-                        "layer": (
-                            "L0-fast"
-                            if route.routed_by == "fast_path"
-                            else "L2-builder"
-                        ),
-                        "intent": route.intent.value,
-                        "routed_by": route.routed_by,
-                        "confidence": route.confidence,
-                        "queries": list(route.queries or []),
-                    }
-                    router_obs.update(output={
-                        "intent": route.intent.value,
-                        "confidence": route.confidence,
-                        "routed_by": route.routed_by,
-                        "queries": [truncate(q, 200) for q in (route.queries or [])],
-                    })
-                    candidate = build_layered_plan(
-                        state["request_text"],
-                        route,
-                        state.get("notebook_context"),
+        with manual_span(
+            "router",
+            as_type="span",
+            input={"request": truncate(state["request_text"], 2000)},
+            trace_context=run_ctx,
+        ) as router_obs:
+            try:
+                route = Router(planner.provider).route(state["request_text"])
+                route_info = {
+                    "layer": "L2-builder",
+                    "intent": route.intent.value,
+                    "routed_by": route.routed_by,
+                    "confidence": route.confidence,
+                    "queries": list(route.queries or []),
+                }
+                router_obs.update(output={
+                    "intent": route.intent.value,
+                    "confidence": route.confidence,
+                    "routed_by": route.routed_by,
+                    "queries": [truncate(q, 200) for q in (route.queries or [])],
+                })
+                candidate = build_layered_plan(
+                    state["request_text"],
+                    route,
+                    state.get("notebook_context"),
+                )
+                if candidate is None:
+                    logger.info(
+                        "no builder for intent=%s, delegating to L3 ReAct",
+                        route.intent.value,
                     )
-                    if candidate is not None:
-                        validator.validate(candidate)
-                        layered = candidate
-                        logger.info(
-                            "layered plan hit intent=%s steps=%d",
-                            route.intent.value, len(layered.steps),
-                        )
-                    else:
-                        route_info["layer"] = "L3-mega"
-                except Exception as e:  # noqa: BLE001 - miss falls through to L3
-                    router_obs.update(output={"error": str(e)[:500]})
-                    logger.info("layered plan miss, using mega-prompt: %s", e)
+                    return {
+                        "plan": None,
+                        "plan_error": (
+                            f"no deterministic builder for intent "
+                            f"{route.intent.value} — L3 ReAct required"
+                        ),
+                        "plan_span_ctx": None,
+                    }
+            except Exception as e:  # noqa: BLE001 - miss fails open to L3 ReAct
+                router_obs.update(output={"error": str(e)[:500]})
+                logger.info("router/builder miss, delegating to L3 ReAct: %s", e)
+                return {
+                    "plan": None,
+                    "plan_error": f"routing failed ({e}) — L3 ReAct required",
+                    "plan_span_ctx": None,
+                }
         with manual_span(
             "plan", as_type="span",
-            input={
-                "request": truncate(state["request_text"], 2000),
-                "attempt": attempt,
-                "feedback": truncate(feedback_in, 800),
-            },
+            input={"request": truncate(state["request_text"], 2000)},
             trace_context=run_ctx,
         ) as plan_obs:
-            rejected: Plan | None = None
             try:
-                if layered is not None:
-                    plan = layered
-                else:
-                    plan = planner.plan(
-                        state["request_text"],
-                        context=state["context"],
-                        notebook_context=state.get("notebook_context"),
-                        feedback=feedback_in,
-                    )
-                rejected = plan
+                plan = candidate
                 validator.validate(plan)
                 if plan.is_trivial():
-                    # Defensive fallback: the planner prompt forbids empty
-                    # plans, but older models / cached outputs can still emit
-                    # steps=[]. An empty DAG would execute zero steps and the
+                    # Defensive fallback: builders always emit steps, but an
+                    # empty plan would execute zero steps and the
                     # deterministic aggregator would report failed ("No steps
-                    # were executed."). Route trivial requests to one
-                    # conversational reasoning step instead.
+                    # were executed."). Route to one conversational
+                    # reasoning step instead.
                     fallback_id = "reasoning"
                     try:
                         registry.get(fallback_id)
@@ -307,42 +219,27 @@ def _make_plan_node(
                 err = str(e)
                 plan_obs.update(output={
                     "error": err[:500],
-                    "attempt": attempt,
                     "layer": route_info["layer"],
                     "intent": route_info["intent"],
                     "routed_by": route_info["routed_by"],
                 })
-                if attempt < _MAX_PLAN_ATTEMPTS:
-                    dump = rejected.model_dump_json()[:2000] if rejected else None
-                    logger.info(
-                        "plan %s rejected (attempt %d), recalling planner",
-                        rejected.plan_id if rejected else "?",
-                        attempt,
-                    )
-                    return {
-                        "plan": None,
-                        "plan_error": None,
-                        "attempt": attempt,
-                        "planner_feedback": _validation_feedback(dump, err),
-                    }
+                logger.info("builder plan rejected, delegating to L3 ReAct: %s", err)
                 return {
                     "plan": None,
-                    "plan_error": err,
-                    "attempt": attempt,
-                    "planner_feedback": None,
+                    "plan_error": f"builder plan rejected ({err}) — L3 ReAct required",
+                    "plan_span_ctx": None,
                 }
             plan_obs.update(output={
                 "goal": truncate(plan.goal, 500),
                 "steps": len(plan.steps),
                 "executors": [s.executor_id for s in plan.steps],
-                "attempt": attempt,
-                "layer": route_info["layer"] if layered is not None else "L3-mega",
+                "layer": route_info["layer"],
                 "intent": route_info["intent"],
                 "routed_by": route_info["routed_by"],
                 "confidence": route_info["confidence"],
             })
-            # Capture this attempt's plan-span context while it is current so
-            # the execute node can parent step:{id} spans explicitly under it.
+            # Capture the plan-span context while it is current so the
+            # execute node can parent step:{id} spans explicitly under it.
             # Stored in graph state (plain strings) — survives checkpointing
             # and thread hops where contextvars would be lost.
             plan_span_ctx = get_trace_context()
@@ -350,6 +247,8 @@ def _make_plan_node(
         # here (plan-time, before any step runs) so live subscribers and the
         # persisted replay both see run_started -> plan -> step_* in order.
         # Additive and None-safe: callers without on_event see no change.
+        # `attempt` stays 1 forever (no recall): the frontend uses it to
+        # detect retried plans, and a constant keeps old clients working.
         on_event = _configurable(config).get(_ON_EVENT)
         if callable(on_event):
             on_event(
@@ -357,7 +256,7 @@ def _make_plan_node(
                     "type": "plan",
                     "plan_id": plan.plan_id,
                     "goal": plan.goal,
-                    "attempt": attempt,
+                    "attempt": 1,
                     "route": {
                         "intent": route_info["intent"],
                         "routed_by": route_info["routed_by"],
@@ -377,8 +276,6 @@ def _make_plan_node(
         return {
             "plan": plan,
             "plan_error": None,
-            "attempt": attempt,
-            "planner_feedback": None,
             "plan_span_ctx": plan_span_ctx,
         }
 
@@ -431,71 +328,25 @@ def _make_aggregate_node(aggregator: Aggregator) -> Callable:
             trace_context=run_ctx,
         ) as agg_obs:
             agg = aggregator.aggregate(plan, exec_result)
-            # One execution retry: partial/failed runs replan with the step
-            # errors as feedback. Clarifications never replan (the question IS
-            # the answer); successes, cancellations and capped attempts end.
-            if _cancelled(config):
-                agg_obs.update(output={
-                    "status": agg.status,
-                    "summary": truncate(agg.summary, 2000),
-                    "shown": list(agg.shown),
-                    "hidden": list(agg.hidden),
-                    "visibility": dict(agg.visibility),
-                })
-                return {"aggregation": agg, "planner_feedback": None}
-            attempt = int(state.get("attempt") or 0)
-            retry_armed = (
-                agg.status in ("partial", "failed")
-                and not agg.needs_clarification
-                and attempt < _MAX_PLAN_ATTEMPTS
-            )
             agg_obs.update(output={
                 "status": agg.status,
                 "summary": truncate(agg.summary, 2000),
-                "retry_armed": retry_armed,
                 "shown": list(agg.shown),
                 "hidden": list(agg.hidden),
                 "visibility": dict(agg.visibility),
             })
-        # One execution retry: partial/failed runs replan with the step
-        # errors as feedback. Clarifications never replan (the question IS
-        # the answer); successes, cancellations and capped attempts end.
-        if _cancelled(config):
-            return {"aggregation": agg, "planner_feedback": None}
-        attempt = int(state.get("attempt") or 0)
-        retry_armed = (
-            agg.status in ("partial", "failed")
-            and not agg.needs_clarification
-            and attempt < _MAX_PLAN_ATTEMPTS
-        )
-        if retry_armed:
-            failed = [r for r in exec_result.step_results if r.status is not StepStatus.SUCCESS]
-            logger.info(
-                "aggregation %s (attempt %d), recalling planner",
-                agg.status, attempt,
-            )
-            return {
-                "aggregation": agg,
-                "planner_feedback": _execution_feedback(
-                    plan.model_dump_json(), failed,
-                ),
-            }
-        return {"aggregation": agg, "planner_feedback": None}
+        return {"aggregation": agg}
 
     return aggregate_node
 
 
 def _route_after_plan(state: OrchestrationState) -> str:
-    if state["plan_error"]:
+    if state["plan_error"] or state["plan"] is None:
         return END
-    if state["plan"] is None:
-        return "plan"  # retry loop: rejected plan, feedback armed
     return "execute"
 
 
 def _route_after_aggregate(state: OrchestrationState) -> str:
-    if state.get("planner_feedback"):
-        return "plan"  # execution retry armed
     return END
 
 
@@ -524,12 +375,10 @@ def build_orchestration_graph(
     graph.add_edge(START, "plan")
     graph.add_conditional_edges(
         "plan", _route_after_plan,
-        {"plan": "plan", "execute": "execute", END: END},
+        {"execute": "execute", END: END},
     )
     graph.add_edge("execute", "aggregate")
-    graph.add_conditional_edges(
-        "aggregate", _route_after_aggregate, {"plan": "plan", END: END},
-    )
+    graph.add_edge("aggregate", END)
     # Checkpointed state: every super-step writes a snapshot keyed by
     # thread_id (= trace_id, set by the façade). MemorySaver is in-process —
     # run durability across processes comes from Postgres run_events (Phase 4);

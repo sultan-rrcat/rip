@@ -153,13 +153,12 @@ class Plan(BaseModel):
 
     @classmethod
     def from_model(cls, plan_id: str, goal: str, raw_steps: list[dict]) -> Plan:
-        """Build a Plan from the Planner's raw JSON, deterministically fixing
-        common LLM slips (and failing honest with a retry-actionable message
+        """Build a Plan from raw step JSON, deterministically fixing
+        common LLM slips (and failing honest with an actionable message
         on the rest):
           - non-object array elements (a stray `"step_id": "3"` string where a
             step object belongs — observed live): rejected as ValueError naming
-            the position, so the engine's bounded recall shows the model what
-            to stop doing instead of validating a phantom step;
+            the position instead of validating a phantom step;
           - step-wiring keys nested inside `input` (depends_on,
             expected_output_type, step_id — observed live, ornith-1.5:9b
             nests them twice running): hoisted to top level when absent
@@ -191,10 +190,9 @@ class Plan(BaseModel):
         """
         for i, raw in enumerate(raw_steps):
             if not isinstance(raw, dict):
-                # ValueError (not TypeError): the engine's plan node catches
-                # ValueError for bounded planner recall, so this surfaces as
-                # retry feedback instead of a run crash.
-                raise ValueError(  # noqa: TRY004 - retry contract needs ValueError
+                # ValueError (not TypeError): callers catch ValueError, so
+                # this surfaces as an honest failure instead of a run crash.
+                raise ValueError(  # noqa: TRY004 - honest-failure contract needs ValueError
                     f"step {i + 1} is not an object (got {type(raw).__name__} "
                     f"{str(raw)[:120]!r}) — each steps[] element must be an "
                     "object with step_id plus exactly one of agent_id/tool_id "
