@@ -432,6 +432,7 @@ def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     assert '{"query": "..."' in system
     assert "never nested under 'agent'" in system
     assert "plot.chart" in system and "never code.sandbox for charting" in system
+    assert "title" in system
 
 
 def test_orchestrator_falls_back_to_react_on_builder_miss() -> None:
@@ -763,6 +764,49 @@ def test_react_plot_nested_values_is_idle_hint() -> None:
     assert outcome.result.step_results[-1].output == "have chart"
 
 
+def test_react_plot_without_title_is_idle_hint() -> None:
+    # Trace affdbbd4: 3 of 4 charts rendered untitled — the model was
+    # never asked for one. A title-less proposal must get a corrective
+    # hint WITHOUT executing so the retry carries the same data + title.
+    from app.orchestration.react import _validate_react_input, run_react
+
+    hint = _validate_react_input(
+        "plot.chart",
+        {"chart_type": "bar", "labels": ["A", "B"], "values": [1, 2]},
+    )
+    assert hint is not None and "title" in hint
+    hint_series = _validate_react_input(
+        "plot.chart",
+        {"chart_type": "bar", "labels": ["A", "B"],
+         "series": [{"label": "s", "values": [1, 2]}]},
+    )
+    assert hint_series is not None and "title" in hint_series
+    assert _validate_react_input(
+        "plot.chart",
+        {"chart_type": "bar", "labels": ["A", "B"], "values": [1, 2],
+         "title": "t"},
+    ) is None
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "plot it", "executor": "plot.chart",
+         "input": {"chart_type": "bar", "labels": ["A", "B"],
+                   "values": [1, 2]}, "is_final": False},
+        {"thought": "plot it titled", "executor": "plot.chart",
+         "input": {"chart_type": "bar", "labels": ["A", "B"],
+                   "values": [1, 2], "title": "A vs B"}, "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "have chart"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "plot this", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    # Untitled r1 never executed: titled r2 chart + final answer.
+    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
+    assert outcome.result.step_results[-1].output == "have chart"
+
+
 def test_react_exact_successful_repeat_is_idle() -> None:
     # Trace 07fb4f59 r2/r3: the identical Avg-Tokens chart executed twice.
     # An exact repeat of a success must idle, not re-execute.
@@ -812,8 +856,9 @@ def test_react_replot_same_data_is_idle() -> None:
                    "values": [229, 135], "title": "Number of Documents"},
          "is_final": False},
         {"thought": "plot docs again", "executor": "plot.chart",
-         "input": {"chart_type": "bar", "labels": ["DocBench", "MMLongBench"],
-                   "values": [229, 135]}, "is_final": False},
+          "input": {"chart_type": "bar", "labels": ["DocBench", "MMLongBench"],
+                    "values": [229, 135], "title": "Doc counts (retitled)"},
+          "is_final": False},
         {"thought": "done", "executor": "reasoning",
          "input": {}, "is_final": True, "answer": "have chart"},
     ])

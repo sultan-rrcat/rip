@@ -141,6 +141,24 @@ def render_svg(
     return "".join(parts)
 
 
+def _default_title(
+    labels: list[str], multi: list[tuple[str, list[float]]]
+) -> str:
+    """Fallback chart title when the caller omits one.
+
+    The ReAct prompt and pre-flight validation both require a short
+    title, but direct calls (L2 builders, tests, older clients) may
+    still omit it — an untitled chart renders with no heading. Derive
+    something descriptive from the data: series names scoped by the
+    x-axis labels (e.g. "YOLOv26s, YOLOv26n by FASDD_CV vs AgniNetra").
+    """
+    base = " vs ".join(labels) if len(labels) <= 5 else f"{len(labels)} data points"
+    if multi:
+        names = ", ".join(name for name, _ in multi)
+        return f"{names} by {base}"[:160]
+    return base[:160]
+
+
 class PlotChartTool(Tool):
     tool_id = "plot.chart"
     name = "Plot Chart"
@@ -270,7 +288,8 @@ class PlotChartTool(Tool):
                 )
             str_labels = [str(label) for label in labels]
             svg = render_svg(
-                str(chart_type), str_labels, [], title=title, series=multi
+                str(chart_type), str_labels, [], title=title or _default_title(str_labels, multi),
+                series=multi,
             )
             return ToolResponse(
                 tool_id=self.tool_id,
@@ -313,7 +332,10 @@ class PlotChartTool(Tool):
                 error=f"at most {_MAX_POINTS} points per chart",
             )
         str_labels = [str(label) for label in labels]
-        svg = render_svg(str(chart_type), str_labels, numbers, title=title)
+        svg = render_svg(
+            str(chart_type), str_labels, numbers,
+            title=title or _default_title(str_labels, []),
+        )
         return ToolResponse(
             tool_id=self.tool_id,
             ok=True,

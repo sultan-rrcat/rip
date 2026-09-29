@@ -347,6 +347,38 @@ class TestPlotChart:
         )
         assert not resp.ok and "label" in (resp.error or "")
 
+    def test_missing_title_defaults_from_labels(self):
+        # Untitled calls still render a heading derived from the data
+        # (trace affdbbd4: ReAct omitted title on 3 of 4 charts).
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["FASDD_CV", "AgniNetra"],
+             "values": [0.5, 0.7]},
+        )
+        assert resp.ok
+        assert "FASDD_CV vs AgniNetra" in (resp.output or "")
+
+    def test_missing_title_defaults_from_series(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["FASDD_CV", "AgniNetra"],
+             "series": [{"label": "s", "values": [0.5, 0.7]},
+                        {"label": "n", "values": [0.4, 0.6]}]},
+        )
+        assert resp.ok
+        assert "s, n by FASDD_CV vs AgniNetra" in (resp.output or "")
+
+    def test_explicit_title_kept(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "plot.chart",
+            {"chart_type": "bar", "labels": ["a", "b"], "values": [1, 2],
+             "title": "Custom"},
+        )
+        assert resp.ok and ">Custom<" in (resp.output or "")
+
 
 # --- doc.generate (live libs) ---
 

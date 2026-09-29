@@ -4,6 +4,10 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ---
 
+## Unreleased — titled charts (trace `affdbbd4`)
+
+- Charts no longer render untitled: every `plot.chart` carries a short title naming the metric and comparison (e.g. `mAP@50-95: FASDD_CV vs AgniNetra`). The step-by-step fallback asks for one in its prompt and refuses title-less proposals with a corrective hint before executing; direct calls without a title fall back to a labels-derived heading instead of a blank top margin.
+
 ## Unreleased — remove L0 fast-path and L3 mega-prompt (ADR-032)
 
 - Planning is now L1 router (sole dispatcher, one call per request including greetings) → L2 deterministic builders → L3 step-by-step ReAct. The single-shot DAG prompt and its one-retry recall loop are gone: builder misses (unknown intent, `summarize_plot`, unresolvable converts, `>5` files) go straight to the ReAct loop (max 6 steps), and partial/failed runs fail honestly instead of replanning.

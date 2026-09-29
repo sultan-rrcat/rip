@@ -74,8 +74,10 @@ _TOOL_INPUT_HINTS = {
     "code.sandbox": "code.sandbox needs {\"code\": \"...\"} flat "
     "(not {\"agent\": {...}})",
     "plot.chart": "plot.chart needs {\"chart_type\": \"bar|line\", "
-    "\"labels\": [...], \"values\": [...]} with literal numbers from "
-    "observations — never code.sandbox for charting",
+    "\"labels\": [...], \"values\": [...] or \"series\": [{label, values}], "
+    "plus a short \"title\" naming the metric and comparison "
+    "(e.g. {\"title\": \"mAP@50-95: FASDD_CV vs AgniNetra\"}) "
+    "with literal numbers from observations — never code.sandbox for charting",
     "doc.convert": "doc.convert needs {\"file_id\": \"...\", "
     "\"target_format\": \"md|docx|pdf\"}",
     "doc.generate": "doc.generate needs {\"title\": \"...\", "
@@ -173,6 +175,12 @@ def _validate_react_input(executor: str, action_input: dict) -> str | None:
                         f"plot.chart series {entry.get('label')!r} 'values' "
                         "must be a flat array of numbers"
                     )
+            if not str(action_input.get("title", "")).strip():
+                return (
+                    "plot.chart needs a short 'title' naming the metric "
+                    "and comparison (e.g. 'mAP@50-95: FASDD_CV vs "
+                    "AgniNetra'); retry with the same data plus a title"
+                )
             return None
         # Single-series: values must be a flat array of numbers. Nested
         # arrays (trace 07fb4f59 iters 1+4) fail in the tool with
@@ -186,6 +194,12 @@ def _validate_react_input(executor: str, action_input: dict) -> str | None:
                 "(one per label); for grouped comparisons use "
                 "'series: [{label, values}]' with shared 'labels' instead "
                 "of nesting arrays inside 'values'"
+            )
+        if not str(action_input.get("title", "")).strip():
+            return (
+                "plot.chart needs a short 'title' naming the metric "
+                "and comparison (e.g. 'mAP@50-95: FASDD_CV vs "
+                "AgniNetra'); retry with the same data plus a title"
             )
         return None
     if executor == "doc.convert":
@@ -420,7 +434,8 @@ def run_react(
                 "inlined verbatim — never reference steps by number.\n"
                 "- tool executor: its FLAT schema fields, e.g. rag.query "
                 "{\"query\": \"...\", \"file_id\": \"...\"}, plot.chart "
-                "{\"chart_type\": \"bar\", \"labels\": [...], \"values\": [...]}, "
+                "{\"chart_type\": \"bar\", \"labels\": [...], \"values\": [...], "
+                "\"title\": \"<metric>: A vs B\"}, "
                 "code.sandbox {\"code\": \"...\"}, doc.convert "
                 "{\"file_id\": \"...\", \"target_format\": \"md|docx|pdf\"}.\n"
                 "WRONG: {\"agent\": {\"message\": \"...\"}} for a tool — "
@@ -435,7 +450,10 @@ def run_react(
                 "step first (state they are approximate), then plot.chart. "
                 "Bar/line charts MUST use plot.chart with literal numbers "
                 "from observations (or a prior reasoning step) — never "
-                "code.sandbox for charting. Each plot.chart must cover a "
+                "code.sandbox for charting. Every plot.chart MUST include "
+                "a short 'title' naming the metric and comparison "
+                "(e.g. 'mAP@50-95: FASDD_CV vs AgniNetra'). "
+                "Each plot.chart must cover a "
                 "DIFFERENT metric — never re-plot numbers already charted; "
                 "grouped comparisons use series:[{label, values}] with "
                 "shared labels, never nested values arrays. "
