@@ -54,7 +54,13 @@ logger = logging.getLogger("runs.manager")
 # Registry cap (completed runs included): keeps the process bounded without
 # a sweeper thread; oldest live handles are dropped first. Durability is in
 # Postgres — replay always reads `run_events`, never this registry.
-MAX_RUNS = 500
+MAX_RUNS = 50
+
+# Concurrency limit: max 4 active run workers (matches single Ollama + 2-parallel-writes rule)
+MAX_ACTIVE_RUNS = 4
+
+# Run timeout: 10 minutes fixed
+RUN_TIMEOUT_S = 600
 
 _SENTINEL = None  # stream-end marker for subscriber queues
 
@@ -109,7 +115,7 @@ class RunRecord:
         replays from Postgres first, then calls this).
         """
         with self._lock:
-            live: queue.Queue = queue.Queue()
+            live: queue.Queue = queue.Queue(maxsize=1000)
             done_snapshot = self._done.is_set()
             if done_snapshot:
                 live.put(_SENTINEL)
@@ -127,6 +133,7 @@ class RunManager:
         self._upload_dir = upload_dir  # None → settings.upload_dir read live
         self._runs: dict[str, RunRecord] = {}
         self._lock = threading.Lock()
+        self._semaphore = threading.Semaphore(MAX_ACTIVE_RUNS)
 
     @property
     def _root(self) -> str:
@@ -149,6 +156,7 @@ class RunManager:
 
         ValueError on empty message (defense in depth — routes 422 first);
         LookupError on unknown notebook (routes map to 404).
+        RuntimeError if max active runs reached (routes map to 429).
         """
         text = (message or "").strip()
         if not text:
@@ -156,23 +164,31 @@ class RunManager:
         notebook_id = str(notebook_id)
         if not self._notebook_exists(notebook_id):
             raise LookupError(f"Unknown notebook: {notebook_id}")
-        row = run_store.create_run(notebook_id)
-        run_store.update_run(row.id, status="running")
-        record = RunRecord(run_id=row.id, notebook_id=notebook_id, message=text)
-        with self._lock:
-            while len(self._runs) >= MAX_RUNS:
-                oldest = next(iter(self._runs))
-                logger.info("evicting run %s (registry full)", oldest)
-                del self._runs[oldest]
-            self._runs[record.run_id] = record
-        threading.Thread(
-            target=self._worker,
-            args=(record,),
-            name=f"rip-run-{record.run_id[:8]}",
-            daemon=True,
-        ).start()
-        logger.info("run started id=%s notebook=%s", record.run_id, notebook_id)
-        return record
+
+        if not self._semaphore.acquire(blocking=False):
+            raise RuntimeError("Max concurrent runs reached")
+
+        try:
+            row = run_store.create_run(notebook_id)
+            run_store.update_run(row.id, status="running")
+            record = RunRecord(run_id=row.id, notebook_id=notebook_id, message=text)
+            with self._lock:
+                while len(self._runs) >= MAX_RUNS:
+                    oldest = next(iter(self._runs))
+                    logger.info("evicting run %s (registry full)", oldest)
+                    del self._runs[oldest]
+                self._runs[record.run_id] = record
+            threading.Thread(
+                target=self._worker,
+                args=(record,),
+                name=f"rip-run-{record.run_id[:8]}",
+                daemon=True,
+            ).start()
+            logger.info("run started id=%s notebook=%s", record.run_id, notebook_id)
+            return record
+        except Exception:
+            self._semaphore.release()
+            raise
 
     def cancel_run(self, run_id: str) -> tuple[bool, bool]:
         """Cooperative cancel. Returns (handled, already_done).
@@ -256,6 +272,12 @@ class RunManager:
         # HERE in the worker thread: the plan graph copies this thread's
         # contextvars per node, so engine/step/generation spans auto-parent.
         # All no-ops when tracing is disabled.
+
+        # Fixed 10-minute run timeout: cancel cooperatively via cancel_event.
+        timeout_timer = threading.Timer(RUN_TIMEOUT_S, self._on_timeout, args=(record,))
+        timeout_timer.daemon = True
+        timeout_timer.start()
+
         try:
             self._publish(
                 record,
@@ -278,8 +300,15 @@ class RunManager:
             logger.exception("run %s crashed", record.run_id)
             self._finish_failed(record, str(e))
         finally:
+            timeout_timer.cancel()
             langfuse_flush()
             record._close()
+            self._semaphore.release()
+
+    def _on_timeout(self, record: RunRecord) -> None:
+        """Cancel a run that exceeded the fixed timeout."""
+        logger.warning("run %s timed out after %ds", record.run_id, RUN_TIMEOUT_S)
+        record.cancel()
 
     def _run_traced(self, record: RunRecord, run_obs) -> None:
         """Worker body inside the trace root (split for readability)."""

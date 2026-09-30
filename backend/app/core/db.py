@@ -38,7 +38,7 @@ def _db_params() -> dict:
 def _get_pool() -> ThreadedConnectionPool:
     global _pool
     if _pool is None:
-        _pool = ThreadedConnectionPool(minconn=2, maxconn=10, **_db_params())
+        _pool = ThreadedConnectionPool(minconn=4, maxconn=20, **_db_params())
     return _pool
 
 
