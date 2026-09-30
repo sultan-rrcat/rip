@@ -26,7 +26,7 @@ from app.tools.registry import get_default_tool_registry
 
 class FakeRAG:
     def retrieve_context(
-        self, notebook_id, query, top_k=8, file_id=None, file_name=None, mode="specific"
+        self, notebook_id, query, top_k=4, file_id=None, file_name=None, mode="specific"
     ):
         return {
             "query": query,

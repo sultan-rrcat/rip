@@ -123,7 +123,7 @@ class FakeRAG:
         self.seen: list[tuple] = []
 
     def retrieve_context(
-        self, notebook_id, query, top_k=8, file_id=None, file_name=None, mode="specific"
+        self, notebook_id, query, top_k=4, file_id=None, file_name=None, mode="specific"
     ):
         self.seen.append((notebook_id, query, top_k, file_id, mode))
         return {
@@ -1200,7 +1200,7 @@ class TestStructuralRepair:
             "p", "Create 15 MCQs",
             [
                 {"step_id": "1", "tool_id": "rag.query",
-                 "input": {"query": "x", "top_k": 8}},
+                 "input": {"query": "x", "top_k": 4}},
                 {"step_id": "2", "agent_id": "fake",
                  "input": {"message": "write 15 MCQs from {{1}}"},
                  "expected_output_type": "answer"},
@@ -1228,7 +1228,7 @@ class TestKeyHoist:
     def _rag_then_writer(self, writer_input):
         return [
             {"step_id": "1", "tool_id": "rag.query",
-             "input": {"query": "x", "top_k": 8}},
+             "input": {"query": "x", "top_k": 4}},
             {"step_id": "2", "agent_id": "fake", "input": writer_input},
         ]
 
@@ -1331,7 +1331,7 @@ class TestPlaceholderEdges:
             "p", "Create 15 MCQs",
             [
                 {"step_id": "1", "tool_id": "rag.query",
-                 "input": {"query": "x", "top_k": 8},
+                 "input": {"query": "x", "top_k": 4},
                  "expected_output_type": "chunks"},
                 {"step_id": "2", "agent_id": "fake",
                  "input": {"message": "write 15 MCQs from {{1}}"},
