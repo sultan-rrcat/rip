@@ -74,6 +74,10 @@ export function useMessages(notebook_id: string | undefined) {
     async (runId: string) => {
       const nb = nbRef.current
       const messageId = placeholderRef.current
+      // Snapshot the accumulated answer before detach clears the refs.
+      const text = textRef.current
+      const sources = sourcesRef.current
+      const artifacts = artifactsRef.current
       // Snapshot the collapsed-all Steps panel before detach clears it.
       if (messageId && planStepsRef.current) {
         const snapshot: RunView = {
@@ -109,9 +113,9 @@ export function useMessages(notebook_id: string | undefined) {
         const saved = await createMessageAPI(
           nb,
           'assistant',
-          textRef.current,
-          sourcesRef.current,
-          artifactsRef.current,
+          text,
+          sources,
+          artifacts,
         )
         localStorage.setItem(persistedKey(nb), runId)
         setMessages((prev) =>
