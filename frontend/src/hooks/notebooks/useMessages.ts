@@ -102,6 +102,11 @@ export function useMessages(notebook_id: string | undefined) {
       }
       detach()
       if (!nb || !messageId) return
+      // Refuse-empty guard: never persist an empty assistant message.
+      if (!text.trim()) {
+        setMessages((prev) => prev.filter((m) => m.id !== messageId))
+        return
+      }
       // Exactly-once assistant persist: a resumed replay of an already
       // saved run only removes the placeholder (the saved row is loaded).
       if (localStorage.getItem(persistedKey(nb)) === runId) {
@@ -505,6 +510,8 @@ export function useMessages(notebook_id: string | undefined) {
         const runId = await createRun(notebook_id, text)
         attach(runId, assistantTempId, '')
       } catch (err) {
+        isRunningRef.current = false
+        setIsRunning(false)
         const errorText = `Something went wrong. Error: ${err}`
         try {
           const errorMessage = await createMessageAPI(

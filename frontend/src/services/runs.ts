@@ -67,6 +67,7 @@ export function subscribeToRunEvents(
 export async function cancelRun(runId: string): Promise<void> {
   const response = await fetch(`${API}/v1/runs/${runId}/cancel`, {
     method: 'POST',
+    credentials: 'include',
   })
 
   if (!response.ok) {

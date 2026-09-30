@@ -1,4 +1,5 @@
 import Card from '@/components/home/Card'
+import LogoutButton from '@/components/LogoutButton'
 import { useState, useEffect } from 'react'
 import { getNotebooksAPI } from '@/services/notebooks'
 import type { Notebook } from '@/types'
@@ -21,7 +22,10 @@ export default function Home() {
   }, [])
 
   return (
-    <div className="flex items-center justify-center h-screen">
+    <div className="relative flex items-center justify-center h-screen">
+      <div className="absolute top-4 right-4">
+        <LogoutButton />
+      </div>
       <div className="m-2 h-3/4 w-3/4 border rounded-2xl bg-gray-100 flex items-center justify-center overflow-y-auto ">
         <div className="flex flex-wrap items-center justify-center">
           <Card isNew={true} title={'Create New'} />
