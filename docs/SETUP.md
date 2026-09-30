@@ -40,6 +40,7 @@ Keys ( authoritative defaults in `backend/app/core/config.py`):
 | `MAX_UPLOAD_SIZE_MB` | `50` (must match nginx `client_max_body_size 50M`) |
 | `LANGFUSE_ENABLED/HOST/PUBLIC_KEY/SECRET_KEY/ENVIRONMENT/RELEASE` | Opt-in tracing (`false` + `http://localhost:3002` defaults; see §4) |
 | `PORT` | `8000`, pinned in compose (`docker-compose.yml` sets `PORT: 8000` — do not override; `EXPOSE`, port mapping, and health probes all assume it). Honored as `$PORT` only for bare `docker run` |
+| `BACKEND_CPUS` | Backend CPU quota (compose `cpus:` time quota, not core pinning). Dynamic default via `scripts/rip.*`: host cores − 1 (min 2); explicit shell/`.env` wins; raw compose falls back to `2.0`. Raise on big hosts for faster Docling/BGE ingestion |
 | `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
 | `UPLOAD_DIR` | `./backend/uploads` host-local; `/app/uploads` in compose (overridden in `docker-compose.yml`, image `ENV` fallback matches) |
 | `RAG_PDF_LOADER` | `docling` (default) or `opendataloader` — the selected PDF→Markdown loader runs first, the other is the fallback |

@@ -62,9 +62,29 @@ function Clear-StaleEnv {
     Remove-Item Env:OLLAMA_BASE_URL, Env:OLLAMA_DEFAULT_MODEL, Env:OLLAMA_TIMEOUT_MS, Env:OLLAMA_CONTEXT_WINDOW, Env:OLLAMA_IMAGE_MODEL -ErrorAction SilentlyContinue
 }
 
+function Ensure-BackendCpus {
+    # Dynamic default: host logical cores - 1 (min 2) for the ML backend.
+    # Explicit wins: shell export first, then .env value; only compute
+    # when neither is set. Compose falls back to 2.0 without the wrapper.
+    if (-not [string]::IsNullOrWhiteSpace($env:BACKEND_CPUS)) { return }
+    $fromEnv = Read-DotEnvValue "BACKEND_CPUS" ""
+    if (-not [string]::IsNullOrWhiteSpace($fromEnv)) { return }
+    $cores = 0
+    try { $cores = [int]$env:NUMBER_OF_PROCESSORS } catch { $cores = 0 }
+    if ($cores -le 0) {
+        try { $cores = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors } catch { $cores = 0 }
+    }
+    if ($cores -le 0) { return }
+    $quota = $cores - 1
+    if ($quota -lt 2) { $quota = 2 }
+    $env:BACKEND_CPUS = "$quota"
+    Write-Output "BACKEND_CPUS auto-set to $quota (host cores: $cores; override via shell or .env)."
+}
+
 function Invoke-Compose {
     param([string[]]$ComposeArgs)
     Clear-StaleEnv
+    Ensure-BackendCpus
     & docker compose @ComposeArgs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

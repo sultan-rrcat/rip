@@ -42,8 +42,32 @@ clear_stale_env() {
   unset OLLAMA_BASE_URL OLLAMA_DEFAULT_MODEL OLLAMA_TIMEOUT_MS OLLAMA_CONTEXT_WINDOW OLLAMA_IMAGE_MODEL || true
 }
 
+ensure_backend_cpus() {
+  # Dynamic default: host logical cores - 1 (min 2) for the ML backend.
+  # Explicit wins: shell export first, then .env value; only compute
+  # when neither is set. Compose falls back to 2.0 without the wrapper.
+  if [[ -n "${BACKEND_CPUS:-}" ]]; then return 0; fi
+  if [[ -n "$(dotenv_val BACKEND_CPUS '')" ]]; then return 0; fi
+  local cores=""
+  if command -v nproc >/dev/null 2>&1; then
+    cores="$(nproc 2>/dev/null || true)"
+  fi
+  if [[ -z "$cores" ]]; then
+    cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  fi
+  if [[ -z "$cores" ]] && command -v sysctl >/dev/null 2>&1; then
+    cores="$(sysctl -n hw.ncpu 2>/dev/null || true)"
+  fi
+  if ! [[ "$cores" =~ ^[0-9]+$ ]] || (( cores <= 0 )); then return 0; fi
+  local quota=$(( cores - 1 ))
+  if (( quota < 2 )); then quota=2; fi
+  export BACKEND_CPUS="$quota"
+  echo "BACKEND_CPUS auto-set to $quota (host cores: $cores; override via shell or .env)."
+}
+
 compose() {
   clear_stale_env
+  ensure_backend_cpus
   docker compose "$@"
 }
 
