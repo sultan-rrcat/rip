@@ -33,8 +33,7 @@ backend/app/   main.py, core/, rag/, routes/, services/, providers/, agents/,
                tools/, orchestration/, store/runs.py, runs/, bff/, api/,
                observability/, artifacts.py
 frontend/src/  pages/, components/, hooks/notebooks/, services/, types/
-docs/          ARCHITECTURE.md, SETUP.md, CAVEATS.md, ADR.md, AGENT.md,
-                CONTEXT.md, CHANGELOG.md
+docs/          ARCHITECTURE.md, SETUP.md, ADR.md, AGENT.md, CONTEXT.md
 ```
 
 ---
@@ -56,14 +55,12 @@ Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (`HOST_BACK
 |---|---|
 | `docs/ARCHITECTURE.md` | System design: topology, modules, data model, run lifecycle, RAG, memory |
 | `docs/SETUP.md` | Runnable setup: env, DB bootstrap, compose, smoke test |
-| `docs/CAVEATS.md` | Known traps and environment gotchas (read before debugging) |
 | `docs/ADR.md` | Architecture decisions, past and present |
 | `docs/AGENT.md` | Maintainer guide: conventions, commands, workflow |
 | `docs/CONTEXT.md` | Domain glossary and data-flow reference |
-| `docs/CHANGELOG.md` | Notable changes going forward |
 
 ---
 
 ## Contributing
 
-Feature branches, one concern per commit. Run backend tests (`pytest` from repo root) and `ruff` before committing; keep `docs/CHANGELOG.md` updated for user-visible changes. Decisions that change architecture need an entry in `docs/ADR.md`.
+Feature branches, one concern per commit. Run backend tests (`pytest` from repo root) and `ruff` before committing. Decisions that change architecture need an entry in `docs/ADR.md`.

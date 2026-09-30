@@ -1,6 +1,6 @@
 # Maintainer Guide (`AGENT.md`)
 
-Conventions for working in this repo. Design: `ARCHITECTURE.md`. Gotchas: `CAVEATS.md`.
+Conventions for working in this repo. Design: `ARCHITECTURE.md`.
 
 ---
 
@@ -9,7 +9,7 @@ Conventions for working in this repo. Design: `ARCHITECTURE.md`. Gotchas: `CAVEA
 - **Privacy & offline-first.** No telemetry or external SaaS. Ollama + local weights only; Langfuse strictly opt-in.
 - **One concern per change.** Small, reviewable commits; never mix refactor, behavior, and infra in one commit.
 - **No guessing.** Ask on architectural ambiguity. Never invent endpoints, config keys, or dependencies.
-- **Record decisions.** Architecture changes get an `ADR.md` entry; user-visible changes get a `CHANGELOG.md` entry.
+- **Record decisions.** Architecture changes get an `ADR.md` entry.
 
 ## 2. Module map (`backend/app/` root)
 

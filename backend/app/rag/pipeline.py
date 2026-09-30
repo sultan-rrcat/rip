@@ -31,7 +31,7 @@ class RagPipeline:
             if not Path(model_path).exists():
                 raise FileNotFoundError(
                     f"BGE model missing at {model_path} ({label}) — "
-                    "set an absolute path in .env, see docs/CAVEATS.md"
+                    "set an absolute path in .env"
                 )
         self.embedding_model = HuggingFaceEmbeddings(
             model_name=settings.bge_m3_model_path

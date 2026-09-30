@@ -1,6 +1,6 @@
 # Setup Guide: RIP
 
-> Design reference: `docs/ARCHITECTURE.md`. Gotchas: `docs/CAVEATS.md` (read before debugging).
+> Design reference: `docs/ARCHITECTURE.md`.
 
 ---
 

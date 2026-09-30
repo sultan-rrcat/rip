@@ -25,11 +25,11 @@ _ARTIFACTS_DDL = "ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS artifacts
 def ensure_artifacts_column() -> None:
     """Idempotent startup migration for pre-existing volumes.
 
-    Compose Postgres init runs schema.sql only on an empty pgdata volume
-    (see CAVEATS), so a redeploy with new DDL otherwise 500s until someone
-    re-applies it by hand. Fail-soft by design: a failure here only warns —
-    the routes below also degrade to the legacy shape when the column is
-    absent, so boot never crashes on DB trouble.
+    Compose Postgres init runs schema.sql only on an empty pgdata volume,
+    so a redeploy with new DDL otherwise 500s until someone re-applies it
+    by hand. Fail-soft by design: a failure here only warns — the routes
+    below also degrade to the legacy shape when the column is absent, so
+    boot never crashes on DB trouble.
     """
     try:
         with pg_connection() as conn, conn.cursor() as cur:

@@ -1,7 +1,7 @@
 # RIP — Critical Issues & Urgent Improvements Plan
 
 > Status: drilled 2026-09-30, all Round-1 recommendations accepted.
-> Source: full `docs/` read (ARCHITECTURE, SETUP, CAVEATS, ADR-001–032, AGENT, CONTEXT, CHANGELOG) + codebase sweep (backend `app/`, `schema.sql`, frontend `src/`, compose, scripts, tests).
+> Source: full `docs/` read (ARCHITECTURE, SETUP, ADR-001–032, AGENT, CONTEXT) + codebase sweep (backend `app/`, `schema.sql`, frontend `src/`, compose, scripts, tests).
 
 ## Decisions (locked)
 
@@ -76,8 +76,8 @@
 
 - No CI (`.github/` missing) — follow-up ticket, not P0 per decision.
 - Stale `top_k=8` (`CONTEXT.md:38`, `tools/rag_query.py:3`, 4 test fakes) vs code `_DEFAULT_TOP_K=4`.
-- Stale mega-prompt refs post ADR-032 (`providers/base.py:9`, `tools/base.py:8`, `useMessages.ts:192`, `CHANGELOG.md`).
-- `SETUP.md` container ports `(5432,8000,80)` → should be `8080`; `CAVEATS.md:68` omits `:8080`.
+- Stale mega-prompt refs post ADR-032 (`providers/base.py:9`, `tools/base.py:8`, `useMessages.ts:192`).
+- `SETUP.md` container ports `(5432,8000,80)` → should be `8080`.
 - Loose `>=` pins, no `pytest-cov`, minimal ruff; `rip.ps1` vs `rip.sh` dotenv first-match vs last-wins.
 - `frontend/.env` LAN IP → gitignored/local-only.
 
@@ -89,4 +89,4 @@
 - [ ] B3 reboot reaper marks `error`.
 - [ ] S1 cross-user 404 matrix passes.
 - [ ] S2 login throttle + CORS with credentials passes.
-- [ ] `docs/CHANGELOG.md` updated; architecture-changing items get `docs/ADR.md` entries.
+- [ ] Architecture-changing items get `docs/ADR.md` entries.

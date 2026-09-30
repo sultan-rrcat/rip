@@ -2,8 +2,8 @@ FROM python:3.11.9-slim
 
 # Build-time proxy only (ARG, not persisted): apt/pip read the env during
 # RUN. Persisting empty HTTP_PROXY/HTTPS_PROXY breaks LAN traffic
-# (postgres, host.docker.internal for Ollama/Langfuse — see CAVEATS proxy
-# trap); only NO_PROXY defaults are baked for runtime.
+# (postgres, host.docker.internal for Ollama/Langfuse); only NO_PROXY
+# defaults are baked for runtime.
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ARG NO_PROXY
@@ -18,7 +18,7 @@ WORKDIR /app
 
 # Java runtime for OpenDataLoader/Tika PDF fallback (P0.1: in-container
 # ingest stalled in `processing` without a JRE; Docling primary + fallback
-# both need it — see docs/CAVEATS.md). Minimal headless variant.
+# both need it). Minimal headless variant.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
