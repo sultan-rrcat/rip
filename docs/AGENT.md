@@ -18,13 +18,14 @@ main.py              lifespan (VectorRAG) + /v1 mounts
 core/config.py       Pydantic Settings (port 8000, OLLAMA_*)
 core/db.py, dependencies.py, logging.py
 rag/pipeline.py, vector_rag.py
-routes/notebooks.py, files.py, messages.py
+routes/notebooks.py, files.py, messages.py, auth.py
 services/chat.py, file_processor.py
 providers/base.py, ollama.py, streaming.py, tracing.py
 agents/base.py, registry.py, reasoning.py, coding.py, vision.py
 tools/base.py, registry.py, executor.py, rag_query.py, notebook_inspect.py,
   plot_chart.py, doc_generate.py, doc_convert.py, code_sandbox.py, image_generate.py
-orchestration/plan.py, planner.py, validator.py, aggregator.py,
+orchestration/plan.py, planner.py (thin holder, no DAG prompt), router.py,
+  intents.py, builders.py, react.py, validator.py, aggregator.py,
   engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
 store/runs.py        Postgres CRUD for runs + run_events (no deltas)
 runs/manager.py      worker: memory, sources, never writes messages
@@ -60,7 +61,7 @@ frontend/src/
 | Backend tests | `pytest` | root |
 | Backend lint | `ruff` | root |
 | Frontend install/dev/lint/build | `npm install` / `npm run dev` / `npm run lint` / `npm run build` | `frontend/` |
-| Compose lifecycle | `scripts/rip.ps1 <up\|down\|fresh\|restart\|rebuild\|logs\|ps\|migrate\|health>` (`.sh` mirror on Linux/macOS; host remaps via `HOST_*_PORT`) — canonical; raw `docker compose` only for one-offs | root |
+| Compose lifecycle | `scripts/rip.ps1 <up\|down\|fresh\|restart\|rebuild\|logs\|ps\|status\|migrate\|health\|help>` (`.sh` mirror on Linux/macOS; host remaps via `HOST_*_PORT`) — canonical; `up` rebuilds by default (`VITE_API_URL` bake); raw `docker compose` only for one-offs | root |
 
 ## 5.1 Host environments (`agent_env` vs `ml_env`)
 
@@ -87,7 +88,8 @@ OLLAMA_BASE_URL=http://10.10.30.77:21434
 
 ## 6. Standing rules (do not break)
 
-- Ollama only (`OLLAMA_BASE_URL`); port `8000`; `CORS *` as plain str.
+- Ollama only (`OLLAMA_BASE_URL`); port `8000`; `CORS_ORIGINS` plain str (`*` = no credentials; explicit list required with cookie auth).
+- Login first (`/api/auth/*`, cookie `rip_session`); all `/api/*` + `/v1/*` except health require auth; rows owner-scoped (404-on-foreign).
 - `/v1/*` bare JSON; no envelope. Frontend owns `messages`; backend never writes them.
 - `delta` live-only; `conversation_summary` ≠ SSE `summary`; sources via SSE after `rag.query`; artifacts as disk URLs.
 - `notebook_id` injected by the engine, never LLM-generated. No query rewrite. Admin health stub only.

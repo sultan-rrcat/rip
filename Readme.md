@@ -8,8 +8,9 @@ Offline research assistant: upload documents into notebooks, then chat over them
 
 - **Notebooks** group documents + chat history (one notebook = one conversation).
 - **Uploads** are parsed (Docling), chunked by Markdown headers, embedded (BGE-M3), and stored in Postgres+pgvector.
-- **Chat** runs through `POST /v1/runs` + SSE (`run_started → plan → step_started → delta → step_completed → sources → artifacts → summary → run_completed`) with reasoning, coding, and vision agents plus seven tools: `rag.query`, `notebook.inspect`, `plot.chart`, `doc.generate`, `doc.convert`, `code.sandbox`, `image.generate`.
-- **Runs persist** to Postgres: they survive page refresh, replay their event log on reconnect, and can be cancelled with the stop button.
+- **Chat** runs through `POST /v1/runs` + SSE (`run_started → plan → step_started → delta (live-only) → step_completed → sources → artifacts → summary → run_completed`, plus `error`/`cancelled`) with reasoning, coding, and vision agents plus seven tools: `rag.query`, `notebook.inspect`, `plot.chart`, `doc.generate`, `doc.convert`, `code.sandbox`, `image.generate`.
+- **Runs persist** to Postgres: they survive page refresh, replay structural events on reconnect (`delta` is live-only), and can be cancelled with the stop button.
+- **Auth** gates the UI + API: login (`POST /api/auth/login`, cookie `rip_session`) before notebooks/runs; rows scoped by `owner_id` (404-on-foreign).
 
 ---
 
@@ -20,7 +21,7 @@ Offline research assistant: upload documents into notebooks, then chat over them
 | Backend | Python 3.11+, FastAPI, LangGraph, `backend/app/` |
 | Retrieval | `VectorRAG`: vector similarity + full-text rank fusion + BGE rerank |
 | LLM | Ollama (`OLLAMA_BASE_URL`, default model `qwen2.5:14b`) |
-| DB | Postgres + pgvector (`notebooks/files/embeddings/messages/runs/run_events`) |
+| DB | Postgres + pgvector (`users/notebooks/files/embeddings/messages/runs/run_events/sessions`) |
 | Frontend | React 19 + Vite, Tailwind + MUI v9, `useState` + `EventSource` |
 | Observability | Langfuse, opt-in only |
 
@@ -33,7 +34,7 @@ backend/app/   main.py, core/, rag/, routes/, services/, providers/, agents/,
                tools/, orchestration/, store/runs.py, runs/, bff/, api/,
                observability/, artifacts.py
 frontend/src/  pages/, components/, hooks/notebooks/, services/, types/
-docs/          ARCHITECTURE.md, SETUP.md, ADR.md, AGENT.md, CONTEXT.md
+docs/          ARCHITECTURE.md, SETUP.md, ADR.md, AGENT.md, CONTEXT.md, PLAN.md
 ```
 
 ---
@@ -42,7 +43,8 @@ docs/          ARCHITECTURE.md, SETUP.md, ADR.md, AGENT.md, CONTEXT.md
 
 1. Read `docs/SETUP.md` (environment, database, Ollama, compose).
 2. `copy .env.example .env`, edit `OLLAMA_BASE_URL` for your run mode (see SETUP §4), then `docker compose up --build postgres backend frontend` (`--build` required: `VITE_API_URL` is baked at image build).
-3. Frontend dev: `cd frontend && npm install && npm run dev`.
+3. Login once in the UI (`POST /api/auth/login`) — the API returns 401 until then.
+4. Frontend dev: `cd frontend && npm install && npm run dev` (Vite `:5178`; compose-host `:5173` → container `:8080`).
 4. Backend dev: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload`.
 
 Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (`HOST_BACKEND_PORT` when remapped).

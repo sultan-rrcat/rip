@@ -140,7 +140,8 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-029: Layered planning (router + deterministic builders + ReAct fallback)
 
-- **Status:** Accepted (2026-09-17, trace `ecd93eb4`)
+- **Status:** Amended by ADR-032 (2026-09-18): L0 fast-path deleted, L3 mega-prompt deleted (`planner.py` is a thin holder), ReAct promoted L4→L3, no recall. L0/L3-mega/L4 numbering + ADR-028 recall budget below are historical; current path is L1 Router → L2 Builders → L3 ReAct (see ADR-032).
+- **Original status:** Accepted (2026-09-17, trace `ecd93eb4`)
 - **Context:** The planner prompt (`planner.py`, ~243 lines + full manifests + Rules 1-9 + Examples A-F) grows with every hardening rule, and the single-shot DAG format forces the model to solve intent classification + DAG shape + placeholder wiring in one call. Observed live: a compare-two-reports request produced two good `rag.query` steps plus a reasoning step that named "step 1/2" in prose with no `{{1}} {{2}}`, ran in parallel with retrieval, and asked the user to re-upload. Appending more prompt rules does not scale.
 - **Decision:** Layer the planning path, strictly additive; the existing mega-prompt is untouched as L3 fallback:
   1. L0 deterministic fast-path (`intents.classify_fast_path`): greetings/empty → single `reasoning` step, no LLM.
@@ -154,7 +155,7 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-030: File-scoped intelligent retrieval (per-file shards + overview mode)
 
-- **Status:** Accepted (2026-09-18, trace `795abaf2` — both compare queries returned one document)
+- **Status:** Accepted (2026-09-18, trace `795abaf2` — both compare queries returned one document). Note (ADR-032): "L3 prompt" refs below are historical — the mega-prompt was deleted; `summarize_plot`/ungoverned intents are now served by L3 ReAct.
 - **Context:** `rag.query` was notebook-global (SQL filtered only `notebook_id`) and `build_compare_multi` fanned out by LLM query-angle, not by file. Two generic topical queries embed similarly and both retrieve the dominant document; the post-hoc `_interleave_by_source` cannot recover chunks that never passed the rerank threshold.
 - **Decision:** (1) Extend `rag.query`/`VectorRAG.retrieve_context` with optional `file_id`/`file_name` (SQL `AND file_id=...`, literals from snapshot only, never invented/placeholders) and `mode=specific|overview` (default `specific`). Overview fetches `top_k*3` candidates, applies a metadata section-keyword boost (introduction/summary/abstract/..., never slash-joined into the embedding query), then stratifies one chunk per H1 in `chunk_index` order. (2) Builders fan out per ready snapshot file (`top_k=4` each, ≤5 shards): compare → `specific` with request text; summarize/quiz → `overview` into one reduce/writer. `summarize` joins `DETERMINISTIC_INTENTS`; `>5` files fall through to L3. (3) Validator rejects empty/placeholder `file_id` and unknown `mode`. No new tool (tools stay LLM-free; reasoning agent still reduces), no schema change (`embeddings.file_id/chunk_index` already stored).
 - **Consequences:** Compare/summarize/quiz scale with file count (4 chunks/file); global `qa_single` unchanged. Separate `rag.summary` tool rejected (duplicate retrieval path, larger planner menu against ADR-029).
@@ -163,7 +164,7 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ## ADR-031: ReAct input contract + plot preference (trace `c9e59039`)
 
-- **Status:** Accepted (2026-09-18)
+- **Status:** Accepted (2026-09-18). Note (ADR-032): "L3 prompt" refs below are historical — the mega-prompt was deleted; ReAct is now L3 (not L4 fallback).
 - **Context:** `summarize_plot` stays on L3 (labels content-derived) and failed twice (nested-step + missing-placeholder plans); the ReAct fallback then burned all 6 iterations on input-shape errors — `{"agent": {"message": ...}}` for `rag.query`/`code.sandbox`, missing `target_format` for `doc.convert` — and picked `code.sandbox` over `plot.chart` for a bar-chart ask. The one successful `rag.query` (correct class table, file-scoped) was buried under joined failure lines.
 - **Decision:** (1) ReAct prompt states FLAT input shapes with per-tool one-liners + WRONG/RIGHT example and hard plot rule (bar/line → `plot.chart` with literals, never `code.sandbox`). (2) `react.py` normalizes (`agent.message` unwrap, stray `tool_id` drop, `message→query`/`message→code` aliases mirroring `RagQueryTool`) and pre-flight validates required fields before execution — malformed turns get a correct-shape scratchpad hint as an idle turn without consuming a step. (3) L3 prompt unified to `top_k: 4` + explicit "BOTH numbers and answer steps MUST contain `{{1}}`" line.
 - **Consequences:** Malformed-model turns no longer burn the 6-iteration budget; chart asks route to the deterministic SVG path. `summarize_plot` remains L3-only (no deterministic builder — label hallucination risk per ADR-027 stands).
