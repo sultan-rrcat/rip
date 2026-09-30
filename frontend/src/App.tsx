@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Home from '@/pages/Home'
 import Notebook from '@/pages/Notebook'
 import Login from '@/pages/Login'
+import ErrorBoundary from '@/components/ErrorBoundary'
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
@@ -40,7 +41,15 @@ export default function App() {
         />
         <Route
           path="/notebook/:notebook_id"
-          element={isAuthenticated ? <Notebook /> : <Navigate to="/login" replace />}
+          element={
+            isAuthenticated ? (
+              <ErrorBoundary>
+                <Notebook />
+              </ErrorBoundary>
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
         />
       </Routes>
     </BrowserRouter>

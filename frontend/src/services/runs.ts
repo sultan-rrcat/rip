@@ -2,14 +2,6 @@ import { API } from '@/config'
 import { request, jsonInit } from '@/services/http'
 import type { RunEvent } from '@/types/runs'
 
-// Run lifecycle client (MERGE_PLAN.md §Frontend, Q1–Q3 locked):
-//   createRun → POST /v1/runs {notebook_id, message} → 202 {run_id}
-//   subscribeToRunEvents → EventSource GET /v1/runs/{id}/events
-//   cancelRun → POST /v1/runs/{id}/cancel
-// Bare JSON on /v1/* (no BFF envelope). No hardcoded host — API comes from
-// VITE_API_URL via @/config. Reconnect/dedupe policy lives in useMessages;
-// this module only opens the stream and parses frames.
-
 export async function createRun(
   notebookId: string,
   message: string,
@@ -21,30 +13,55 @@ export async function createRun(
   return data.run_id
 }
 
+const MAX_RETRIES = 5
+const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000]
+
 export function subscribeToRunEvents(
   runId: string,
   onEvent: (event: RunEvent) => void,
   onError?: () => void,
 ): () => void {
-  const source = new EventSource(`${API}/v1/runs/${runId}/events`)
+  let source: EventSource | null = null
+  let retryCount = 0
+  let closed = false
+  let timer: ReturnType<typeof setTimeout> | null = null
 
-  source.onmessage = (msg: MessageEvent) => {
-    try {
-      onEvent(JSON.parse(msg.data) as RunEvent)
-    } catch {
-      // A malformed frame is not fatal: skip it and keep the stream open.
+  const connect = () => {
+    if (closed) return
+    source = new EventSource(`${API}/v1/runs/${runId}/events`)
+
+    source.onopen = () => {
+      retryCount = 0
+    }
+
+    source.onmessage = (msg: MessageEvent) => {
+      try {
+        onEvent(JSON.parse(msg.data) as RunEvent)
+      } catch {
+        // A malformed frame is not fatal: skip it and keep the stream open.
+      }
+    }
+
+    source.onerror = () => {
+      source?.close()
+      if (closed) return
+      if (retryCount >= MAX_RETRIES) {
+        onError?.()
+        return
+      }
+      const delay = BACKOFF_MS[retryCount] ?? BACKOFF_MS[BACKOFF_MS.length - 1]
+      retryCount++
+      timer = setTimeout(connect, delay)
     }
   }
 
-  // A closed/errored stream is terminal for this subscription (run finished
-  // or gone). Notify the caller so it can surface the loss instead of
-  // leaving the UI stuck "running"; no auto-reconnect here.
-  source.onerror = () => {
-    source.close()
-    onError?.()
-  }
+  connect()
 
-  return () => source.close()
+  return () => {
+    closed = true
+    if (timer) clearTimeout(timer)
+    source?.close()
+  }
 }
 
 export async function cancelRun(runId: string): Promise<void> {

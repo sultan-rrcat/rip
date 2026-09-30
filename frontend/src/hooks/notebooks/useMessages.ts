@@ -53,6 +53,7 @@ export function useMessages(notebook_id: string | undefined) {
   // Notebook owning the current subscription. Written in effects/handlers
   // only (never during render) so the SSE callbacks can't go stale.
   const nbRef = useRef<string | undefined>(undefined)
+  const isRunningRef = useRef(false)
 
   const detach = useCallback(() => {
     unsubscribeRef.current?.()
@@ -61,6 +62,10 @@ export function useMessages(notebook_id: string | undefined) {
     stepResultsRef.current = {}
     planStepsRef.current = null
     goalRef.current = null
+    textRef.current = ''
+    sourcesRef.current = []
+    artifactsRef.current = []
+    isRunningRef.current = false
     setActiveRun(null)
     setIsRunning(false)
   }, [])
@@ -81,7 +86,15 @@ export function useMessages(notebook_id: string | undefined) {
           running: false,
           stepResults: { ...stepResultsRef.current },
         }
-        setPastRuns((prev) => ({ ...prev, [messageId]: snapshot }))
+        setPastRuns((prev) => {
+          const keys = Object.keys(prev)
+          if (keys.length >= 20) {
+            const next = { ...prev }
+            delete next[keys[0]]
+            return { ...next, [messageId]: snapshot }
+          }
+          return { ...prev, [messageId]: snapshot }
+        })
       }
       detach()
       if (!nb || !messageId) return
@@ -443,10 +456,15 @@ export function useMessages(notebook_id: string | undefined) {
       cancelled = true
       unsubscribeRef.current?.()
       unsubscribeRef.current = null
-      // Full reset so a StrictMode remount (or notebook switch) re-attaches
-      // from scratch instead of skipping on a stale placeholder.
       placeholderRef.current = null
       seenRef.current = new Set()
+      textRef.current = ''
+      sourcesRef.current = []
+      artifactsRef.current = []
+      stepResultsRef.current = {}
+      planStepsRef.current = null
+      goalRef.current = null
+      isRunningRef.current = false
       setActiveRun(null)
       setIsRunning(false)
     }
@@ -454,7 +472,8 @@ export function useMessages(notebook_id: string | undefined) {
 
   const handleSendMessage = useCallback(
     async (text: string) => {
-      if (!notebook_id || isRunning) return
+      if (!notebook_id || isRunningRef.current) return
+      isRunningRef.current = true
       nbRef.current = notebook_id
       const assistantTempId = uuidv4()
       let placeholderAdded = false
@@ -524,7 +543,7 @@ export function useMessages(notebook_id: string | undefined) {
         }
       }
     },
-    [notebook_id, isRunning, attach],
+    [notebook_id, attach],
   )
 
   const handleCancelRun = useCallback(async () => {
