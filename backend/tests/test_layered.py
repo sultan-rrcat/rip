@@ -430,7 +430,7 @@ def test_react_refuses_rag_query_on_empty_corpus() -> None:
 
 
 def test_react_prompt_advertises_missing_docker(monkeypatch) -> None:
-    import app.orchestration.react as react_mod
+    import app.orchestration.react_engine as react_mod
     from app.orchestration.react import run_react
 
     seen: list = []
@@ -456,7 +456,7 @@ def test_react_prompt_advertises_missing_docker(monkeypatch) -> None:
 
 
 def test_react_prompt_allows_parametric_numbers_without_docs(monkeypatch) -> None:
-    import app.orchestration.react as react_mod
+    import app.orchestration.react_engine as react_mod
     from app.orchestration.react import run_react
 
     seen: list = []
@@ -648,7 +648,7 @@ def test_builder_miss_emits_no_plan_span_and_runs_react(monkeypatch) -> None:
 
 
 def test_react_iteration_spans(monkeypatch) -> None:
-    import app.orchestration.react as react_mod
+    import app.orchestration.react_engine as react_mod
     from app.orchestration.react import run_react
 
     recorder = _SpanRecorder()
@@ -676,7 +676,7 @@ def test_react_iteration_spans(monkeypatch) -> None:
 
 def test_orchestrator_react_span(monkeypatch) -> None:
     import app.observability.langfuse as lf
-    import app.orchestration.react as react_mod
+    import app.orchestration.react_engine as react_mod
 
     recorder = _SpanRecorder()
     # Orchestrator imports manual_span lazily (picks up the lf patch);
