@@ -18,16 +18,19 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from app.api.deps import get_run_manager
 from app.artifacts import resolve_artifact
 from app.core.config import settings
+from app.core.db import pg_connection
+from app.routes.auth import UserResponse, get_current_user
 from app.store import runs as run_store
 
 logger = logging.getLogger("api.runs")
@@ -64,6 +67,32 @@ class CancelRunResponse(BaseModel):
     already_done: bool
 
 
+def _verify_notebook_ownership(notebook_id: str, user_id: str) -> None:
+    """Raise 404 if notebook not found or not owned by user (no 403 leak)."""
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM notebooks WHERE notebook_id = %s AND owner_id = %s",
+            (notebook_id, user_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Notebook not found")
+
+
+def _verify_run_ownership(run_id: str, user_id: str) -> None:
+    """Raise 404 if run not found or not owned by user (no 403 leak)."""
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM runs r
+            JOIN notebooks n ON n.notebook_id = r.notebook_id
+            WHERE r.id = %s AND n.owner_id = %s
+        """,
+            (run_id, user_id),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Run not found")
+
+
 def _frame(seq: Any, type: str, run_id: str, data: dict) -> str:
     """One SSE frame: `id: <seq>` + flat JSON payload (type/run_id/seq up)."""
     payload = {"type": type, "run_id": run_id, "seq": seq, **(data or {})}
@@ -74,17 +103,26 @@ def _frame(seq: Any, type: str, run_id: str, data: dict) -> str:
 def create_run(
     body: CreateRunRequest,
     manager=Depends(get_run_manager),  # noqa: B008 - FastAPI Depends-in-default is canonical
+    user: UserResponse = Depends(get_current_user),
 ):
     try:
+        _verify_notebook_ownership(str(body.notebook_id), user.user_id)
         record = manager.create_run(str(body.notebook_id), body.message)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=429,
+            detail=str(e),
+            headers={"Retry-After": "30"},
+        ) from e
     logger.info("created run id=%s notebook=%s", record.run_id, record.notebook_id)
     return CreateRunResponse(run_id=UUID(record.run_id))
 
 
 @router.get("/v1/runs/{run_id}", response_model=RunDetail)
-def get_run(run_id: str):
+def get_run(run_id: str, user: UserResponse = Depends(get_current_user)):
+    _verify_run_ownership(run_id, user.user_id)
     row = run_store.get_run(run_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -95,8 +133,11 @@ def get_run(run_id: str):
 
 @router.post("/v1/runs/{run_id}/cancel", response_model=CancelRunResponse)
 def cancel_run(
-    run_id: str, manager=Depends(get_run_manager)  # noqa: B008 - FastAPI Depends-in-default is canonical
+    run_id: str,
+    manager=Depends(get_run_manager),  # noqa: B008 - FastAPI Depends-in-default is canonical
+    user: UserResponse = Depends(get_current_user),
 ):
+    _verify_run_ownership(run_id, user.user_id)
     handled, already_done = manager.cancel_run(run_id)
     if not handled:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -107,19 +148,29 @@ def cancel_run(
 
 @router.get("/v1/runs/{run_id}/events")
 def run_events(
-    run_id: str, manager=Depends(get_run_manager)  # noqa: B008 - FastAPI Depends-in-default is canonical
+    run_id: str,
+    request: Request,
+    manager=Depends(get_run_manager),  # noqa: B008 - FastAPI Depends-in-default is canonical
+    user: UserResponse = Depends(get_current_user),
 ):
+    _verify_run_ownership(run_id, user.user_id)
     try:
         events, live, _done = manager.subscribe(run_id)
     except LookupError:
         raise HTTPException(status_code=404, detail="Run not found") from None
 
-    def stream():
+    async def stream():
         for ev in events:
             yield _frame(ev.seq, ev.event_type, run_id, ev.payload or {})
         while True:
-            item = live.get()
-            if item is None:  # sentinel: run closed
+            if await request.is_disconnected():
+                return
+            try:
+                item = live.get(timeout=15)
+            except queue.Empty:
+                yield ": heartbeat\n\n"
+                continue
+            if item is None:
                 return
             yield _frame(item["seq"], item["type"], run_id, item.get("data") or {})
 
@@ -127,7 +178,12 @@ def run_events(
 
 
 @router.get("/v1/runs/{run_id}/artifacts/{artifact_id}")
-def download_artifact(run_id: str, artifact_id: str):
+def download_artifact(
+    run_id: str,
+    artifact_id: str,
+    user: UserResponse = Depends(get_current_user),
+):
+    _verify_run_ownership(run_id, user.user_id)
     row = run_store.get_run(run_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")

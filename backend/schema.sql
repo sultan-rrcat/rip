@@ -1,6 +1,19 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- ─── users ───────────────────────────────────────────────────────────────────
+-- Simple internal auth: username + salted password hash.
+
+CREATE TABLE IF NOT EXISTS public.users
+(
+    user_id       uuid NOT NULL DEFAULT gen_random_uuid(),
+    username      text COLLATE pg_catalog."default" NOT NULL,
+    password_hash text COLLATE pg_catalog."default" NOT NULL,
+    created_at    timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT users_pkey PRIMARY KEY (user_id),
+    CONSTRAINT users_username_key UNIQUE (username)
+) TABLESPACE pg_default;
+
 -- ─── notebooks ──────────────────────────────────────────────────────────────
 -- One notebook = one conversation = one chat history.
 -- conversation_summary is internal (context-window compression), not user-visible.
@@ -12,8 +25,13 @@ CREATE TABLE IF NOT EXISTS public.notebooks
     notebook_name text  COLLATE pg_catalog."default" NOT NULL,
     conversation_summary       text,                         -- rolling Ollama summary (internal)
     summary_message_count integer DEFAULT 0,                 -- folded_count dedup
+    owner_id      uuid,                                     -- object-level authZ (S1)
     created_at    timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT notebooks_pkey PRIMARY KEY (notebook_id)
+    CONSTRAINT notebooks_pkey PRIMARY KEY (notebook_id),
+    CONSTRAINT notebooks_owner_id_fkey FOREIGN KEY (owner_id)
+        REFERENCES public.users (user_id)
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE
 ) TABLESPACE pg_default;
 
 -- ─── files ──────────────────────────────────────────────────────────────────
@@ -62,20 +80,11 @@ CREATE INDEX IF NOT EXISTS text_search_idx
 CREATE INDEX IF NOT EXISTS idx_embeddings_file
     ON public.embeddings (file_id);
 
--- FK: embeddings → files (guarded for re-runnability)
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'embeddings_file_id_fkey'
-    ) THEN
-        ALTER TABLE public.embeddings
-            ADD CONSTRAINT embeddings_file_id_fkey FOREIGN KEY (file_id)
-            REFERENCES public.files (file_id)
-            ON UPDATE NO ACTION
-            ON DELETE CASCADE;
-    END IF;
-END $$;
+ALTER TABLE public.embeddings
+    ADD CONSTRAINT embeddings_file_id_fkey FOREIGN KEY (file_id)
+    REFERENCES public.files (file_id)
+    ON UPDATE NO ACTION
+    ON DELETE CASCADE;
 
 -- ─── messages ───────────────────────────────────────────────────────────────
 -- Single messages table. Owned by notebook_id.
@@ -101,19 +110,6 @@ CREATE TABLE IF NOT EXISTS public.messages
 
 CREATE INDEX IF NOT EXISTS idx_messages_notebook
     ON public.messages (notebook_id);
-
--- Guarded for re-runnability on pre-existing databases (CAVEATS: compose
--- init runs once — re-apply schema.sql via psql after DDL changes).
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'messages'
-          AND column_name = 'artifacts'
-    ) THEN
-        ALTER TABLE public.messages ADD COLUMN artifacts jsonb;
-    END IF;
-END $$;
 
 -- ─── runs ───────────────────────────────────────────────────────────────────
 -- Ephemeral orchestration units. Persisted to survive page refresh.
@@ -160,19 +156,6 @@ CREATE TABLE IF NOT EXISTS public.run_events
 
 CREATE INDEX IF NOT EXISTS idx_run_events_run_seq
     ON public.run_events (run_id, seq);
-
--- ─── users ───────────────────────────────────────────────────────────────────
--- Simple internal auth: username + salted password hash.
-
-CREATE TABLE IF NOT EXISTS public.users
-(
-    user_id       uuid NOT NULL DEFAULT gen_random_uuid(),
-    username      text COLLATE pg_catalog."default" NOT NULL,
-    password_hash text COLLATE pg_catalog."default" NOT NULL,
-    created_at    timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT users_pkey PRIMARY KEY (user_id),
-    CONSTRAINT users_username_key UNIQUE (username)
-) TABLESPACE pg_default;
 
 -- ─── sessions ────────────────────────────────────────────────────────────────
 -- Opaque bearer tokens stored server-side; cookie holds only the token.

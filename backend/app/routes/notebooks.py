@@ -1,9 +1,10 @@
 from pydantic import BaseModel
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from uuid import uuid4
 from app.core.logging import setup_logging
 from app.core.db import pg_connection
+from app.routes.auth import UserResponse, get_current_user
 
 router = APIRouter()
 logger = setup_logging()
@@ -13,17 +14,19 @@ class NotebookCreate(BaseModel):
     notebook_name: str
 
 @router.get("/api/notebooks")
-def get_notebooks():
-    logger.info("Fetching all notebooks")
+def get_notebooks(user: UserResponse = Depends(get_current_user)):
+    logger.info(f"Fetching notebooks for user: {user.username}")
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT notebook_id, notebook_name, created_at
-                    FROM notebooks 
+                    FROM notebooks
+                    WHERE owner_id = %s
                     ORDER BY created_at DESC
-                    """
+                """,
+                    (user.user_id,),
                 )
                 rows = cur.fetchall()
 
@@ -39,20 +42,20 @@ def get_notebooks():
 
 
 @router.post("/api/notebooks")
-def create_notebooks(data: NotebookCreate):
+def create_notebooks(data: NotebookCreate, user: UserResponse = Depends(get_current_user)):
     notebook_id = data.notebook_id or str(uuid4())
-    logger.info(f"Creating notebook: {notebook_id}")
+    logger.info(f"Creating notebook: {notebook_id} for user: {user.username}")
 
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO notebooks (notebook_id, notebook_name)
-                    VALUES (%s, %s)
+                    INSERT INTO notebooks (notebook_id, notebook_name, owner_id)
+                    VALUES (%s, %s, %s)
                     RETURNING notebook_id, notebook_name, created_at
-                    """,
-                    (notebook_id, data.notebook_name),
+                """,
+                    (notebook_id, data.notebook_name, user.user_id),
                 )
                 result = cur.fetchone()
 
@@ -69,7 +72,7 @@ def create_notebooks(data: NotebookCreate):
 
 
 @router.put("/api/notebooks/{id}")
-def rename_notebook(id: str, data: dict):
+def rename_notebook(id: str, data: dict, user: UserResponse = Depends(get_current_user)):
     logger.info(f"Renaming notebook: {id}")
 
     try:
@@ -79,14 +82,18 @@ def rename_notebook(id: str, data: dict):
                     """
                     UPDATE notebooks
                     SET notebook_name=%s
-                    WHERE notebook_id=%s
-                    """,
-                    (data["notebook_name"], id),
+                    WHERE notebook_id=%s AND owner_id=%s
+                """,
+                    (data["notebook_name"], id, user.user_id),
                 )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Notebook not found")
 
         logger.info(f"Notebook renamed: {id}")
         return {"message": "updated"}
 
+    except HTTPException:
+        raise
     except KeyError:
         logger.warning("Missing notebook_name in request body")
         raise HTTPException(status_code=400, detail="notebook_name is required")
@@ -97,19 +104,23 @@ def rename_notebook(id: str, data: dict):
 
 
 @router.delete("/api/notebooks/{id}")
-def delete_notebook(id: str):
+def delete_notebook(id: str, user: UserResponse = Depends(get_current_user)):
     logger.info(f"Deleting notebook: {id}")
 
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM notebooks WHERE notebook_id=%s",
-                    (id,)
+                    "DELETE FROM notebooks WHERE notebook_id=%s AND owner_id=%s",
+                    (id, user.user_id),
                 )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Notebook not found")
         logger.info(f"Notebook deleted: {id}")
         return {"message": "deleted"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Error deleting notebook: {id}")
         raise HTTPException(status_code=500, detail="Failed to delete notebook")

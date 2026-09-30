@@ -1,10 +1,11 @@
 from pydantic import BaseModel
 from typing import Optional, Any, Literal
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 import json
 from psycopg2 import errors as pg_errors
 from app.core.logging import setup_logging
 from app.core.db import pg_connection
+from app.routes.auth import UserResponse, get_current_user
 
 router = APIRouter()
 logger = setup_logging()
@@ -41,7 +42,7 @@ def ensure_artifacts_column() -> None:
 
 
 @router.get("/api/notebooks/{id}/messages")
-def get_messages(id: str):
+def get_messages(id: str, user: UserResponse = Depends(get_current_user)):
     logger.info(f"Fetching messages for notebook: {id}")
 
     try:
@@ -49,12 +50,13 @@ def get_messages(id: str):
             with conn.cursor() as cur:
                 try:
                     cur.execute("""
-                        SELECT message_id, role, text, sources,
-                               COALESCE(artifacts, '[]'::jsonb), created_at
-                        FROM messages
-                        WHERE notebook_id = %s
-                        ORDER BY created_at ASC
-                    """, (id,))
+                        SELECT m.message_id, m.role, m.text, m.sources,
+                               COALESCE(m.artifacts, '[]'::jsonb), m.created_at
+                        FROM messages m
+                        JOIN notebooks n ON n.notebook_id = m.notebook_id
+                        WHERE m.notebook_id = %s AND n.owner_id = %s
+                        ORDER BY m.created_at ASC
+                    """, (id, user.user_id))
                 except pg_errors.UndefinedColumn:
                     # Pre-migration volume: roll back the aborted statement
                     # and serve the legacy shape (no stored artifacts).
@@ -64,11 +66,12 @@ def get_messages(id: str):
                         "— serving legacy shape"
                     )
                     cur.execute("""
-                        SELECT message_id, role, text, sources, created_at
-                        FROM messages
-                        WHERE notebook_id = %s
-                        ORDER BY created_at ASC
-                    """, (id,))
+                        SELECT m.message_id, m.role, m.text, m.sources, m.created_at
+                        FROM messages m
+                        JOIN notebooks n ON n.notebook_id = m.notebook_id
+                        WHERE m.notebook_id = %s AND n.owner_id = %s
+                        ORDER BY m.created_at ASC
+                    """, (id, user.user_id))
                     rows = cur.fetchall()
                     return [
                         {
@@ -103,12 +106,19 @@ def get_messages(id: str):
 
 
 @router.post("/api/notebooks/{id}/messages")
-def create_message(id: str, data: MessageCreate):
+def create_message(id: str, data: MessageCreate, user: UserResponse = Depends(get_current_user)):
     logger.info(f"Creating message for notebook: {id}, role: {data.role}")
 
     try:
         with pg_connection() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM notebooks WHERE notebook_id = %s AND owner_id = %s",
+                    (id, user.user_id),
+                )
+                if not cur.fetchone():
+                    raise HTTPException(status_code=404, detail="Notebook not found")
+
                 try:
                     cur.execute("""
                         INSERT INTO messages
@@ -163,6 +173,8 @@ def create_message(id: str, data: MessageCreate):
             "created_at": r[5],
         }
 
+    except HTTPException:
+        raise
     except Exception:
         logger.exception(f"Error creating message for notebook: {id}")
         raise HTTPException(status_code=500, detail="Failed to create message")

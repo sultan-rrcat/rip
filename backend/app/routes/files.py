@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.db import pg_connection
 from app.core.dependencies import get_rag
 from app.core.logging import setup_logging
+from app.routes.auth import UserResponse, get_current_user
 from app.services.file_processor import run_rag_pipeline
 
 router = APIRouter()
@@ -42,7 +43,7 @@ class FileCreate(BaseModel):
 
 
 @router.get("/api/notebooks/{id}/files")
-def get_files(id: str):
+def get_files(id: str, user: UserResponse = Depends(get_current_user)):
     _validate_uuid(id, "notebook_id")
     logger.debug(f"Fetching files for notebook: {id}")
 
@@ -50,12 +51,13 @@ def get_files(id: str):
         with pg_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT file_id, file_name, file_size, file_status, created_at
-                FROM files
-                WHERE notebook_id = %s
-                ORDER BY created_at ASC
+                SELECT f.file_id, f.file_name, f.file_size, f.file_status, f.created_at
+                FROM files f
+                JOIN notebooks n ON n.notebook_id = f.notebook_id
+                WHERE f.notebook_id = %s AND n.owner_id = %s
+                ORDER BY f.created_at ASC
             """,
-                (id,),
+                (id, user.user_id),
             )
             rows = cur.fetchall()
 
@@ -71,12 +73,19 @@ def get_files(id: str):
 
 
 @router.post("/api/notebooks/{id}/files")
-def create_file(id: str, data: FileCreate):
+def create_file(id: str, data: FileCreate, user: UserResponse = Depends(get_current_user)):
     _validate_uuid(id, "notebook_id")
     logger.info(f"Creating file for notebook: {id}, name: {data.file_name}")
 
     try:
         with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM notebooks WHERE notebook_id = %s AND owner_id = %s",
+                (id, user.user_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Notebook not found")
+
             cur.execute(
                 """
                 INSERT INTO files (notebook_id, file_name, file_size, file_status)
@@ -104,7 +113,7 @@ def create_file(id: str, data: FileCreate):
 
 
 @router.patch("/api/files/{file_id}/status")
-def update_file_status(file_id: str, data: dict):
+def update_file_status(file_id: str, data: dict, user: UserResponse = Depends(get_current_user)):
     _validate_uuid(file_id, "file_id")
     logger.info(f"Updating file status: {file_id}")
 
@@ -114,33 +123,46 @@ def update_file_status(file_id: str, data: dict):
         with pg_connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE files SET file_status = %s WHERE file_id = %s
+                UPDATE files f SET file_status = %s
+                FROM notebooks n
+                WHERE f.file_id = %s AND f.notebook_id = n.notebook_id AND n.owner_id = %s
             """,
-                (status, file_id),
+                (status, file_id, user.user_id),
             )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="File not found")
 
         logger.info(f"File status updated: {file_id} → {status}")
         return {"message": "updated"}
 
+    except HTTPException:
+        raise
     except KeyError:
         logger.warning("Missing 'status' in request body")
         raise HTTPException(status_code=400, detail="status is required")
 
-    except HTTPException:
-        raise
     except Exception:
         logger.exception(f"Error updating file status: {file_id}")
         raise HTTPException(status_code=500, detail="Failed to update file status")
 
 
 @router.delete("/api/files/{file_id}")
-def delete_file(file_id: str):
+def delete_file(file_id: str, user: UserResponse = Depends(get_current_user)):
     _validate_uuid(file_id, "file_id")
     logger.info(f"Deleting file: {file_id}")
 
     try:
         with pg_connection() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM files WHERE file_id = %s", (file_id,))
+            cur.execute(
+                """
+                DELETE FROM files f
+                USING notebooks n
+                WHERE f.file_id = %s AND f.notebook_id = n.notebook_id AND n.owner_id = %s
+            """,
+                (file_id, user.user_id),
+            )
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="File not found")
 
         logger.info(f"File deleted: {file_id}")
         return {"message": "deleted"}
@@ -153,7 +175,11 @@ def delete_file(file_id: str):
 
 
 @router.post("/api/files/upload")
-async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
+async def upload(
+    notebook_id: str = Form(...),
+    file: UploadFile = File(...),
+    user: UserResponse = Depends(get_current_user),
+):
     _validate_uuid(notebook_id, "notebook_id")
 
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -162,6 +188,20 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
             status_code=415,
             detail=f"File type '{ext}' not allowed. Allowed: {settings.allowed_extensions}",
         )
+
+    try:
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM notebooks WHERE notebook_id = %s AND owner_id = %s",
+                (notebook_id, user.user_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Notebook not found")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Ownership check failed for notebook: {notebook_id}")
+        raise HTTPException(status_code=500, detail="Failed to verify notebook ownership")
 
     file_id = str(uuid4())
     notebook_path = os.path.join(settings.upload_dir, notebook_id)
@@ -213,7 +253,10 @@ async def upload(notebook_id: str = Form(...), file: UploadFile = File(...)):
 
 @router.post("/api/files/{file_id}/process")
 def process_file(
-    file_id: str, background_tasks: BackgroundTasks, rag: Any = Depends(get_rag)
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    rag: Any = Depends(get_rag),
+    user: UserResponse = Depends(get_current_user),
 ):
     _validate_uuid(file_id, "file_id")
     if rag is None:
@@ -222,7 +265,14 @@ def process_file(
             detail="RAG models not loaded (BGE weights missing) — retry after restart",
         )
     with pg_connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM files WHERE file_id=%s", (file_id,))
+        cur.execute(
+            """
+            SELECT 1 FROM files f
+            JOIN notebooks n ON n.notebook_id = f.notebook_id
+            WHERE f.file_id = %s AND n.owner_id = %s
+        """,
+            (file_id, user.user_id),
+        )
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="File not found")
 
