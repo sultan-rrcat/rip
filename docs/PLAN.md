@@ -1,154 +1,92 @@
-# PLAN.md — Remaining Implementation
+# RIP — Critical Issues & Urgent Improvements Plan
 
-## 1. Backend Security Hardening
+> Status: drilled 2026-09-30, all Round-1 recommendations accepted.
+> Source: full `docs/` read (ARCHITECTURE, SETUP, CAVEATS, ADR-001–032, AGENT, CONTEXT, CHANGELOG) + codebase sweep (backend `app/`, `schema.sql`, frontend `src/`, compose, scripts, tests).
 
-### 1.1 Path Traversal Fix
-**File:** `backend/app/routes/files.py`
-- Validate `notebook_id` against UUID regex pattern before using in `os.path.join`
-- Reject with 400 if invalid
-- Apply to all endpoints that accept `notebook_id` or `file_id` as path/form params
+## Decisions (locked)
 
-### 1.2 Upload Size Limit
-**File:** `backend/app/core/config.py`
-- Add `max_upload_size_mb: int = 50` setting
-- Add `allowed_extensions: list[str] = [".pdf", ".docx", ".txt", ".md"]` setting
-
-**File:** `backend/app/routes/files.py`
-- Stream file in chunks, enforce size limit (50 MB)
-- Validate file extension against whitelist
-- Reject with 413 if too large, 415 if wrong type
-
-### 1.3 Async File I/O
-**File:** `backend/app/routes/files.py`
-- Add `aiofiles` to `pyproject.toml` dependencies
-- Replace `await file.read()` + blocking `open()/write()` with `aiofiles.open()` async streaming
-- Write file in chunks to avoid memory spikes
+- **F1:** capture-before-detach + refuse-empty guard; leave existing empty rows (no backfill).
+- **F2:** unblock + error bubble, no auto-retry.
+- **B1:** 15s heartbeat + additive `?last_seq=` resume, bounded queue 1000.
+- **B2:** max 4 active runs, 429 + `Retry-After`, fixed 10-min run timeout.
+- **B3:** lifespan reaper marks stale `processing` (>30 min) → `error`; manual re-PROCESS, no auto-requeue.
+- **S1:** login+ownership — `notebooks.owner_id UUID NOT NULL FK`, scope files/messages/runs/artifacts via notebook join, 404-on-foreign, backfill single `local` owner.
+- **S2:** explicit `CORS_ORIGINS` (no `*` with credentials), `Secure` in prod, login 5/min/IP, fix EventSource/cancel to `credentials:include`.
+- **P1 order after P0:** (1) file_status validation + delete cleanup, (2) migrations, (3) dotenv drift. CI deferred with follow-up ticket.
 
 ---
 
-## 2. Frontend Resilience
+## P0 — Critical (data-loss / hang / unauthorized access)
 
-### 2.1 ErrorBoundary
-**New file:** `frontend/src/components/ErrorBoundary.tsx`
-- Class component with `componentDidCatch`
-- Fallback UI: error message + "Reload" button (`window.location.reload()`)
-- Wrap `<App />` in `main.tsx`
-- Add route-level boundaries around `Notebook` page
+### F1. Assistant messages persist as empty — `frontend/src/hooks/notebooks/useMessages.ts:73-132`
+- Cause: `finalizeCompleted` calls `detach()` (`58-71` clears `textRef/sourcesRef/artifactsRef`) before `createMessageAPI(..., textRef.current, ...)` (`109-115`).
+- Fix: capture `text/sources/artifacts` locals before `detach()`; add refuse-empty guard (keep on-screen + log, never persist `''`).
+- Verify: manual send → reload → assistant row non-empty; unit test capture-before-clear.
 
-### 2.2 SSE Reconnect
-**File:** `frontend/src/services/runs.ts`
-- Add exponential backoff reconnect: 1s → 2s → 4s → 8s → 16s
-- Max 5 retries, then call `onError()` with "Connection lost"
-- Pass `Last-Event-ID` header on reconnect for event replay
-- Track retry count in closure, reset on successful connection
+### F2. Send permanently blocked after first failure — `useMessages.ts:473-544`
+- Cause: `isRunningRef.current=true` (`476`) only cleared in `detach()`; early throw before `attach()` leaves it stuck, `isRunning` state stays `false`.
+- Fix: `try/finally` + reset in `catch`; show error bubble, let user resend (no auto-retry to avoid duplicate user rows).
+- Verify: fail `createRun` once (offline backend) → second send works.
 
-### 2.3 Race Condition Fix
-**File:** `frontend/src/hooks/notebooks/useMessages.ts`
-- Add `isRunningRef = useRef(false)` for synchronous guard check
-- Set `isRunningRef.current = true` before any `await` in `handleSendMessage`
-- Check `isRunningRef.current` instead of `isRunning` state
-- Reset in `detach()` and useEffect cleanup
+### B1. SSE stream never disconnects — `backend/app/api/runs.py:108-126`, `backend/app/runs/manager.py:98-118`
+- Cause: `while True: live.get()` blocking, no `is_disconnected`, heartbeat, timeout, or `Last-Event-ID`; unbounded `queue.Queue()`.
+- Fix: disconnect poll + 15s heartbeat comment, bounded queue (1000, drop-oldest or 503), additive `?last_seq=` resume (old clients ignore).
+- Verify: curl disconnect drops thread; reconnect with `last_seq` resumes without dupes.
 
-### 2.4 pastRuns LRU Cap
-**File:** `frontend/src/hooks/notebooks/useMessages.ts`
-- Cap `pastRuns` at 20 entries
-- Evict oldest entry when limit reached (FIFO)
+### B2. Unbounded thread-per-run + tiny DB pool — `manager.py:168-174 MAX_RUNS=500`, `core/db.py:41 minconn=2,maxconn=10`
+- Cause: `threading.Thread(daemon=True)` per run, no semaphore; `orchestrator.run` no timeout vs `ollama_timeout_ms=120s`.
+- Fix: semaphore/max 4 active runs (matches single Ollama + 2-parallel-writes rule, CAVEATS), 429 + `Retry-After` on overflow, fixed 10-min run timeout, revisit pool sizing (e.g. 4/20).
+- Verify: 5 concurrent runs → 5th gets 429; pool stats healthy.
 
-### 2.5 Incomplete Cleanup Fix
-**File:** `frontend/src/hooks/notebooks/useMessages.ts`
-- Reset all refs in useEffect cleanup: `textRef`, `sourcesRef`, `artifactsRef`, `stepResultsRef`, `planStepsRef`, `goalRef`
+### B3. Uploads strand in `processing` — `routes/files.py:229`, `services/file_processor.py:12-83`, ADR-005
+- Cause: `BackgroundTasks.add_task(run_rag_pipeline)` fire-and-forget, no retry/timeout/cancel; restart orphans file; no `updated_at`.
+- Fix: lifespan reaper marks `processing` older than 30 min → `error` on boot; `POST /process` stays manual retry (no auto-requeue).
+- Verify: kill mid-ingest → reboot → file shows `error`, re-PROCESS succeeds.
 
----
+### S1. No object-level authZ — `schema.sql:9-33,84-139`, `routes/notebooks.py`, `routes/files.py`, `routes/messages.py`, `api/runs.py`
+- Cause: no `owner_id` on notebooks; files/messages/runs/artifacts never check ownership.
+- Fix: `notebooks.owner_id UUID NOT NULL` (+ migration backfilling `local` owner), scope all child queries via notebook join, 404-on-foreign (no 403 leak). Runs/artifacts inherit via notebook.
+- Verify: user A cannot GET user B notebook/file/run (404); artifacts download scoped.
 
-## 3. Docker Hardening
-
-### 3.1 Resource Limits
-**File:** `docker-compose.yml`
-- Backend: `mem_limit: 8g`, `cpus: 2.0`
-- Postgres: `mem_limit: 2g`, `cpus: 1.0`
-- Frontend: `mem_limit: 512m`, `cpus: 0.5`
-
-### 3.2 Logging Configuration
-**File:** `docker-compose.yml`
-- Add to all services:
-  ```yaml
-  logging:
-    driver: "json-file"
-    options:
-      max-size: "10m"
-      max-file: "3"
-  ```
-
-### 3.3 Network Isolation
-**File:** `docker-compose.yml`
-- Define custom bridge network `rip-net`
-- Attach all services to `rip-net`
-- Remove default bridge network
-
-### 3.4 Frontend Non-Root
-**File:** `frontend/Dockerfile`
-- Use `nginx:1.27-alpine` base
-- Run on port 8080 (nginx.conf updated)
-- Add `setcap CAP_NET_BIND_SERVICE` to allow binding to 80 on host
-- Use `USER nginx` for runtime
-- Map host port 80 to container port 8080 in docker-compose
-
-**File:** `frontend/nginx.conf`
-- Change `listen 80` to `listen 8080`
-- Add security headers:
-  - `X-Content-Type-Options: nosniff`
-  - `X-Frame-Options: DENY`
-  - `Content-Security-Policy: default-src 'self'`
-- Reduce `client_max_body_size` to 50M
-- Reduce timeouts to 60s (except SSE endpoints)
-
-### 3.5 Backend Dockerfile
-**File:** `backend/Dockerfile`
-- Pin Python patch version: `python:3.11-slim` → `python:3.11.9-slim`
+### S2. Cookie + CORS + CSRF — `routes/auth.py:106-112`, `main.py:163-168`, `frontend/src/services/runs.ts:31,67-75`
+- Cause: `set_cookie(httponly,samesite=lax)` no `secure`; no login rate-limit; `allow_methods/headers=["*"]` with cookie-auth; EventSource/cancelRun omit credentials.
+- Fix: explicit `CORS_ORIGINS` (never `*` with credentials), `Secure` in prod, login 5/min/IP + lockout, fix `EventSource(withCredentials)` + `cancelRun credentials:include`, match cookie path/samesite on logout.
+- Verify: cross-origin stream 200 with credentials; login brute-force throttled.
 
 ---
 
-## 4. Database Performance
+## P1 — Urgent (next after P0, in agreed order)
 
-### 4.1 Missing Indexes
-**File:** `backend/schema.sql`
-- Add `CREATE INDEX IF NOT EXISTS idx_files_notebook ON public.files (notebook_id);`
-- Add `CREATE INDEX IF NOT EXISTS idx_embeddings_file ON public.embeddings (file_id);`
-
-### 4.2 Connection Pooling
-**File:** `backend/app/core/db.py`
-- Add `ThreadedConnectionPool(minconn=2, maxconn=10)` from `psycopg2.pool`
-- Replace per-request `psycopg2.connect()` with pool `getconn()` / `putconn()`
-- Replace `print()` with `logger.error()` for error messages
-- Add pool cleanup in application shutdown
-
----
-
-## Execution Order
-
-| Phase | Items | Dependencies |
-|-------|-------|--------------|
-| 1 | DB indexes + connection pooling | None |
-| 2 | Backend security (path traversal, upload, async I/O) | None |
-| 3 | Frontend resilience (ErrorBoundary, reconnect, race fix) | None |
-| 4 | Docker hardening | Phase 2 (upload limits match nginx config) |
+1. **File status validation + delete cleanup** — `routes/files.py:106-143`: whitelist `status` (`uploading/processing/ready/error`), unlink `{upload_dir}/{notebook_id}/{file_id}{ext}` + artifacts on delete (FK cascade only clears DB today).
+2. **Migrations** — compose init runs once (`schema.sql:105-116`); only `ensure_artifacts_column()` self-heals. Add versioned migrator or extend `scripts/rip.ps1 migrate`.
+3. **Dotenv drift** — `.env` vs `.env.example` vs `core/config.py`: PORT 8005 vs pinned 8000, DB 5436 vs 5432, OLLAMA remote vs localhost, missing `OLLAMA_CONTEXT_WINDOW/IMAGE_MODEL/MAX_UPLOAD_SIZE/...`; `extra=ignore` masks typos — document canonical keys + fail-fast validation.
+4. **Frontend API base split** — `config.ts` vs hardcoded `/api/auth/*` (`App.tsx:12`, `Login.tsx:22`, `LogoutButton.tsx:11`); stray LAN `frontend/.env` (`http://10.31.2.94:8000`) baked into builds vs same-origin prod assumption.
+5. **SSE resume/dedupe** — `runs.ts:29-56` no `last_seq`; `useMessages.ts:180-198` in-memory `seenRef` reset on attach; integer `seq` collision across attempts.
+6. **CSP + headers** — `nginx.conf:9 default-src 'self'` breaks MUI/Emotion + artifacts; add `style-src unsafe-inline`, `img-src data: blob:`, `connect-src`, `Referrer-Policy/HSTS/Permissions-Policy`.
+7. **`http.ts` errors** — discards `detail`, crashes on 204, no timeout / `401→/login` interceptor.
+8. **Upload UX** — `useFiles.ts:58-93` no size/type check, unbounded `Promise.all`, no progress/abort/retry; poll misses `uploading`.
+9. **Artifact URL trust** — `artifact.ts:24-26` no scheme/host validation; SVG regex truncates answer tail.
+10. **Sandbox hardening** — `tools/code_sandbox.py:47-58` add `--user nobody --cap-drop ALL --read-only --cpus`, kill container not just CLI, code-size limit.
+11. **Health + logs** — stub `api/health.py`, unbounded `FileHandler` ignoring `log_level`.
+12. **Chat perf** — per-token `setMessages` O(n²), scroll per frame, no virtualization.
 
 ---
 
-## Files Modified Summary
+## P2 — Docs / ops debt (CI deferred)
 
-| File | Changes |
-|------|---------|
-| `backend/app/routes/files.py` | Path traversal, upload limits, async I/O |
-| `backend/app/core/config.py` | Add upload settings |
-| `backend/app/core/db.py` | Connection pooling, logging |
-| `backend/schema.sql` | Add indexes |
-| `pyproject.toml` | Add `aiofiles` dependency |
-| `frontend/src/components/ErrorBoundary.tsx` | New file |
-| `frontend/src/main.tsx` | Wrap in ErrorBoundary |
-| `frontend/src/services/runs.ts` | SSE reconnect |
-| `frontend/src/hooks/notebooks/useMessages.ts` | Race fix, LRU cap, cleanup |
-| `docker-compose.yml` | Resource limits, logging, network |
-| `frontend/Dockerfile` | Non-root user, port 8080 |
-| `frontend/nginx.conf` | Security headers, timeouts, port |
-| `backend/Dockerfile` | Pin Python version |
+- No CI (`.github/` missing) — follow-up ticket, not P0 per decision.
+- Stale `top_k=8` (`CONTEXT.md:38`, `tools/rag_query.py:3`, 4 test fakes) vs code `_DEFAULT_TOP_K=4`.
+- Stale mega-prompt refs post ADR-032 (`providers/base.py:9`, `tools/base.py:8`, `useMessages.ts:192`, `CHANGELOG.md`).
+- `SETUP.md` container ports `(5432,8000,80)` → should be `8080`; `CAVEATS.md:68` omits `:8080`.
+- Loose `>=` pins, no `pytest-cov`, minimal ruff; `rip.ps1` vs `rip.sh` dotenv first-match vs last-wins.
+- `frontend/.env` LAN IP → gitignored/local-only.
+
+## Verification checklist
+
+- [ ] F1/F2 manual + unit tests green (`pytest`, `ruff`).
+- [ ] B1 disconnect + resume tested with 2 clients.
+- [ ] B2 5-concurrent → 4 run + 1×429.
+- [ ] B3 reboot reaper marks `error`.
+- [ ] S1 cross-user 404 matrix passes.
+- [ ] S2 login throttle + CORS with credentials passes.
+- [ ] `docs/CHANGELOG.md` updated; architecture-changing items get `docs/ADR.md` entries.
