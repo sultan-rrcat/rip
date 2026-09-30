@@ -1,6 +1,6 @@
 # Changelog
 
-Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is frozen in `docs/archive/SESSION_LOG.md`.
+Notable user-visible changes.
 
 ---
 
@@ -140,5 +140,4 @@ Notable user-visible changes. Merge-era history (2026-09-08 → 2026-09-13) is f
 
 ## 2026-09-13 — Docs reset as new project
 
-- Archived `MERGE_PLAN.md`, `IMPLEMENTATION_PLAN.md`, `SESSION_LOG.md` to `docs/archive/` (frozen, history only).
 - New `docs/ARCHITECTURE.md`; full `README.md` rewrite; curated `docs/ADR.md` (+ ADR-026); refreshed `docs/SETUP.md`; new `docs/CAVEATS.md`; `docs/AGENT.md` rewritten as maintainer guide.

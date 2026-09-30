@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADR)
 
-Active decisions first; superseded merge-era history is collapsed at the bottom. Full merge rationale lives in `archive/MERGE_PLAN.md`.
+Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 

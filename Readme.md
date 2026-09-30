@@ -34,7 +34,7 @@ backend/app/   main.py, core/, rag/, routes/, services/, providers/, agents/,
                observability/, artifacts.py
 frontend/src/  pages/, components/, hooks/notebooks/, services/, types/
 docs/          ARCHITECTURE.md, SETUP.md, CAVEATS.md, ADR.md, AGENT.md,
-               CONTEXT.md, CHANGELOG.md, archive/
+                CONTEXT.md, CHANGELOG.md
 ```
 
 ---
@@ -61,7 +61,6 @@ Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (`HOST_BACK
 | `docs/AGENT.md` | Maintainer guide: conventions, commands, workflow |
 | `docs/CONTEXT.md` | Domain glossary and data-flow reference |
 | `docs/CHANGELOG.md` | Notable changes going forward |
-| `docs/archive/` | Frozen merge-era history (not authoritative) |
 
 ---
 
