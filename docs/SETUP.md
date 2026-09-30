@@ -32,9 +32,13 @@ Keys ( authoritative defaults in `backend/app/core/config.py`):
 | Key | Value |
 |---|---|
 | `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; **host-local runs use `127.0.0.1` + `DB_PORT=<HOST_PG_PORT>`** (see CAVEATS — bare `localhost` can hang; sync `DB_PORT` to the mapped host port). Split-brain warning: the backend reads `.env` via `env_file`, but `POSTGRES_*` interpolate from the *shell* — stale shell `DB_*` exports shadow `.env` (see CAVEATS) |
-| `OLLAMA_BASE_URL` | Interpolated: `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}` — your `.env` value flows into the container, gateway is the fallback. Host-local default `http://localhost:11434` |
-| `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` (config default; a local `.env` may override, e.g. a smaller planner model) |
+| `OLLAMA_BASE_URL` | Interpolated: `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}` — your `.env` value flows into the container, gateway is the fallback. Host-local default `http://localhost:11434` (`config.py` default is the gateway form for compose) |
+| `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` (config default; a local `.env` may override, e.g. a smaller router model) |
 | `OLLAMA_CONTEXT_WINDOW` | `32768` (budget = `*0.7` ≈ 22900 tokens, `len//4` estimator) |
+| `OLLAMA_TIMEOUT_MS` | `120000` (Ollama HTTP timeout) |
+| `OLLAMA_IMAGE_MODEL` | `""` (empty = `image.generate` fails honestly) |
+| `MAX_UPLOAD_SIZE_MB` | `50` (must match nginx `client_max_body_size 50M`) |
+| `LANGFUSE_ENABLED/HOST/PUBLIC_KEY/SECRET_KEY/ENVIRONMENT/RELEASE` | Opt-in tracing (`false` + `http://localhost:3002` defaults; see §4) |
 | `PORT` | `8000`, pinned in compose (`docker-compose.yml` sets `PORT: 8000` — do not override; `EXPOSE`, port mapping, and health probes all assume it). Honored as `$PORT` only for bare `docker run` |
 | `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
 | `UPLOAD_DIR` | `./backend/uploads` host-local; `/app/uploads` in compose (overridden in `docker-compose.yml`, image `ENV` fallback matches) |
@@ -48,11 +52,11 @@ No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 psql "host=<DB_HOST> port=<HOST_PG_PORT> dbname=<DB_NAME> user=<DB_USER>" -f backend\schema.sql
 ```
 
-Creates `notebooks` (with `conversation_summary` + `summary_message_count`), `files`, `messages`, `embeddings`, `runs`, `run_events`, vector + text-search indexes.
+Creates `users`, `notebooks` (with `notebook_name` + `owner_id` + `conversation_summary` + `summary_message_count`), `files`, `messages`, `embeddings` (with `chunk_index`), `runs`, `run_events`, `sessions`, vector + text-search indexes.
 Use `HOST_PG_PORT` (default 5432, live override e.g. 5433) — not hardcoded
 `5432`. Host-side ports are all adjustable the same way: `HOST_PG_PORT`,
 `HOST_BACKEND_PORT` (default 8000), `HOST_FRONTEND_PORT` (default 5173).
-Container ports stay fixed (`5432`, `8000`, `80`). `schema.sql` also mounts as Postgres init (`001-schema.sql`) but runs
+Container ports stay fixed (`5432`, `8000`, `8080` — frontend nginx runs as non-root `USER nginx`). `schema.sql` also mounts as Postgres init (`001-schema.sql`) but runs
 only on an empty `pgdata` volume; re-apply via `psql` after DDL changes.
 
 ## 4. Run (Required: Postgres + Ollama. Optional: Langfuse)
@@ -102,14 +106,15 @@ npm install; npm run dev
 ```
 
 Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (alias `GET /health`). Substitute `HOST_BACKEND_PORT` when remapped (e.g. `http://localhost:8005/api/health`).
-Vite dev proxies `/api/` + `/v1/` → `http://localhost:8000` (see `vite.config.ts`); prod `nginx.conf` must proxy both. Empty `VITE_API_URL` = same-origin; nginx allows 100M uploads with unbuffered SSE.
+Vite dev (`npm run dev`, port `5178` per `vite.config.ts`) proxies `/api/` + `/v1/` → `http://localhost:8000`; compose-host frontend is `HOST_FRONTEND_PORT` (default `5173`) → container `8080`. Prod `nginx.conf` must proxy both. Empty `VITE_API_URL` = same-origin; nginx allows 50M uploads (`client_max_body_size 50M`, matching `MAX_UPLOAD_SIZE_MB=50`) with unbuffered SSE (`/api/` 60s, `/v1/` 600s timeouts).
 
 ## 5. Smoke test
 
 0. `scripts/rip.ps1 health` — backend, frontend, postgres all OK.
-1. Create notebook, upload PDF → `ready`.
-2. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.
-3. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta* (live)→step_completed→sources?→artifacts?→summary→run_completed`.
+1. Login (`POST /api/auth/login`, cookies kept) — all `/api/*` + `/v1/*` except health require it.
+2. Create notebook, upload PDF → `ready`.
+3. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.
+4. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta* (live-only)→step_completed→sources?→artifacts?→summary→run_completed` (`error`/`cancelled` on failure paths).
 4. Confirm `rag.query` chunks + Ollama answer + `sources` SSE event; notebook `conversation_summary` updates when context window ~70% full.
 
 ## 6. Tests & lint
