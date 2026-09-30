@@ -111,6 +111,8 @@ class Settings(BaseSettings):
 
     # Upload
     upload_dir: str = "./backend/uploads"
+    max_upload_size_mb: int = 50
+    allowed_extensions: list[str] = [".pdf", ".docx", ".txt", ".md"]
 
     # Model defaults
     default_temperature: float = 0.2
