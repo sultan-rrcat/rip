@@ -108,6 +108,7 @@ class Settings(BaseSettings):
     port: int = 8000
     cors_origins: str = "*"  # Q5 locked: plain str, split on ","; NOT list[str]
     log_level: str = "INFO"
+    env: Literal["development", "production"] = "development"
 
     # Upload
     upload_dir: str = "./backend/uploads"
