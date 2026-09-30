@@ -17,7 +17,7 @@ An async task persisted to Postgres. Created when a user sends a message; surviv
 _Avoid_: Orchestration unit, task, job, request
 
 **SSE event**:
-A single message in the Server-Sent Events stream for a run. Types: `run_started`, `plan`, `step_started`, `delta`, `step_completed`, `sources`, `summary`, `run_completed`, `artifacts`, `error`, `cancelled`. Structural events persisted to `run_events` for replay; `delta` is live-only (Q35).
+A single message in the Server-Sent Events stream for a run. Types (emit order): `run_started`, `plan`, `step_started`, `delta` (live-only, fractional seq), `step_completed`, `sources`, `artifacts`, `summary`, `run_completed`, `error`, `cancelled`. Structural events persisted to `run_events` for replay; `delta` is live-only (Q35).
 _Avoid_: EventEnvelope, frame
 
 **Message**:
@@ -25,8 +25,8 @@ A single chat turn (user or assistant) within a notebook. Linked to notebooks vi
 _Avoid_: Chat entry, turn, response
 
 **Goal**:
-The Planner's structured restatement of the user's intent. Derived from the user's message by the Planner LLM. The plan is built around a goal, not the raw message.
-_Avoid_: Intent, objective, task
+The Router's structured restatement of the user's intent (`{intent, confidence}` + slots). Derived from the user's message by the L1 router LLM; L2 builders construct the plan around the goal, L3 ReAct answers directly when no builder applies.
+_Avoid_: Intent (bare), objective, task
 
 ### Retrieval
 
@@ -35,7 +35,7 @@ The single retrieval path: vector similarity + Postgres full-text search combine
 _Avoid_: GraphRAG, AgenticRAG, retrieval pipeline
 
 **rag.query**:
-The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=8)` reusing the lifespan `VectorRAG` singleton. On completion, the run worker emits an SSE `sources` event (Q32). Never used for verbatim file conversion.
+The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=4)` reusing the lifespan `VectorRAG` singleton. On completion, the run worker emits an SSE `sources` event (Q32). Never used for verbatim file conversion.
 _Avoid_: Search, retrieve, lookup
 
 **notebook.inspect**:
@@ -52,9 +52,17 @@ _Avoid_: Passage, segment, slice
 
 ### Orchestration
 
-**Planner**:
-LLM-driven component that decomposes a user message into a goal and a plan — an ordered list of steps with dependencies (some run in parallel), each with an agent and tool assignment. Trivial/conversational requests yield a single `reasoning` step (never an empty plan — ADR-026).
-_Avoid_: Router, dispatcher, coordinator
+**Router**:
+L1 sole dispatcher (ADR-032): one cheap `generate_structured` call per request (`{intent, confidence}`; `<0.6` → `unknown` → ReAct; failures fail open to ReAct). Every request — including greetings — goes through the router; the L0 fast-path and L3 mega-prompt were deleted.
+_Avoid_: Planner (deleted), dispatcher (bare), coordinator
+
+**Builder**:
+L2 deterministic plan constructor: fixed DAGs for `chat/qa_single/compare_multi/summarize/quiz/convert_one/convert_all` (wiring by construction, `top_k=4` per file shard, `>5` files → ReAct). Trivial/conversational requests yield a single `reasoning` step via the `chat` builder or engine trivial-plan repair (never an empty plan — ADR-026).
+_Avoid_: Planner, template
+
+**ReAct fallback**:
+L3 general fallback (promoted from L4 per ADR-032): thought → action → observation loop (max 6 iterations, no placeholders) when no L2 builder applies, the router is unsure, or validation rejects the plan. Failure stays honest (`OrchestrationError`).
+_Avoid_: Planner, mega-prompt
 
 **Step**:
 A single unit of work in the plan. Each step has an agent (or tool) assignment and may depend on other steps. Steps without dependencies run at the same time.
@@ -69,7 +77,7 @@ A named function that performs a specific action: `rag.query` (search documents)
 _Avoid_: ToolPlugin, function, capability
 
 **Plan DAG**:
-Ordered list of steps with dependencies the engine executes. Produced by the Planner, checked by the Validator, run by the Engine. Technical name for the dependency graph.
+Ordered list of steps with dependencies the engine executes. Produced by L2 builders (or L3 ReAct at runtime), dispatched by the Router, checked by the Validator, run by the Engine. Technical name for the dependency graph.
 _Avoid_: Execution graph, workflow
 
 **Validator**:
@@ -85,7 +93,7 @@ Executor (built on LangGraph) that runs the plan steps in dependency order. No r
 _Avoid_: Executor, runner
 
 **Orchestrator**:
-Coordinator for the full run lifecycle: Planner → Engine → Aggregator → Memory. Manages state transitions and passes `notebook_id` through to tools.
+Coordinator for the full run lifecycle: Router → Builder/ReAct → Engine → Aggregator → Memory (plan node = Router L1 + Builders L2 + Validator; miss = `plan_error → END` → L3 ReAct; no recall per ADR-032). Manages state transitions and passes `notebook_id` through to tools.
 _Avoid_: Coordinator, conductor, manager
 
 **Artifact**:
@@ -142,14 +150,14 @@ _Avoid_: Tracing, monitoring, analytics
 
 ### Message → Run → Response
 
-1. Frontend persists user **message** via `POST /api/notebooks/{id}/messages`
+1. Frontend ensures login (`GET /api/auth/me`, else login) then persists user **message** via `POST /api/notebooks/{id}/messages` (`credentials:include`)
 2. Frontend calls `POST /v1/runs {notebook_id, message}` → `202 {run_id}`
 3. Run worker loads `conversation_summary` + messages → `build_memory_context()` → starts orchestration with `context=`
-4. **Planner** generates a **goal** and plan; **Engine** executes **steps** (parallel where possible)
+4. **Router** (L1) classifies intent → **Builder** (L2) emits a fixed DAG or **ReAct** (L3) answers stepwise; **Engine** executes **steps** (parallel where possible)
 5. `rag.query` receives `notebook_id` from the Run; worker emits SSE **sources** on completion
 6. **Aggregator** assembles step outputs (deterministic, type-aware per ADR-023: terminal text shown, intermediates hidden); chart/SVG step outputs aggregate to a short placeholder — the SVG bytes travel via the SSE **artifacts** event only. Every live `delta` streams into the main bubble; the Steps panel is a mirror-only, ephemeral view.
 7. Worker persists updated `conversation_summary` if memory folded new turns
-8. SSE **artifacts** (download URLs; charts render inline as `<img>`) + **summary** (final answer) + **run_completed**; frontend persists assistant **message** with sources + artifacts
+8. SSE **artifacts** (download URLs; charts render inline as `<img>`) then **summary** (final answer) then **run_completed**; frontend persists assistant **message** with sources + artifacts
 9. Structural SSE events persisted to `run_events`; `delta` tokens live-only
 
 ### conversation_summary Generation
