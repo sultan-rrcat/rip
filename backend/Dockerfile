@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11.9-slim
 
 # Build-time proxy only (ARG, not persisted): apt/pip read the env during
 # RUN. Persisting empty HTTP_PROXY/HTTPS_PROXY breaks LAN traffic

@@ -20,11 +20,18 @@ COPY . .
 RUN npm run build
 
 FROM nginx:1.27-alpine
-# NOTE: stays root (default) because nginx listens on 80; USER nginx would
-# break the bind. Frontend is same-origin only: VITE_API_URL is baked empty
-# at build and /api/ + /v1/ proxy to backend:8000 (see nginx.conf).
+# Non-root: nginx listens on 8080 (no privileged bind needed). Frontend is
+# same-origin only: VITE_API_URL is baked empty at build and /api/ + /v1/
+# proxy to backend:8000 (see nginx.conf).
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
-EXPOSE 80
+# Runtime state dirs must be writable for USER nginx (default nginx.conf
+# uses /var/run/nginx.pid + cache/temp under /var/cache/nginx).
+RUN touch /var/run/nginx.pid && \
+    chown -R nginx:nginx /var/run/nginx.pid /var/cache/nginx /var/log/nginx /etc/nginx/conf.d /usr/share/nginx/html
+
+USER nginx
+
+EXPOSE 8080
