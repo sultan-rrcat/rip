@@ -25,7 +25,8 @@ agents/base.py, registry.py, reasoning.py, coding.py, vision.py
 tools/base.py, registry.py, executor.py, rag_query.py, notebook_inspect.py,
   plot_chart.py, doc_generate.py, doc_convert.py, code_sandbox.py, image_generate.py
 orchestration/plan.py, planner.py (thin holder, no DAG prompt), router.py,
-  intents.py, builders.py, react.py, validator.py, aggregator.py,
+  intents.py, builders.py, react.py (shim over react_engine), react_engine.py,
+  idle_guard.py, corpus.py, validator.py, aggregator.py,
   engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
 store/runs.py        Postgres CRUD for runs + run_events (no deltas)
 runs/manager.py      worker: memory, sources, never writes messages
