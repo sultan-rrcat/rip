@@ -33,6 +33,10 @@ Offline, single-codebase research assistant: document RAG + multi-agent orchestr
 │       /api/notebooks · /api/notebooks/{id}/messages           │
 │       /api/notebooks/{id}/files · /api/files/upload           │
 │       /api/files/{id}/status · /api/files/{id}/process        │
+│       /api/auth/login · /api/auth/logout · /api/auth/me       │
+│  Auth: cookie session (`rip_session`); all /api/* + /v1/*     │
+│  except /api/health, /health, /api/auth/* require login;      │
+│  notebooks/files/messages/runs/artifacts scoped by owner      │
 └────────────────────────────┬─────────────────────────────────┘
          ┌───────────────────┼───────────────────┐
          ▼                   ▼                   ▼
@@ -48,12 +52,13 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 
 | Path | Role |
 |---|---|
-| `main.py` | Lifespan (`VectorRAG` singleton + `/v1` runtime composition), route mounts, CORS `*` |
+| `main.py` | Lifespan (`VectorRAG` singleton + `/v1` runtime composition), route mounts with auth gate (`auth.get_current_user` on all `/api/*` + `/v1/*` except health + `/api/auth/*`), CORS from `CORS_ORIGINS` (plain str; `*` = no credentials, explicit list = `credentials:include`) |
 | `core/config.py` | `Settings` (port 8000, `OLLAMA_*`, BGE aliases, `cors_origins: str`) |
 | `core/db.py`, `dependencies.py`, `logging.py` | `pg_connection()`, `get_rag()`, JSON logging |
 | `core/classutils.py`, `constants.py` | Abstract checks, confidence constants |
 | `rag/pipeline.py`, `vector_rag.py` | Ingest (Docling → header chunks → BGE-M3 embeddings → store); hybrid retrieve (vector + FTS, RRF, CrossEncoder rerank) |
-| `routes/notebooks.py`, `files.py`, `messages.py` | `/api/*` notebook CRUD, uploads, message rows |
+| `routes/notebooks.py`, `files.py`, `messages.py` | `/api/*` notebook CRUD, uploads, message rows (all owner-scoped, 404-on-foreign) |
+| `routes/auth.py` | `/api/auth/login|logout|me` cookie sessions (`rip_session`, 5/min + 15-min lockout), no auth dependency |
 | `services/file_processor.py`, `chat.py` | Background ingest job; context formatting + source extraction |
 | `providers/base.py`, `ollama.py`, `streaming.py` | `ModelProvider` contract, Ollama OpenAI-compat client, `<think>` filtering |
 | `providers/tracing.py` | `wrap_provider()` — records `llm.generate[.stream|_structured]` generations (no-op when Langfuse off) |
@@ -61,7 +66,11 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 7-tool set, direct execution (no approval gate) |
 | `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py`, `code_sandbox.py`, `image_generate.py` | The seven tools |
 | `orchestration/plan.py`, `results.py` | Plan DAG models, step/execution results |
-| `orchestration/planner.py` | Thin provider holder shared by the L1 router and L3 ReAct (no DAG prompt) |
+| `orchestration/router.py` | L1 intent router — sole dispatcher, one `generate_structured` call (`{intent, confidence}`; `<0.6` → `unknown` → ReAct; failures fail open to ReAct) |
+| `orchestration/intents.py` | `Intent` enum + `ROUTER_CONFIDENCE_THRESHOLD=0.6` + `DETERMINISTIC_INTENTS` (7 builder intents) |
+| `orchestration/builders.py` | L2 deterministic builders — code-built DAGs for `chat/qa_single/compare_multi/summarize/quiz/convert_one/convert_all` (`_PER_FILE_TOP_K=4`, `>5` files → ReAct) |
+| `orchestration/react.py` | L3 ReAct fallback — thought → action → observation, max 6 iterations, no placeholders |
+| `orchestration/planner.py` | Thin provider holder shared by the L1 router and L3 ReAct (no DAG prompt; mega-prompt removed per ADR-032) |
 | `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget, plot/report grounding |
 | `orchestration/engine.py` | Outer LangGraph: `plan → execute → aggregate` (+ `plan_error → END`) |
 | `orchestration/plan_graph.py` | Inner per-request DAG: edges = `depends_on`, parallel siblings, placeholder resolution, scoped memory context (terminal prose agents only; tools get none), retry, timeout, cancel |
@@ -77,22 +86,24 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 
 ---
 
-## 3. Data model (`backend/schema.sql`, 6 tables)
+## 3. Data model (`backend/schema.sql`, 8 tables)
 
 | Table | Key columns |
 |---|---|
-| `notebooks` | `notebook_id`, `name`, `conversation_summary` (internal memory), `summary_message_count` |
-| `files` | `file_id`, `notebook_id`, `file_status` (`uploading/processing/ready/error`) |
-| `embeddings` | `file_id`, `chunk_text`, `embedding vector(1024)` + HNSW, `metadata`, `text_search tsvector` + GIN |
+| `users` | `user_id`, `username` (unique), `password_hash` |
+| `notebooks` | `notebook_id`, `notebook_name`, `owner_id` (FK → `users`, 404-on-foreign), `conversation_summary` (internal memory), `summary_message_count` |
+| `files` | `file_id`, `notebook_id`, `file_name`, `file_size`, `file_status` (`uploading/processing/ready/error`) |
+| `embeddings` | `file_id`, `chunk_text`, `embedding vector(1024)` + HNSW, `chunk_index` (overview stratification), `metadata`, `text_search tsvector` + GIN |
 | `messages` | `notebook_id`, `role` (`user/assistant/error`), `text`, `sources`, `artifacts` (chart/file refs for inline preview) — **frontend-owned, backend never writes** |
 | `runs` | `id`, `notebook_id`, `status` (`pending/running/completed/failed/cancelled`), `goal`, `plan`, `result` |
-| `run_events` | `run_id`, `seq` (gap-free, structural only), `event_type`, `payload` |
+| `run_events` | `run_id`, `seq` (gap-free, structural only; `delta` live-only, never persisted), `event_type`, `payload` |
+| `sessions` | `token` (cookie `rip_session`), `user_id`, `expires_at` |
 
 ---
 
 ## 4. Run lifecycle
 
-1. Frontend persists the user message: `POST /api/notebooks/{id}/messages`.
+1. Frontend ensures login (`GET /api/auth/me`, else `POST /api/auth/login` with `credentials:include`) then persists the user message: `POST /api/notebooks/{id}/messages`.
 2. Frontend creates the run: `POST /v1/runs {notebook_id, message}` → `202 {run_id}` (bare JSON, no envelope).
 3. Worker loads `conversation_summary` + messages + file snapshot → `build_memory_context()` → `orchestrator.run(..., context=..., notebook_context=...)`.
 4. **Router** (L1, sole dispatcher, one cheap `generate_structured` call per request) classifies intent + slots; **Builders** (L2) emit fixed DAGs for `chat/qa_single/compare_multi/summarize/quiz/convert_one/convert_all` (wiring by construction; `summarize_plot` goes to ReAct since chart labels are content-derived); **Validator** checks plot/report grounding. Builder misses (unknown intent, non-deterministic shapes, unresolvable converts, `>5` files) return `plan_error → END` and the orchestrator runs **ReAct** (L3: thought → action → observation, max 6 iterations, no placeholders) before failing honestly. Empty plans are repaired to a single `reasoning` step (ADR-026). No planner recall: partial/failed runs surface honestly; clarifications never replan (ADR-032).
@@ -101,7 +112,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 7. Worker persists updated memory, writes the terminal run row, emits `artifacts` (download URLs; charts render inline as `<img>`) + `summary` + `run_completed`. Frontend persists the assistant message once, with sources + artifacts.
 8. `GET /v1/runs/{id}/events` replays persisted events (`id:<seq>`, dedupe by `seq`); `delta` frames are live-only with fractional seqs and stream into the main bubble (Steps panel is mirror-only, ephemeral). `POST /v1/runs/{id}/cancel` cooperatively cancels.
 
-SSE vocabulary: `run_started · plan · step_started · delta · step_completed · sources · summary · artifacts · run_completed · error · cancelled`.
+SSE vocabulary (11 types, emit order): `run_started · plan · step_started · delta (live-only, fractional seq, never persisted) · step_completed · sources · artifacts · summary · run_completed · error · cancelled`.
 
 ---
 
