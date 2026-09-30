@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS public.files
         ON DELETE CASCADE
 ) TABLESPACE pg_default;
 
+CREATE INDEX IF NOT EXISTS idx_files_notebook
+    ON public.files (notebook_id);
+
 -- ─── embeddings ─────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS public.embeddings
@@ -55,6 +58,9 @@ CREATE INDEX IF NOT EXISTS embeddings_embedding_idx
 CREATE INDEX IF NOT EXISTS text_search_idx
     ON public.embeddings USING gin (text_search)
     TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_file
+    ON public.embeddings (file_id);
 
 -- FK: embeddings → files (guarded for re-runnability)
 
