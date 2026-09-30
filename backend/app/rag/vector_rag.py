@@ -159,7 +159,7 @@ class VectorRAG(RagPipeline):
         self,
         notebook_id,
         user_prompt,
-        top_k=5,
+        top_k=4,
         vector_threshold=0.1,
         rerank_threshold=0.05,
         file_id: str | None = None,

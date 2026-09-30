@@ -18,10 +18,10 @@ Event types (locked SSE vocabulary):
 - "step_completed": one step finished, with its result
 - "delta":          streamed text token — LIVE ONLY, never persisted (Q35)
 - "sources":        citations after a `rag.query` step (Q32)
-- "summary":        the final aggregated answer text (≠ conversation_summary;
-  chart steps contribute a placeholder, never raw SVG)
 - "artifacts":      file artifacts as download URLs (Q34; charts render
   inline as <img> over the same URL — never inline markup/base64)
+- "summary":        the final aggregated answer text (≠ conversation_summary;
+  chart steps contribute a placeholder, never raw SVG)
 - "run_completed":  terminal success envelope
 - "error":          the run aborted before/without a summary
 - "cancelled":      terminal envelope after cooperative cancel
@@ -41,11 +41,11 @@ EventType = Literal[
     "step_completed",
     "delta",
     "sources",
+    "artifacts",
     "summary",
     "run_completed",
     "error",
     "cancelled",
-    "artifacts",
 ]
 
 

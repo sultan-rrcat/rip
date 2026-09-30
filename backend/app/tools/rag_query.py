@@ -1,6 +1,6 @@
 """rag.query tool — document retrieval over the lifespan VectorRAG singleton.
 
-Locked contract (MERGE_PLAN Q6/Q30): ``rag.query(notebook_id, query, top_k=8)``
+Locked contract (MERGE_PLAN Q6/Q30): ``rag.query(notebook_id, query, top_k=4)``
 reuses the ``VectorRAG`` instantiated once at application lifespan — never
 re-instantiated per call (reloading BGE-M3 + reranker weights per query would
 spike). ``notebook_id`` is injected by the orchestrator from ``Run.notebook_id``,

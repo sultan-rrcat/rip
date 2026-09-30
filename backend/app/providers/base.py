@@ -1,12 +1,13 @@
 """ModelProvider interface.
 
 This is the portability boundary (Charter NFR-7): everything above this layer
-(Planner, Execution Engine, agents) talks ONLY to this interface. Concrete
-backends (Gemini now, in-house vLLM/SGLang later) implement it behind this contract.
+(Router, Builders, ReAct, Execution Engine, agents) talks ONLY to this interface.
+Ollama is the sole backend (ADR-003 superseded); future providers implement it
+behind this contract.
 
 Operations needed across the system:
 - generate:          plain text completion (Reasoning, Coding, Vision chat)
-- generate_structured: JSON output matching a schema (Planner -> execution plan DAG)
+- generate_structured: JSON output matching a schema (Router intent, ReAct steps, rag query decomposition)
 - embed:             vector embedding (RAG / retrieval, added at PM-5)
 """
 

@@ -1,11 +1,11 @@
 """Tool ABC — Tier 2 utility capabilities.
 
 An agent is a capability container (model + reasoning); a TOOL is a single-
-purpose deterministic function (RAG query, chart rendering, file generation).
-Tools never call an LLM directly — they do one thing honestly or fail
-explicitly.
+purpose function (RAG query, chart rendering, file generation).
+Tools do one thing honestly or fail explicitly; `rag.query` may call the LLM
+solely for retrieval query decomposition (ADR-030 amendment) — no answer synthesis.
 
-Metadata mirrors the Agent pattern so the Planner menu renders from one
+Metadata mirrors the Agent pattern so the Router/Builder tool menu renders from one
 shape: tool_id / name / description / input_schema, plus the effect class:
 
 - "read-only": free to run within budget (rag.query).
