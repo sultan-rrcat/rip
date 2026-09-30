@@ -1,5 +1,6 @@
 """Unit tests for DB host normalization + connect timeout (no live DB)."""
 
+import logging
 import os
 import sys
 
@@ -31,22 +32,27 @@ def test_non_localhost_preserved():
     assert Settings().db_connect_timeout_s == 5
 
 
-def test_db_params_timeout_and_masked_log(monkeypatch, capsys):
+def test_db_params_timeout_and_masked_log(monkeypatch, caplog):
     captured = {}
 
     def fake_connect(**kwargs):
         captured.update(kwargs)
         raise psycopg2.OperationalError("down")
 
-    monkeypatch.setattr(db.psycopg2, "connect", fake_connect)
+    monkeypatch.setattr(psycopg2, "connect", fake_connect)
+    monkeypatch.setattr(db, "_pool", None)
     monkeypatch.setenv("DB_HOST", "localhost")
     monkeypatch.setenv("DB_PASSWORD", "supersecret")
 
-    with pytest.raises(psycopg2.OperationalError), db.pg_connection():
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(psycopg2.OperationalError),
+        db.pg_connection(),
+    ):
         pass
 
     assert captured["host"] == "127.0.0.1"
     assert captured["connect_timeout"] == 5
-    out = capsys.readouterr().out
-    assert "supersecret" not in out
-    assert "Password: ***" in out
+    log_text = caplog.text
+    assert "supersecret" not in log_text
+    assert "Password: ***" in log_text
