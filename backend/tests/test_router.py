@@ -172,3 +172,30 @@ def test_router_prompt_requires_queries_for_doc_intents() -> None:
     system = provider.messages[0]["content"]
     # Router prompt no longer mentions queries; query generation moved to rag tool
     assert "queries" not in system.lower() or "never" not in system
+
+
+def test_router_context_passed_for_followup() -> None:
+    # Trace 35e8fbd9: the bare follow-up "in a table format" classified
+    # unknown (0.85) because the router never saw the conversation. With
+    # context, recent turns reach the router so it can classify the
+    # combined intent.
+    provider = FakeRouterProvider({"intent": "chat", "confidence": 0.9})
+    result = Router(provider).route(
+        "in a table format",
+        context=(
+            "Recent conversation:\n"
+            "user: Difference between ONNX and TensorRT\n"
+            "assistant: ONNX is a format, TensorRT is an engine."
+        ),
+    )
+    assert result.intent is Intent.CHAT
+    context_msg = provider.messages[1]
+    assert context_msg["role"] == "system"
+    assert "Difference between ONNX and TensorRT" in context_msg["content"]
+    assert "follow-up" in context_msg["content"]
+
+
+def test_router_without_context_keeps_two_messages() -> None:
+    provider = FakeRouterProvider({"intent": "chat", "confidence": 0.9})
+    Router(provider).route("hello")
+    assert len(provider.messages) == 2  # system + user, no context turn

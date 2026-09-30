@@ -59,7 +59,7 @@ class Router:
         self._provider = provider
         self._model = model or settings.ollama_default_model
 
-    def route(self, request_text: str) -> RouterResult:
+    def route(self, request_text: str, context: str | None = None) -> RouterResult:
         lines = "\n".join(
             f"- {intent.value}: {INTENT_DESCRIPTIONS[intent]}" for intent in Intent
         )
@@ -80,6 +80,18 @@ class Router:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": request_text},
         ]
+        if context:
+            # Follow-up fragments ("in a table format", "now as bullets") are
+            # unclassifiable alone (trace 35e8fbd9: bare fragment -> unknown).
+            # Recent turns let the router classify the combined intent.
+            messages.insert(
+                1,
+                {"role": "system", "content": (
+                    "Conversation context (recent turns, oldest first). The "
+                    "request may be a follow-up to it — classify the combined "
+                    "intent:\n" + context
+                )},
+            )
         try:
             raw = self._provider.generate_structured(
                 model=self._model,

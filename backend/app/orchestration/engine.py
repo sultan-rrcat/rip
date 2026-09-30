@@ -134,7 +134,9 @@ def _make_plan_node(
             trace_context=run_ctx,
         ) as router_obs:
             try:
-                route = Router(planner.provider).route(state["request_text"])
+                route = Router(planner.provider).route(
+                    state["request_text"], context=state.get("context")
+                )
                 route_info = {
                     "layer": "L2-builder",
                     "intent": route.intent.value,
