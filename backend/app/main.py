@@ -36,15 +36,27 @@ async def lifespan(app: FastAPI):
     # so rag.query reuses it instead of reloading models per query.
     from app.tools.rag_query import bind_rag_singleton
 
-    # Self-healing DDL for pre-existing volumes: compose Postgres init runs
-    # schema.sql only on an empty pgdata volume, so redeploys with new
-    # columns would 500 until hand-migrated. Fail-soft (warns only).
+    # Upload reaper: mark files stuck in 'processing' for >30 min as 'error'.
+    # Compose init runs schema.sql only on an empty pgdata volume, so a
+    # restart with orphaned processing files would strand them forever.
     try:
-        from app.routes.messages import ensure_artifacts_column
+        from app.core.db import pg_connection
 
-        ensure_artifacts_column()
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE files SET file_status = 'error'
+                WHERE file_status = 'processing'
+                AND created_at < NOW() - INTERVAL '30 minutes'
+            """
+            )
+            if cur.rowcount > 0:
+                logger.warning(
+                    "upload reaper marked %d stale processing file(s) as error",
+                    cur.rowcount,
+                )
     except Exception:
-        logger.warning("startup DDL ensure failed, continuing", exc_info=True)
+        logger.warning("upload reaper failed, continuing", exc_info=True)
 
     logger.info("Initiating ML models...")
     from app.core.config import settings as _settings
