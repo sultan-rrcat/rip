@@ -227,6 +227,22 @@ def _output_type(executor: str, is_final: bool) -> str:
     return _TOOL_OUTPUT_TYPES.get(executor, "text")
 
 
+#: Fields the ReAct model may (wrongly) put the final answer into when it
+#: sets is_final=true but leaves `answer` empty (trace 35e8fbd9: the full
+#: table rode inside input.content of a malformed doc.generate call — the
+#: loop discarded a correct answer because it only read raw["answer"]).
+_ANSWER_FALLBACK_FIELDS = ("answer", "content", "message", "text", "body", "output")
+
+
+def _fallback_answer_text(action_input: dict) -> str:
+    """Best-effort recovery of a final answer stranded in `input` fields."""
+    for field in _ANSWER_FALLBACK_FIELDS:
+        value = action_input.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _sandbox_available() -> bool:
     """Whether code.sandbox can execute on this host (docker CLI present).
 
@@ -437,7 +453,10 @@ def run_react(
                 "{\"chart_type\": \"bar\", \"labels\": [...], \"values\": [...], "
                 "\"title\": \"<metric>: A vs B\"}, "
                 "code.sandbox {\"code\": \"...\"}, doc.convert "
-                "{\"file_id\": \"...\", \"target_format\": \"md|docx|pdf\"}.\n"
+                "{\"file_id\": \"...\", \"target_format\": \"md|docx|pdf\"}, "
+                "doc.generate {\"title\": \"...\", \"sections\": [{\"heading\": "
+                "...,\"body\": ...}]}, image.generate {\"message\": \"...\"}, "
+                "notebook.inspect {}.\n"
                 "WRONG: {\"agent\": {\"message\": \"...\"}} for a tool — "
                 "the tool reads top-level fields, so this fails with "
                 "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
@@ -509,6 +528,11 @@ def run_react(
             if is_final:
                 answer = raw.get("answer") or ""
                 if not str(answer).strip():
+                    raw_input = raw.get("input", {}) or {}
+                    answer = _fallback_answer_text(
+                        dict(raw_input) if isinstance(raw_input, dict) else {}
+                    )
+                if not str(answer).strip():
                     idle_turns += 1
                     if idle_turns >= 2:
                         iter_obs.update(output={
@@ -516,7 +540,12 @@ def run_react(
                             "error": "is_final with empty answer",
                         })
                         break
-                    scratchpad.append("is_final was true but answer was empty; retry.")
+                    scratchpad.append(
+                        "is_final was true but answer was empty. Either put the "
+                        "final answer text in the 'answer' field with "
+                        "is_final=true, or set is_final=false and execute a "
+                        "tool step (e.g. doc.generate with title+sections)."
+                    )
                     iter_obs.update(output={"status": "retry", "is_final": True})
                     continue
                 step_id = f"r{iteration}"

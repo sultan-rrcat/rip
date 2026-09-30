@@ -298,6 +298,68 @@ def test_react_validation_hints_without_executing() -> None:
     assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
 
 
+def test_react_recovers_final_answer_stranded_in_input() -> None:
+    # Trace 35e8fbd9 iter-1: is_final=true, answer empty, the full answer
+    # rode inside input.content of a malformed doc.generate call. The loop
+    # must recover it instead of discarding a correct answer.
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "format as table", "executor": "doc.generate",
+         "input": {"title": "T", "content": "| A | B |\n|---|---|"},
+         "is_final": True},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "in a table format", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert outcome.result.step_results[-1].status.value == "success"
+    assert outcome.result.step_results[-1].output == "| A | B |\n|---|---|"
+    assert provider.structured_calls == 1
+
+
+def test_react_empty_final_answer_retries_with_actionable_hint() -> None:
+    # Two consecutive is_final=true turns with no answer anywhere: the
+    # first gets an actionable correction (not the old "retry." non-hint),
+    # the second fails the loop honestly.
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True},
+        {"thought": "still done", "executor": "reasoning",
+         "input": {}, "is_final": True},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "answer this", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+    )
+    assert outcome.result.step_results[-1].status.value == "failure"
+    assert "react loop produced no steps" in (
+        outcome.result.step_results[-1].error or ""
+    )
+    assert provider.structured_calls == 2
+
+
+def test_react_prompt_carries_all_tool_schemas() -> None:
+    # Trace 35e8fbd9 iter-2: the model guessed doc.convert fields for
+    # doc.generate twice — the prompt never showed doc.generate's schema.
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "answer", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "ok"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    run_react("q", provider, agents, tools, trace_id="t", notebook_id="nb-1")
+    system = provider.prompts[0][0]["content"]
+    assert '"sections"' in system
+    assert '"heading"' in system
+    assert '"message"' in system  # image.generate
+
+
 def test_react_repeat_of_failed_executor_is_idle_turn() -> None:
     # Trace 27dcf635: code.sandbox ×2 (same docker error), rag.query ×2
     # (same empty result) — the second identical proposal must not execute.
