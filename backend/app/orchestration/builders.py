@@ -14,62 +14,27 @@ snapshot; anything unresolvable returns None → L3 ReAct.
 
 from __future__ import annotations
 
-import re
 import uuid
 
+from app.orchestration.corpus import (
+    _ready_files,
+    _snapshot_files,
+    get_corpus_state,
+)
 from app.orchestration.intents import Intent
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.router import RouterResult
-
-#: Snapshot lines look like "report.pdf [ready] id=abc123" (see
-#: runs/manager._load_file_snapshot). Only ready files convert.
-_SNAPSHOT_FILE = re.compile(r"(.+?)\s*\[(ready|processing|uploading|error)\]\s*id=(\S+)")
-
-
-def _snapshot_files(notebook_context: str | None) -> list[tuple[str, str, str]]:
-    """Parse (name, status, file_id) triples out of the snapshot string."""
-    if not notebook_context:
-        return []
-    cleaned = []
-    for name, status, fid in _SNAPSHOT_FILE.findall(notebook_context):
-        fid_clean = fid.strip().rstrip(";,")
-        if fid_clean:
-            cleaned.append((name.strip(), status.strip().lower(), fid_clean))
-    return cleaned
-
-
-def _ready_files(notebook_context: str | None) -> list[tuple[str, str]]:
-    """Return (name, file_id) for ALL ready files in snapshot order."""
-    return [
-        (name, fid)
-        for name, status, fid in _snapshot_files(notebook_context)
-        if status == "ready" and fid
-    ]
-
 
 _PER_FILE_TOP_K = 4
 
 
 def _corpus_state(notebook_context: str | None) -> str:
-    """Tri-state the notebook file snapshot for empty-corpus guards.
+    """Backwards-compat wrapper over `corpus.get_corpus_state`.
 
-    Returns one of:
-    - "unknown": snapshot is None (DB failure) — caller should still try
-      rag.query; the database is ground truth, not the snapshot.
-    - "ready": at least one ready file — document-grounded retrieval path.
-    - "processing": files exist but none is ready yet (uploading /
-      processing / error) — nothing retrievable right now.
-    - "empty": known to hold zero files — retrieval would provably return
-      "(no chunks retrieved)".
+    Kept so existing importers (`react.py` legacy, tests) keep working;
+    new code should import from `app.orchestration.corpus` directly.
     """
-    if notebook_context is None:
-        return "unknown"
-    files = _snapshot_files(notebook_context)
-    if not files:
-        return "empty"
-    if any(status == "ready" and fid for _, status, fid in files):
-        return "ready"
-    return "processing"
+    return get_corpus_state(notebook_context)
 
 
 def build_qa_no_docs(request_text: str) -> Plan:
