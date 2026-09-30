@@ -119,6 +119,12 @@ async def lifespan(app: FastAPI):
     langfuse_flush()
     app.state.rag = None
     deps.reset()
+    try:
+        from app.core.db import close_pool
+
+        close_pool()
+    except Exception:
+        logger.warning("DB pool cleanup failed", exc_info=True)
 
 
 logger.info("Logging has been successfully set up.")

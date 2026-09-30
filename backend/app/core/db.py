@@ -1,10 +1,15 @@
+import logging
 import os
 from contextlib import contextmanager
 
-import psycopg2
 from dotenv import find_dotenv, load_dotenv
+from psycopg2.pool import ThreadedConnectionPool
 
 load_dotenv(find_dotenv(usecwd=True))
+
+logger = logging.getLogger(__name__)
+
+_pool: ThreadedConnectionPool | None = None
 
 
 def _db_params() -> dict:
@@ -29,20 +34,30 @@ def _db_params() -> dict:
         "connect_timeout": timeout,
     }
 
+
+def _get_pool() -> ThreadedConnectionPool:
+    global _pool
+    if _pool is None:
+        _pool = ThreadedConnectionPool(minconn=2, maxconn=10, **_db_params())
+    return _pool
+
+
 @contextmanager
 def pg_connection():
-    params = _db_params()
     conn = None
+    pool = None
     try:
-        conn = psycopg2.connect(**params)
+        pool = _get_pool()
+        conn = pool.getconn()
         yield conn
-        conn.commit()  # ✅ commit if everything went fine
+        conn.commit()
 
     except Exception as e:
         if conn:
-            conn.rollback()  # ✅ rollback on failure
-        print(f"Error connecting to database: {e}")
-        print(
+            conn.rollback()
+        params = _db_params()
+        logger.error("Error connecting to database: %s", e)
+        logger.error(
             "DB Credentials -> "
             f"Host: {params['host']}, "
             f"Port: {params['port']}, "
@@ -53,5 +68,16 @@ def pg_connection():
         raise
 
     finally:
-        if conn:
-            conn.close()  # ✅ always close connection
+        if pool is not None and conn is not None:
+            pool.putconn(conn)
+
+
+def close_pool() -> None:
+    global _pool
+    if _pool is not None:
+        try:
+            _pool.closeall()
+        except Exception:
+            logger.warning("DB pool close failed", exc_info=True)
+        finally:
+            _pool = None
