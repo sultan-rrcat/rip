@@ -99,7 +99,9 @@ def test_prompt_disambiguates_plot_vs_compare() -> None:
     system = provider.messages[0]["content"]
     assert "summarize_plot" in system
     assert "compare_multi is only for comparisons with no chart" in system
-    assert "distinct" in system
+    # NB: no "distinct" assert — that word belonged to the removed
+    # router-side query-generation line (e2fa13f moved decomposition into
+    # rag.query per ADR-030); precedence is covered by the asserts above.
 
 
 def test_prompt_built_from_descriptions_with_precedence() -> None:
