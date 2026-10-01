@@ -17,11 +17,12 @@ guaranteed "(no chunks retrieved)".
 from __future__ import annotations
 
 import logging
+import re
 
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.orchestration.corpus import get_corpus_state
+from app.orchestration.corpus import _snapshot_files, get_corpus_state
 from app.orchestration.intents import (
     DOC_INTENTS,
     INTENT_DESCRIPTIONS,
@@ -47,15 +48,79 @@ ROUTER_SCHEMA: dict = {
 #: Formats doc.convert accepts; anything else means "format unstated".
 _CONVERT_FORMATS = frozenset({"md", "docx", "pdf"})
 
+#: "all/every ... documents/files" → convert-all file_hint.
+_ALL_DOCS_RE = re.compile(
+    r"\b(all|every|each)\b.{0,20}\b(documents?|files?|docs?)\b", re.IGNORECASE
+)
+
+#: Format words in free text ("markdown" reads as md). Matched only after
+#: snapshot filenames are masked out, so "Report.pdf" never reads as pdf.
+_FORMAT_WORD_RE = re.compile(r"\b(docx|pdf|markdown|md)\b", re.IGNORECASE)
+_FORMAT_WORD_MAP = {"markdown": "md", "md": "md", "docx": "docx", "pdf": "pdf"}
+
+
+def _recover_convert_slots(
+    request_text: str,
+    intent: Intent,
+    file_hint: str,
+    target_format: str,
+    notebook_context: str | None,
+) -> tuple[str, str]:
+    """Fill convert slots the LLM left empty, deterministically.
+
+    Small models reliably return the intent with blank slots (live probe:
+    granite-3B filled neither slot on any convert phrasing), which demotes
+    every conversion to a counter-question. The request text plus the
+    snapshot already hold both answers: a named snapshot file (or an
+    all/every-documents phrase) and an md|docx|pdf word. The intent itself
+    is never changed — only empty slots are filled.
+    """
+    if intent not in (
+        Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.CONVERT_AMBIGUOUS,
+    ):
+        return file_hint, target_format
+    if file_hint and target_format:
+        return file_hint, target_format
+    text = request_text or ""
+    lowered = text.lower()
+    names = [
+        name for name, _status, _fid in _snapshot_files(notebook_context)
+    ]
+    hint = file_hint
+    if not hint:
+        if _ALL_DOCS_RE.search(text):
+            hint = "*"
+        else:
+            for name in names:
+                if name.lower() in lowered:
+                    hint = name
+                    break
+            else:
+                for name in names:
+                    stem = name.rsplit(".", 1)[0]
+                    if stem and stem.lower() in lowered:
+                        hint = name
+                        break
+    fmt = target_format
+    if not fmt:
+        masked = lowered
+        for name in names:
+            masked = masked.replace(name.lower(), " ")
+        match = _FORMAT_WORD_RE.search(masked)
+        if match:
+            fmt = _FORMAT_WORD_MAP[match.group(1).lower()]
+    return hint, fmt
+
 
 class RouterResult(BaseModel):
     intent: Intent = Intent.UNKNOWN
     confidence: float = 0.0
     routed_by: str = "llm"
     # Convert slots: file_hint names one file (or "*" for all) and
-    # target_format is md|docx|pdf. Empty = unstated → caller falls
-    # through to L3 ReAct (which asks the counter-question) instead of
-    # guessing a conversion.
+    # target_format is md|docx|pdf. Empty slots are first recovered
+    # deterministically from the request text + snapshot
+    # (_recover_convert_slots); what stays unstated yields a
+    # counter-question instead of a guessed conversion.
     file_hint: str = ""
     target_format: str = ""
 
@@ -184,6 +249,12 @@ class Router:
         target_format = (
             target_format.strip().lower() if isinstance(target_format, str) else ""
         )
+        if intent in (
+            Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.CONVERT_AMBIGUOUS,
+        ) and (not file_hint or not target_format):
+            file_hint, target_format = _recover_convert_slots(
+                request_text, intent, file_hint, target_format, notebook_context
+            )
         if target_format not in _CONVERT_FORMATS:
             target_format = ""
         if confidence < ROUTER_CONFIDENCE_THRESHOLD:

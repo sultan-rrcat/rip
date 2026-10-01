@@ -258,3 +258,69 @@ def test_removed_intents_are_not_advertised() -> None:
     system = build_router_prompt("(no documents)")
     assert "- image:" not in system
     assert "- vision:" not in system
+
+
+# --- Deterministic convert-slot recovery (live probe: small models return
+# the intent with blank slots, demoting every conversion) ---
+
+_SNAP = (
+    "2 file(s): Indus-Faultbook-Assistant-Report.pdf [ready] id=aaa111; "
+    "Anomaly-Detection-Report.pdf [ready] id=bbb222"
+)
+
+
+def _blank_convert_route(intent: str):
+    provider = FakeRouterProvider({"intent": intent, "confidence": 0.9})
+    return Router(provider), provider
+
+
+def test_recovery_fills_named_file_and_format() -> None:
+    router, _ = _blank_convert_route("convert_one")
+    result = router.route(
+        "Convert Anomaly-Detection-Report.pdf to md", notebook_context=_SNAP
+    )
+    assert result.intent is Intent.CONVERT_ONE
+    assert result.file_hint == "Anomaly-Detection-Report.pdf"
+    assert result.target_format == "md"
+
+
+def test_recovery_reads_markdown_word_and_ignores_pdf_in_filename() -> None:
+    router, _ = _blank_convert_route("convert_one")
+    result = router.route(
+        "Convert Anomaly-Detection-Report.pdf to markdown", notebook_context=_SNAP
+    )
+    assert result.file_hint == "Anomaly-Detection-Report.pdf"
+    assert result.target_format == "md"
+
+
+def test_recovery_star_for_all_documents() -> None:
+    router, _ = _blank_convert_route("convert_all")
+    result = router.route("Convert every document to docx", notebook_context=_SNAP)
+    assert result.file_hint == "*"
+    assert result.target_format == "docx"
+
+
+def test_recovery_keeps_llm_slots_when_present() -> None:
+    provider = FakeRouterProvider({
+        "intent": "convert_one", "confidence": 0.9,
+        "file_hint": "bbb222", "target_format": "pdf",
+    })
+    result = Router(provider).route("convert it to pdf", notebook_context=_SNAP)
+    assert result.file_hint == "bbb222"
+    assert result.target_format == "pdf"
+
+
+def test_recovery_leaves_genuinely_ambiguous_blank() -> None:
+    router, _ = _blank_convert_route("convert_ambiguous")
+    result = router.route("Convert it", notebook_context=_SNAP)
+    assert result.file_hint == "" and result.target_format == ""
+
+
+def test_recovery_ignores_non_convert_intents() -> None:
+    provider = FakeRouterProvider({"intent": "qa_single", "confidence": 0.9})
+    result = Router(provider).route(
+        "What does Anomaly-Detection-Report.pdf say about md files?",
+        notebook_context=_SNAP,
+    )
+    assert result.intent is Intent.QA_SINGLE
+    assert result.file_hint == "" and result.target_format == ""
