@@ -14,6 +14,7 @@ Run with ``pytest backend/tests/test_main.py -q --noconftest``.
 
 from __future__ import annotations
 
+import importlib
 import sys
 import types
 
@@ -28,31 +29,79 @@ except Exception as e:  # noqa: BLE001 - import probe; pragma: no cover
     _IMPORT_ERROR = e
 
 
+def _try_import_real(name: str):
+    """Import a real RAG module when the torch chain is healthy.
+
+    Returns the module, or None on torch rot (the reason this file
+    stubs at all). Never raises; scrubs half-imported remnants so the
+    stub install below starts clean.
+    """
+    try:
+        return importlib.import_module(name)
+    except Exception:  # noqa: BLE001 - probe; any failure means "stub it"
+        sys.modules.pop(name, None)
+        return None
+
+
+def _delegate_missing(stub, real):
+    """Serve names the stub does not define from the real module (PEP 562).
+
+    Other test modules import helpers straight from these keys
+    (``_interleave_by_source`` from ``app.rag.vector_rag``,
+    ``RagPipeline``/``settings`` from ``app.rag.pipeline``). Without
+    delegation the stub shadows the real module session-wide and those
+    imports fail — a collection error plus order-dependent failures.
+    """
+
+    def __getattr__(name: str):
+        return getattr(real, name)
+
+    stub.__getattr__ = __getattr__
+
+
 def _stub_heavy_rag():
-    """Stub the torch-pulling RAG modules (single choke point)."""
-    if "app.rag.vector_rag" not in sys.modules:
-        mod = types.ModuleType("app.rag.vector_rag")
+    """Stub the torch-pulling RAG modules (single choke point).
 
-        class VectorRAG:  # test double: lifespan binds whatever this is
-            def __init__(self, *a, **k):
-                pass
+    Installed unconditionally (replacing any probe residue): the lifespan
+    must bind the fast fake ``VectorRAG`` — constructing the real one
+    costs ~50 s per ``TestClient`` entry. ``RagPipeline`` is the real
+    class when importable (the lifespan never constructs it, and unit
+    tests exercise its real methods); anything the stub does not define
+    delegates to the real module so sibling test files keep working.
+    """
+    real_vector_rag = _try_import_real("app.rag.vector_rag")
+    real_pipeline = _try_import_real("app.rag.pipeline")
 
-            def retrieve_context(
-                self, notebook_id, query, top_k=4, file_id=None, file_name=None, mode="specific"
-            ):
-                return []
+    mod = types.ModuleType("app.rag.vector_rag")
 
-        mod.VectorRAG = VectorRAG
-        sys.modules["app.rag.vector_rag"] = mod
-    if "app.rag.pipeline" not in sys.modules:
-        pipe = types.ModuleType("app.rag.pipeline")
+    class VectorRAG:  # test double: lifespan binds whatever this is
+        def __init__(self, *a, **k):
+            pass
+
+        def retrieve_context(
+            self, notebook_id, query, top_k=4, file_id=None, file_name=None, mode="specific"
+        ):
+            return []
+
+    mod.VectorRAG = VectorRAG
+    if real_vector_rag is not None:
+        _delegate_missing(mod, real_vector_rag)
+    sys.modules["app.rag.vector_rag"] = mod
+
+    pipe = types.ModuleType("app.rag.pipeline")
+    if real_pipeline is not None and hasattr(real_pipeline, "RagPipeline"):
+        pipe.RagPipeline = real_pipeline.RagPipeline
+        _delegate_missing(pipe, real_pipeline)
+    else:
 
         class RagPipeline:  # imported by app.routes.files; never run here
             def __init__(self, *a, **k):
                 pass
 
         pipe.RagPipeline = RagPipeline
-        sys.modules["app.rag.pipeline"] = pipe
+        if real_pipeline is not None:
+            _delegate_missing(pipe, real_pipeline)
+    sys.modules["app.rag.pipeline"] = pipe
 
 
 _stub_heavy_rag()
