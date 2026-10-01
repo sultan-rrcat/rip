@@ -129,6 +129,7 @@ class Orchestrator:
                 "plan_error": None,
                 "step_results": {},
                 "aggregation": None,
+                "route_intent": None,
                 "plan_span_ctx": None,
             },
             config=config,  # type: ignore[call-overload]
@@ -180,6 +181,7 @@ class Orchestrator:
                         cancel_event=cancel_event,
                         on_event=on_event,
                         parent_span_ctx=_get_tc(),
+                        route_intent=final.get("route_intent"),
                     )
                     aggregation = self._aggregator.aggregate(react.plan, react.result)
                     react_obs.update(output={

@@ -17,6 +17,12 @@ _SNAPSHOT_FILE = re.compile(
     r"(.+?)\s*\[(ready|processing|uploading|error)\]\s*id=(\S+)"
 )
 
+#: The snapshot's "N file(s): " prefix. The regex above is anchored at the
+#: line start, so without this strip the first file's name carries the
+#: prefix — harmless for id matching, wrong in anything user-facing (the
+#: convert counter-question would read "2 file(s): a.pdf").
+_SNAPSHOT_COUNT_PREFIX = re.compile(r"^\d+\s+files?\(s\):\s*")
+
 
 def _snapshot_files(notebook_context: str | None) -> list[tuple[str, str, str]]:
     """Parse (name, status, file_id) triples out of the snapshot string."""
@@ -26,7 +32,9 @@ def _snapshot_files(notebook_context: str | None) -> list[tuple[str, str, str]]:
     for name, status, fid in _SNAPSHOT_FILE.findall(notebook_context):
         fid_clean = fid.strip().rstrip(";,")
         if fid_clean:
-            cleaned.append((name.strip(), status.strip().lower(), fid_clean))
+            cleaned.append(
+                (_SNAPSHOT_COUNT_PREFIX.sub("", name.strip()), status.strip().lower(), fid_clean)
+            )
     return cleaned
 
 

@@ -9,8 +9,8 @@ BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from app.orchestration.intents import Intent
-from app.orchestration.router import Router
+from app.orchestration.intents import INTENT_DESCRIPTIONS, Intent
+from app.orchestration.router import Router, build_router_prompt
 from app.providers.base import ModelProvider
 
 
@@ -93,12 +93,16 @@ def test_llm_failure_falls_open_to_unknown() -> None:
 def test_prompt_disambiguates_plot_vs_compare() -> None:
     # Live trace: "compare the class distribution and plot in a bar chart"
     # was routed compare_multi (no plot step emitted). The prompt must carry
-    # the precedence rule so a chart ask wins over a compare ask.
+    # the precedence rule so a chart ask wins over a compare ask (ADR-035).
     provider = FakeRouterProvider()
     Router(provider).route("compare the class distribution and plot in a bar chart")
     system = provider.messages[0]["content"]
     assert "summarize_plot" in system
-    assert "compare_multi is only for comparisons with no chart" in system
+    assert "compare_multi" in system
+    assert "no chart requested" in INTENT_DESCRIPTIONS[Intent.COMPARE_MULTI]
+    # Rule 2 splits charts by their DATA SOURCE, not just by verb.
+    assert "a chart of the notebook's document data is summarize_plot" in system
+    assert "from your own knowledge is plot_standalone" in system
     # NB: no "distinct" assert — that word belonged to the removed
     # router-side query-generation line (e2fa13f moved decomposition into
     # rag.query per ADR-030); precedence is covered by the asserts above.
@@ -201,3 +205,56 @@ def test_router_without_context_keeps_two_messages() -> None:
     provider = FakeRouterProvider({"intent": "chat", "confidence": 0.9})
     Router(provider).route("hello")
     assert len(provider.messages) == 2  # system + user, no context turn
+
+
+# --- ADR-035: the router must see the corpus and the doc/non-doc split ---
+
+
+def test_prompt_splits_doc_and_non_doc_intents() -> None:
+    system = build_router_prompt("(no documents)")
+    doc_block, non_doc_block = system.split("NON-DOC intents")
+    assert "DOC-BASED intents" in doc_block
+    # Retrieval intents live in the doc block, parametric ones do not.
+    assert "qa_single" in doc_block and "summarize" in doc_block
+    assert "qa_single" not in non_doc_block
+    assert "knowledge_qa" in non_doc_block and "code" in non_doc_block
+    assert "if the request can be answered without the notebook" in system
+
+
+def test_prompt_states_empty_corpus_and_pushes_non_doc() -> None:
+    # Trace c9b02eef: "Plot India vs China GDP growth" was routed as a
+    # document plot on an empty notebook. The corpus line is what lets the
+    # model prefer the parametric intent.
+    system = build_router_prompt("(no documents)")
+    assert "(no documents)" in system
+    assert "the notebook is EMPTY" in system
+    assert "prefer a NON-DOC intent" in system
+
+
+def test_prompt_states_ready_corpus() -> None:
+    system = build_router_prompt("2 file(s): a.pdf [ready] id=aaa; b.pdf [ready] id=bbb")
+    assert "HAS uploaded documents" in system
+    assert "prefer a NON-DOC intent" not in system
+
+
+def test_prompt_states_processing_corpus() -> None:
+    system = build_router_prompt("1 file(s): big.pdf [processing] id=zzz")
+    assert "uploading/processing" in system
+
+
+def test_prompt_states_unavailable_inventory() -> None:
+    system = build_router_prompt(None)
+    assert "inventory is unavailable" in system
+    assert "assume the notebook MAY have documents" in system
+
+
+def test_route_receives_the_corpus() -> None:
+    provider = FakeRouterProvider({"intent": "qa_single", "confidence": 0.9})
+    Router(provider).route("what does it say?", notebook_context="(no documents)")
+    assert "(no documents)" in provider.messages[0]["content"]
+
+
+def test_removed_intents_are_not_advertised() -> None:
+    system = build_router_prompt("(no documents)")
+    assert "- image:" not in system
+    assert "- vision:" not in system

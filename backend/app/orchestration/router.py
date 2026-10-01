@@ -5,6 +5,13 @@ Classifies the user request into exactly one intent plus slot values
 route < threshold to UNKNOWN (→ L3 ReAct). Every request — including
 greetings — goes through the LLM; there is no deterministic fast-path.
 Query generation is performed inside rag.query, not by the router.
+
+The prompt states the notebook's corpus state and splits the menu into
+DOC-BASED vs NON-DOC intents (ADR-035). Without the corpus the router
+cannot tell "answer from the documents" from "answer from your own
+knowledge", so a parametric request ("Plot India vs China GDP growth")
+routed as a document intent and paid a retrieval round trip for a
+guaranteed "(no chunks retrieved)".
 """
 
 from __future__ import annotations
@@ -14,8 +21,11 @@ import logging
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.orchestration.corpus import get_corpus_state
 from app.orchestration.intents import (
+    DOC_INTENTS,
     INTENT_DESCRIPTIONS,
+    NON_DOC_INTENTS,
     ROUTER_CONFIDENCE_THRESHOLD,
     Intent,
 )
@@ -49,6 +59,73 @@ class RouterResult(BaseModel):
     file_hint: str = ""
     target_format: str = ""
 
+    @property
+    def is_doc_intent(self) -> bool:
+        """Whether the routed intent claims the notebook's documents."""
+        return self.intent in DOC_INTENTS
+
+
+#: Corpus-state → one line the router must reason about. The doc/non-doc
+#: split is only decidable with this in view, so it is prompt input, not
+#: a post-hoc correction.
+_CORPUS_LINES = {
+    "ready": "the notebook HAS uploaded documents — DOC-BASED intents are answerable",
+    "empty": (
+        "the notebook is EMPTY (nothing uploaded) — every DOC-BASED intent can "
+        "only answer 'upload documents first', so prefer a NON-DOC intent "
+        "whenever the request is answerable from your own knowledge"
+    ),
+    "processing": (
+        "the notebook's files are still uploading/processing — retrieval has "
+        "nothing to search yet, so prefer a NON-DOC intent when possible"
+    ),
+    "unknown": (
+        "the file inventory is unavailable — assume the notebook MAY have "
+        "documents and classify on the wording alone"
+    ),
+}
+
+
+def build_router_prompt(notebook_context: str | None = None) -> str:
+    """Assemble the router system prompt (pure — no provider needed).
+
+    Split from `Router.route` so the wording is unit-testable without a
+    live Ollama, and so the corpus line has one home.
+    """
+    state = get_corpus_state(notebook_context)
+    snapshot = notebook_context if notebook_context else "(inventory unavailable)"
+    doc_lines = "\n".join(
+        f"- {i.value}: {INTENT_DESCRIPTIONS[i]}" for i in Intent if i in DOC_INTENTS
+    )
+    non_doc_lines = "\n".join(
+        f"- {i.value}: {INTENT_DESCRIPTIONS[i]}"
+        for i in Intent
+        if i in NON_DOC_INTENTS
+    )
+    return (
+        "You are an intent router. Classify the user request into exactly "
+        "one intent. Query generation for document retrieval is performed "
+        "inside rag.query, not by you.\n"
+        f"Notebook documents:\n{snapshot}\nCorpus: {_CORPUS_LINES[state]}\n"
+        "DOC-BASED intents (answered from the notebook's documents/files):\n"
+        f"{doc_lines}\n"
+        "NON-DOC intents (answered from your own knowledge — never search "
+        f"documents):\n{non_doc_lines}\n"
+        f"- {Intent.UNKNOWN.value}: {INTENT_DESCRIPTIONS[Intent.UNKNOWN]}\n"
+        "Rule 1 (decisive): if the request can be answered without the "
+        "notebook, choose a NON-DOC intent. Choose a DOC-BASED intent only "
+        "when the request refers to the notebook's uploaded documents or "
+        "files.\n"
+        "Rule 2 (charts): a chart from numbers in the message or from your own "
+        f"knowledge is {Intent.PLOT_STANDALONE.value}; a chart of the "
+        f"notebook's document data is {Intent.SUMMARIZE_PLOT.value}, even when "
+        "the request also says compare or summarize.\n"
+        "Convert intents only: file_hint is the named file (or \"*\" when "
+        "the request says all/every documents, else \"\"), target_format "
+        "is md|docx|pdf when stated (else \"\").\n"
+        "Return intent as the exact value string and confidence as 0.0-1.0."
+    )
+
 
 class Router:
     def __init__(
@@ -59,23 +136,13 @@ class Router:
         self._provider = provider
         self._model = model or settings.ollama_default_model
 
-    def route(self, request_text: str, context: str | None = None) -> RouterResult:
-        lines = "\n".join(
-            f"- {intent.value}: {INTENT_DESCRIPTIONS[intent]}" for intent in Intent
-        )
-        system_prompt = (
-            "You are an intent router. Classify the user request into exactly "
-            "one intent. Query generation for document retrieval is performed "
-            "inside rag.query, not by you.\n"
-            f"Intents:\n{lines}\n"
-            "Precedence: plot/draw/chart/show-as-graph (from document data) "
-            "is always summarize_plot, even when the request also says "
-            "compare; compare_multi is only for comparisons with no chart.\n"
-            "Convert intents only: file_hint is the named file (or \"*\" when "
-            "the request says all/every documents, else \"\"), target_format "
-            "is md|docx|pdf when stated (else \"\").\n"
-            "Return intent as the exact value string and confidence as 0.0-1.0."
-        )
+    def route(
+        self,
+        request_text: str,
+        context: str | None = None,
+        notebook_context: str | None = None,
+    ) -> RouterResult:
+        system_prompt = build_router_prompt(notebook_context)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": request_text},

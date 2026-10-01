@@ -92,6 +92,10 @@ class OrchestrationState(TypedDict):
     plan_error: str | None
     step_results: dict[str, StepResult]
     aggregation: AggregationResult | None
+    #: The L1 router's verdict, carried out of the plan node so the
+    #: orchestrator can hand it to L3 ReAct (ADR-035): ReAct executes the
+    #: routed intent instead of re-deciding doc-vs-non-doc from scratch.
+    route_intent: str | None
     #: Explicit Langfuse parent for `step:{id}` spans: the plan-span context
     #: ({"trace_id", "parent_span_id"}), captured inside the plan span.
     #: None when tracing is off or the plan failed. Lets steps nest INSIDE
@@ -135,7 +139,9 @@ def _make_plan_node(
         ) as router_obs:
             try:
                 route = Router(planner.provider).route(
-                    state["request_text"], context=state.get("context")
+                    state["request_text"],
+                    context=state.get("context"),
+                    notebook_context=state.get("notebook_context"),
                 )
                 route_info = {
                     "layer": "L2-builder",
@@ -164,6 +170,7 @@ def _make_plan_node(
                             f"no deterministic builder for intent "
                             f"{route.intent.value} — L3 ReAct required"
                         ),
+                        "route_intent": route.intent.value,
                         "plan_span_ctx": None,
                     }
             except Exception as e:  # noqa: BLE001 - miss fails open to L3 ReAct
@@ -172,6 +179,7 @@ def _make_plan_node(
                 return {
                     "plan": None,
                     "plan_error": f"routing failed ({e}) — L3 ReAct required",
+                    "route_intent": route_info["intent"],
                     "plan_span_ctx": None,
                 }
         with manual_span(
@@ -227,6 +235,7 @@ def _make_plan_node(
                 return {
                     "plan": None,
                     "plan_error": f"builder plan rejected ({err}) — L3 ReAct required",
+                    "route_intent": route_info["intent"],
                     "plan_span_ctx": None,
                 }
             plan_obs.update(output={
@@ -276,6 +285,7 @@ def _make_plan_node(
         return {
             "plan": plan,
             "plan_error": None,
+            "route_intent": route_info["intent"],
             "plan_span_ctx": plan_span_ctx,
         }
 
