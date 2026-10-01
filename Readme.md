@@ -60,6 +60,7 @@ Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (`HOST_BACK
 | `docs/ADR.md` | Architecture decisions, past and present |
 | `docs/AGENT.md` | Maintainer guide: conventions, commands, workflow |
 | `docs/CONTEXT.md` | Domain glossary and data-flow reference |
+| `docs/UAT.md` | End-user test process: live-stack runs, triage method, findings log |
 
 ---
 
