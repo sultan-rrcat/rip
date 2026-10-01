@@ -34,6 +34,7 @@ try:
         OrchestrationResult,
     )
     from app.orchestration.results import StepResult
+    from app.routes.auth import UserResponse, get_current_user
     from app.runs.manager import RunManager
     from app.store import runs as store
     from app.tools.registry import ToolRegistry
@@ -112,7 +113,7 @@ class FakeOrchestrator:
     """Emits a realistic event chain, then returns a fixed result."""
 
     def run(self, request_text, notebook_id, on_event=None, context=None,
-            cancel_event=None):
+            cancel_event=None, **_kw):
         emit = on_event or (lambda d: None)
         emit({"type": "plan", "plan_id": "p1", "goal": "answer hello",
               "steps": [{"step_id": "s1", "executor": "rag.query",
@@ -132,7 +133,7 @@ class BlockingOrchestrator:
         self.release = threading.Event()
 
     def run(self, request_text, notebook_id, on_event=None, context=None,
-            cancel_event=None):
+            cancel_event=None, **_kw):
         emit = on_event or (lambda d: None)
         emit({"type": "plan", "plan_id": "p1", "goal": "g", "steps": []})
         while not self.release.is_set():
@@ -144,17 +145,33 @@ class BlockingOrchestrator:
 
 class BoomOrchestrator:
     def run(self, request_text, notebook_id, on_event=None, context=None,
-            cancel_event=None):
+            cancel_event=None, **_kw):
         raise RuntimeError("boom")
 
 
 @pytest.fixture()
-def notebook_id():
+def test_user():
+    """Owner for the fixture notebooks (S1: /v1/* is owner-scoped)."""
+    username = f"runs-api-{uuid.uuid4().hex[:8]}"
     with pg_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO notebooks (notebook_name) VALUES (%s) "
+            "INSERT INTO users (username, password_hash) VALUES (%s, %s) "
+            "RETURNING user_id",
+            (username, "not-a-real-hash"),
+        )
+        user_id = str(cur.fetchone()[0])
+    yield UserResponse(user_id=user_id, username=username)
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+
+
+@pytest.fixture()
+def notebook_id(test_user):
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO notebooks (notebook_name, owner_id) VALUES (%s, %s) "
             "RETURNING notebook_id",
-            ("runs-api-test",),
+            ("runs-api-test", test_user.user_id),
         )
         nb = str(cur.fetchone()[0])
     yield nb
@@ -180,13 +197,19 @@ def manager(uploads):
     )
 
 
-@pytest.fixture()
-def client(manager):
+def _build_app(manager, user):
+    """Bare /v1 app with run-manager + auth overridden (no login flow)."""
     app = FastAPI()
     app.include_router(runs_router)
     app.include_router(admin_router)
     app.dependency_overrides[get_run_manager] = lambda: manager
-    with TestClient(app) as c:
+    app.dependency_overrides[get_current_user] = lambda: user
+    return app
+
+
+@pytest.fixture()
+def client(manager, test_user):
+    with TestClient(_build_app(manager, test_user)) as c:
         yield c
 
 
@@ -382,14 +405,12 @@ class TestMemory:
 
 @needs_db
 class TestCancel:
-    def test_cancel_running_run(self, notebook_id, uploads):
+    def test_cancel_running_run(self, notebook_id, uploads, test_user):
         orch = BlockingOrchestrator()
         manager = RunManager(
             provider=FakeProvider(), orchestrator=orch,
         )
-        app = FastAPI()
-        app.include_router(runs_router)
-        app.dependency_overrides[get_run_manager] = lambda: manager
+        app = _build_app(manager, test_user)
         with TestClient(app) as client:
             run_id = client.post(
                 "/v1/runs", json={"notebook_id": notebook_id, "message": "hi"}
@@ -417,13 +438,11 @@ class TestCancel:
 
 @needs_db
 class TestFailure:
-    def test_crash_becomes_error(self, notebook_id, uploads):
+    def test_crash_becomes_error(self, notebook_id, uploads, test_user):
         manager = RunManager(
             provider=FakeProvider(), orchestrator=BoomOrchestrator(),
         )
-        app = FastAPI()
-        app.include_router(runs_router)
-        app.dependency_overrides[get_run_manager] = lambda: manager
+        app = _build_app(manager, test_user)
         with TestClient(app) as client:
             run_id = client.post(
                 "/v1/runs", json={"notebook_id": notebook_id, "message": "hi"}
