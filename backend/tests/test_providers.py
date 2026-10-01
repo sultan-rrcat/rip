@@ -19,6 +19,22 @@ from app.providers.streaming import ThinkFilter, strip_think
 TEST_MODEL = os.environ.get("RIP_TEST_MODEL", "openbmb/minicpm5-2b:latest")
 
 
+def _present_model() -> str | None:
+    """A model actually pulled on this Ollama host (env override wins).
+
+    Hardcoding one model name breaks on hosts with different pulls —
+    resolution falls back to the default by design, so tests must use
+    whatever the server lists.
+    """
+    try:
+        ids = [m["id"] for m in OllamaProvider().list_available_models()]
+    except Exception:  # noqa: BLE001 - probe; needs_ollama skips anyway
+        return None
+    if TEST_MODEL in ids:
+        return TEST_MODEL
+    return ids[0] if ids else None
+
+
 def _ollama_up() -> bool:
     try:
         r = httpx.get(
@@ -84,7 +100,9 @@ class TestOllamaProvider:
 
     def test_model_resolution(self):
         p = OllamaProvider()
-        assert p.served_model(TEST_MODEL) == TEST_MODEL
+        present = _present_model()
+        assert present is not None, "Ollama lists no pulled models"
+        assert p.served_model(present) == present
         assert p.served_model("definitely-not-pulled:latest") == (
             settings.ollama_default_model
         )
@@ -92,7 +110,7 @@ class TestOllamaProvider:
     def test_list_available_models(self):
         models = OllamaProvider().list_available_models()
         assert models
-        assert any(m["id"] == TEST_MODEL for m in models)
+        assert any(m["id"] == _present_model() for m in models)
 
     def test_generate_round_trip(self):
         p = OllamaProvider()
