@@ -8,6 +8,22 @@ from app.observability import langfuse as lf
 from app.providers.base import ModelProvider
 from app.providers.tracing import TracingProvider, wrap_provider
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _force_tracing_disabled(monkeypatch):
+    """These tests assert disabled-mode behavior — pin it.
+
+    The repo .env ships LANGFUSE_ENABLED=true and earlier tests run the
+    app lifespan (init_langfuse), so without this the assertions depend
+    on ambient env and test order instead of the code under test.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "langfuse_enabled", False)
+    monkeypatch.setattr(lf, "_client", None)
+
 
 class _FakeProvider(ModelProvider):
     def __init__(self):
