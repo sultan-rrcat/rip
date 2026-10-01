@@ -113,7 +113,7 @@ Vite dev (`npm run dev`, port `5178` per `vite.config.ts`) proxies `/api/` + `/v
 ## 5. Smoke test
 
 0. `scripts/rip.ps1 health` — backend, frontend, postgres all OK.
-1. Login (`POST /api/auth/login`, cookies kept) — all `/api/*` + `/v1/*` except health require it.
+1. Login (`POST /api/auth/login`, cookies kept) — all `/api/*` + `/v1/*` except health require it. UAT credential: username `admin`, password `admin` (override with `UAT_USERNAME`/`UAT_PASSWORD` for the pytest suite). The DB seeds no users — create it once with `python scripts/create_user.py admin admin` (already-exists → nothing to do). Local-UAT convenience only: never use a weak default against a shared or production database.
 2. Create notebook, upload PDF → `ready`.
 3. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.
 4. `GET /v1/runs/{id}/events` streams `run_started→plan→step_started→delta* (live-only)→step_completed→sources?→artifacts?→summary→run_completed` (`error`/`cancelled` on failure paths).
