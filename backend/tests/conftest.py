@@ -48,7 +48,7 @@ def client():
     """TestClient with lifespan executed: real VectorRAG models loaded once."""
     try:
         _apply_schema()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - any connect/DDL failure means "down"
         pytest.skip(f"Postgres unreachable, skipping integration tests: {e}")
     from app.main import app
 

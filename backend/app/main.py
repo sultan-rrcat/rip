@@ -18,11 +18,11 @@ from fastapi.middleware.cors import CORSMiddleware
 # server starts from rip/ or rip/backend/.
 load_dotenv(find_dotenv(usecwd=True))
 
-from app.api import admin, deps, health, runs  # noqa: E402
-from app.core.logging import setup_logging  # noqa: E402
-from app.observability.langfuse import flush as langfuse_flush  # noqa: E402
-from app.observability.langfuse import init_langfuse  # noqa: E402
-from app.routes import auth, files, messages, notebooks  # noqa: E402
+from app.api import admin, deps, health, runs
+from app.core.logging import setup_logging
+from app.observability.langfuse import flush as langfuse_flush
+from app.observability.langfuse import init_langfuse
+from app.routes import auth, files, messages, notebooks
 
 logger = setup_logging()
 init_langfuse()
@@ -168,7 +168,7 @@ def health():
 # Enable CORS — origins from settings (plain str, split on ",").
 # Browsers reject wildcard + credentials, so credentials are only
 # enabled for explicit origin lists.
-from app.core.config import settings as _cors_settings  # noqa: E402
+from app.core.config import settings as _cors_settings
 
 _cors_origins = [o.strip() for o in (_cors_settings.cors_origins or "*").split(",") if o.strip()]
 _cors_allow_credentials = "*" not in _cors_origins

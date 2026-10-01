@@ -291,11 +291,10 @@ class RunManager:
                 metadata={"route": "runs", "run_id": record.run_id},
                 tags=["feature:runs"],
                 trace_name="run",
-            ):
-                with manual_span(
-                    "run", as_type="span", input=truncate(record.message, 2000)
-                ) as run_obs:
-                    self._run_traced(record, run_obs)
+            ), manual_span(
+                "run", as_type="span", input=truncate(record.message, 2000)
+            ) as run_obs:
+                self._run_traced(record, run_obs)
         except Exception as e:
             logger.exception("run %s crashed", record.run_id)
             self._finish_failed(record, str(e))

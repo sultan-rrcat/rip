@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.orchestration.intents import (

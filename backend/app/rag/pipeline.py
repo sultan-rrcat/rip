@@ -2,20 +2,19 @@
 # pipeline.py 
 
 
-from sentence_transformers import CrossEncoder
-from langchain_opendataloader_pdf import OpenDataLoaderPDFLoader
-from langchain_text_splitters import MarkdownHeaderTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_core.documents import Document
-from docling.document_converter import DocumentConverter
-from psycopg2.extras import Json
 import json
 
-
-from app.core.logging import setup_logging
-from app.core.db import pg_connection
+from docling.document_converter import DocumentConverter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_core.documents import Document
+from langchain_opendataloader_pdf import OpenDataLoaderPDFLoader
+from langchain_text_splitters import MarkdownHeaderTextSplitter
+from psycopg2.extras import Json
+from sentence_transformers import CrossEncoder
 
 from app.core.config import settings
+from app.core.db import pg_connection
+from app.core.logging import setup_logging
 
 logger = setup_logging()
 
@@ -79,7 +78,7 @@ class RagPipeline:
         )
         try:
             return loaders[0](file)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - loader fallback must catch anything
             logger.warning(f"⚠️ {names[0]} failed, fallback to {names[1]}: {e}")
 
             try:
@@ -144,8 +143,8 @@ class RagPipeline:
             )
             return final_chunks
 
-        except Exception as e:
-            logger.exception(f"Error splitting: {e}")
+        except Exception:
+            logger.exception("Error splitting")
             raise
 
     # =========================
@@ -157,8 +156,8 @@ class RagPipeline:
             embeddings = self.embedding_model.embed_documents(texts)
             return embeddings
 
-        except Exception as e:
-            logger.exception(f"Error while generating embeddings: {e}")
+        except Exception:
+            logger.exception("Error while generating embeddings")
             raise
 
     # =========================
@@ -171,7 +170,7 @@ class RagPipeline:
             if isinstance(metadata, str):
                 try:
                     return json.loads(metadata)
-                except:
+                except ValueError:
                     return {"raw": metadata}
             return metadata
 
@@ -204,6 +203,6 @@ class RagPipeline:
             logger.info(f"✅ Stored {len(embedding_ids)} embeddings.")
             return embedding_ids
 
-        except Exception as e:
-            logger.exception(f"Error storing embeddings: {e}")
+        except Exception:
+            logger.exception("Error storing embeddings")
             raise

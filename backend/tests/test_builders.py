@@ -116,7 +116,6 @@ def test_summarize_dispatch() -> None:
 
 def test_rag_query_mode_validation() -> None:
     import pytest
-
     from app.orchestration.plan import Plan, PlanStep
 
     bad = Plan(

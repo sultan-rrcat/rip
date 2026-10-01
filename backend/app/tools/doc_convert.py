@@ -348,7 +348,7 @@ class DocConvertTool(Tool):
             return ToolResponse(tool_id=self.tool_id, ok=False, output=None, error=str(e))
         except RuntimeError as e:
             return ToolResponse(tool_id=self.tool_id, ok=False, output=None, error=str(e))
-        except Exception as e:  # noqa: BLE001 - load/render failure is a tool failure
+        except Exception as e:
             logger.exception("doc.convert conversion failed")
             return ToolResponse(
                 tool_id=self.tool_id, ok=False, output=None, error=f"conversion failed: {e}"
@@ -386,7 +386,7 @@ class DocConvertTool(Tool):
                 )
             except (ValueError, RuntimeError) as e:
                 failures.append(f"'{file_name}': {e}")
-            except Exception as e:  # noqa: BLE001 - per-file failure must not abort the batch
+            except Exception as e:
                 logger.exception("doc.convert per-file conversion failed")
                 failures.append(f"'{file_name}': conversion failed: {e}")
             else:

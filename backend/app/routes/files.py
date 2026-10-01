@@ -43,7 +43,7 @@ class FileCreate(BaseModel):
 
 
 @router.get("/api/notebooks/{id}/files")
-def get_files(id: str, user: UserResponse = Depends(get_current_user)):
+def get_files(id: str, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical  # noqa: B008 - FastAPI Depends-in-default is canonical
     _validate_uuid(id, "notebook_id")
     logger.debug(f"Fetching files for notebook: {id}")
 
@@ -73,7 +73,7 @@ def get_files(id: str, user: UserResponse = Depends(get_current_user)):
 
 
 @router.post("/api/notebooks/{id}/files")
-def create_file(id: str, data: FileCreate, user: UserResponse = Depends(get_current_user)):
+def create_file(id: str, data: FileCreate, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical
     _validate_uuid(id, "notebook_id")
     logger.info(f"Creating file for notebook: {id}, name: {data.file_name}")
 
@@ -113,7 +113,7 @@ def create_file(id: str, data: FileCreate, user: UserResponse = Depends(get_curr
 
 
 @router.patch("/api/files/{file_id}/status")
-def update_file_status(file_id: str, data: dict, user: UserResponse = Depends(get_current_user)):
+def update_file_status(file_id: str, data: dict, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical
     _validate_uuid(file_id, "file_id")
     logger.info(f"Updating file status: {file_id}")
 
@@ -147,7 +147,7 @@ def update_file_status(file_id: str, data: dict, user: UserResponse = Depends(ge
 
 
 @router.delete("/api/files/{file_id}")
-def delete_file(file_id: str, user: UserResponse = Depends(get_current_user)):
+def delete_file(file_id: str, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical  # noqa: B008 - FastAPI Depends-in-default is canonical
     _validate_uuid(file_id, "file_id")
     logger.info(f"Deleting file: {file_id}")
 
@@ -177,8 +177,8 @@ def delete_file(file_id: str, user: UserResponse = Depends(get_current_user)):
 @router.post("/api/files/upload")
 async def upload(
     notebook_id: str = Form(...),
-    file: UploadFile = File(...),
-    user: UserResponse = Depends(get_current_user),
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI File-in-default is canonical
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
 ):
     _validate_uuid(notebook_id, "notebook_id")
 
@@ -255,8 +255,8 @@ async def upload(
 def process_file(
     file_id: str,
     background_tasks: BackgroundTasks,
-    rag: Any = Depends(get_rag),
-    user: UserResponse = Depends(get_current_user),
+    rag: Any = Depends(get_rag),  # noqa: B008 - FastAPI Depends-in-default is canonical
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
 ):
     _validate_uuid(file_id, "file_id")
     if rag is None:

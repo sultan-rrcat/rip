@@ -197,8 +197,9 @@ class TestDocConvert:
         assert resp.ok and resp.data["source_file_name"] == "a.pdf"
 
     def test_convert_all_star(self, monkeypatch):
-        import app.tools.doc_convert as dc_mod
         import os
+
+        import app.tools.doc_convert as dc_mod
 
         def fake_list_ready(nb):
             return [("fid-1", "a.pdf", ".pdf"), ("fid-2", "b.pdf", ".pdf")]

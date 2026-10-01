@@ -1,27 +1,27 @@
 # file_processor.py 
 
-import os
 import asyncio
+import os
 from typing import Any
-from app.core.logging import setup_logging
-from app.core.db import pg_connection
+
 from app.core.config import settings
+from app.core.db import pg_connection
+from app.core.logging import setup_logging
 
 logger = setup_logging()
 
 async def run_rag_pipeline(file_id: str, rag: Any):
     try:
         # ─── Fetch metadata ───
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT notebook_id, file_name FROM files WHERE file_id=%s",
-                    (file_id,),
-                )
-                result = cur.fetchone()
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT notebook_id, file_name FROM files WHERE file_id=%s",
+                (file_id,),
+            )
+            result = cur.fetchone()
 
         if not result:
-            raise Exception(f"File not found: {file_id}")
+            raise RuntimeError(f"File not found: {file_id}")
 
         notebook_id = str(result[0])
         file_name = result[1]
@@ -62,22 +62,20 @@ async def run_rag_pipeline(file_id: str, rag: Any):
             raise
 
         # ─── Mark ready ───
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE files SET file_status = 'ready' WHERE file_id = %s",
-                    (file_id,),
-                )
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE files SET file_status = 'ready' WHERE file_id = %s",
+                (file_id,),
+            )
         logger.info(f"File ready: {file_id}")
 
     except Exception:
         logger.exception(f"Pipeline failed: {file_id}")
         try:
-            with pg_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE files SET file_status = 'error' WHERE file_id = %s",
-                        (file_id,),
-                    )
+            with pg_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE files SET file_status = 'error' WHERE file_id = %s",
+                    (file_id,),
+                )
         except Exception:
             logger.exception(f"Failed to mark error status: {file_id}")

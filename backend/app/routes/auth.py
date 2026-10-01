@@ -5,8 +5,7 @@ import hmac
 import secrets
 import time
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -92,12 +91,11 @@ def create_user(username: str, password: str) -> None:
     salt = secrets.token_hex(16)
     pw_hash = _hash_password(password, salt)
     stored = f"{salt}${pw_hash}"
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
-                (username, stored),
-            )
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
+            (username, stored),
+        )
 
 
 def get_current_user(request: Request) -> UserResponse:
@@ -105,18 +103,17 @@ def get_current_user(request: Request) -> UserResponse:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT u.user_id, u.username
                 FROM sessions s
                 JOIN users u ON u.user_id = s.user_id
                 WHERE s.token = %s AND s.expires_at > %s
                 """,
-                (token, datetime.now(timezone.utc)),
-            )
-            row = cur.fetchone()
+            (token, datetime.now(UTC)),
+        )
+        row = cur.fetchone()
 
     if not row:
         raise HTTPException(status_code=401, detail="Session expired or invalid")
@@ -129,13 +126,12 @@ def login(data: LoginRequest, request: Request, response: Response) -> UserRespo
     client_ip = request.client.host if request.client else "unknown"
     _check_rate_limit(client_ip)
 
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT user_id, password_hash FROM users WHERE username = %s",
-                (data.username,),
-            )
-            row = cur.fetchone()
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT user_id, password_hash FROM users WHERE username = %s",
+            (data.username,),
+        )
+        row = cur.fetchone()
 
     if not row:
         _record_failed_attempt(client_ip)
@@ -149,14 +145,13 @@ def login(data: LoginRequest, request: Request, response: Response) -> UserRespo
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DURATION_DAYS)
+    expires_at = datetime.now(UTC) + timedelta(days=SESSION_DURATION_DAYS)
 
-    with pg_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO sessions (token, user_id, expires_at) VALUES (%s, %s, %s)",
-                (token, user_id, expires_at),
-            )
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO sessions (token, user_id, expires_at) VALUES (%s, %s, %s)",
+            (token, user_id, expires_at),
+        )
 
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -174,9 +169,8 @@ def login(data: LoginRequest, request: Request, response: Response) -> UserRespo
 def logout(request: Request, response: Response) -> dict:
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if token:
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM sessions WHERE token = %s", (token,))
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM sessions WHERE token = %s", (token,))
 
     response.delete_cookie(
         key=SESSION_COOKIE_NAME,
@@ -188,5 +182,5 @@ def logout(request: Request, response: Response) -> dict:
 
 
 @router.get("/api/auth/me")
-def me(user: UserResponse = Depends(get_current_user)) -> UserResponse:
+def me(user: UserResponse = Depends(get_current_user)) -> UserResponse:  # noqa: B008 - FastAPI Depends-in-default is canonical
     return user

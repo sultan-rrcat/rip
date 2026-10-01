@@ -1,6 +1,6 @@
-from app.rag.pipeline import RagPipeline
-from app.core.logging import setup_logging
 from app.core.db import pg_connection
+from app.core.logging import setup_logging
+from app.rag.pipeline import RagPipeline
 
 logger = setup_logging()
 
@@ -185,135 +185,134 @@ class VectorRAG(RagPipeline):
             prompt_embeddings = self.embedding_model.embed_query(user_prompt)
 
             # Vector and Keyword Search (file-scoped when fid/fname set)
-            with pg_connection() as conn:
-                with conn.cursor() as cur:
-                    # 1. Vector Search
-                    if fid and fname:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s)
-                            AND file_id = %s
-                            AND file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
-                            ORDER BY embedding<=>%s::vector
-                            LIMIT %s
-                            """,
-                            (
-                                prompt_embeddings,
-                                notebook_id,
-                                fid,
-                                notebook_id,
-                                fname,
-                                prompt_embeddings,
-                                fetch_k,
-                            ),
-                        )
-                    elif fid:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s)
-                            AND file_id = %s
-                            ORDER BY embedding<=>%s::vector
-                            LIMIT %s
-                            """,
-                            (prompt_embeddings, notebook_id, fid, prompt_embeddings, fetch_k),
-                        )
-                    elif fname:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
-                            ORDER BY embedding<=>%s::vector
-                            LIMIT %s
-                            """,
-                            (prompt_embeddings, notebook_id, fname, prompt_embeddings, fetch_k),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s)
-                            ORDER BY embedding<=>%s::vector
-                            LIMIT %s
-                            """,
-                            (prompt_embeddings, notebook_id, prompt_embeddings, fetch_k),
-                        )
-                    vector_results = cur.fetchall()
-                    logger.info(f"Vector search returned {len(vector_results)} raw results")
-                    # logger.info(f"Vector search results: \n{vector_results}")
+            with pg_connection() as conn, conn.cursor() as cur:
+                # 1. Vector Search
+                if fid and fname:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s)
+                        AND file_id = %s
+                        AND file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
+                        ORDER BY embedding<=>%s::vector
+                        LIMIT %s
+                        """,
+                        (
+                            prompt_embeddings,
+                            notebook_id,
+                            fid,
+                            notebook_id,
+                            fname,
+                            prompt_embeddings,
+                            fetch_k,
+                        ),
+                    )
+                elif fid:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s)
+                        AND file_id = %s
+                        ORDER BY embedding<=>%s::vector
+                        LIMIT %s
+                        """,
+                        (prompt_embeddings, notebook_id, fid, prompt_embeddings, fetch_k),
+                    )
+                elif fname:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
+                        ORDER BY embedding<=>%s::vector
+                        LIMIT %s
+                        """,
+                        (prompt_embeddings, notebook_id, fname, prompt_embeddings, fetch_k),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index, 1-(embedding<=>%s::vector) as similarity
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s)
+                        ORDER BY embedding<=>%s::vector
+                        LIMIT %s
+                        """,
+                        (prompt_embeddings, notebook_id, prompt_embeddings, fetch_k),
+                    )
+                vector_results = cur.fetchall()
+                logger.info(f"Vector search returned {len(vector_results)} raw results")
+                # logger.info(f"Vector search results: \n{vector_results}")
 
-                    # 2. Keyword (Full Text) Search
-                    if fid and fname:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index,
-                                ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s)
-                            AND file_id = %s
-                            AND file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
-                            AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
-                            ORDER BY rank DESC
-                            LIMIT %s
-                            """,
-                            (
-                                user_prompt,
-                                notebook_id,
-                                fid,
-                                notebook_id,
-                                fname,
-                                user_prompt,
-                                fetch_k,
-                            ),
-                        )
-                    elif fid:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index,
-                                ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s)
-                            AND file_id = %s
-                            AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
-                            ORDER BY rank DESC
-                            LIMIT %s
-                            """,
-                            (user_prompt, notebook_id, fid, user_prompt, fetch_k),
-                        )
-                    elif fname:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index,
-                                ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
-                            AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
-                            ORDER BY rank DESC
-                            LIMIT %s
-                            """,
-                            (user_prompt, notebook_id, fname, user_prompt, fetch_k),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT chunk_text, metadata, chunk_index,
-                                ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
-                            FROM embeddings
-                            WHERE file_id IN (select file_id from files where notebook_id=%s)
-                            AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
-                            ORDER BY rank DESC
-                            LIMIT %s
-                            """,
-                            (user_prompt, notebook_id, user_prompt, fetch_k),
-                        )
-                    keyword_results = cur.fetchall()
-                    logger.info(f"Keyword search returned {len(keyword_results)} raw results")
-                    # logger.info(f"Keyword search result : {keyword_results}")
+                # 2. Keyword (Full Text) Search
+                if fid and fname:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index,
+                            ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s)
+                        AND file_id = %s
+                        AND file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
+                        AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
+                        ORDER BY rank DESC
+                        LIMIT %s
+                        """,
+                        (
+                            user_prompt,
+                            notebook_id,
+                            fid,
+                            notebook_id,
+                            fname,
+                            user_prompt,
+                            fetch_k,
+                        ),
+                    )
+                elif fid:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index,
+                            ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s)
+                        AND file_id = %s
+                        AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
+                        ORDER BY rank DESC
+                        LIMIT %s
+                        """,
+                        (user_prompt, notebook_id, fid, user_prompt, fetch_k),
+                    )
+                elif fname:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index,
+                            ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s AND file_name ILIKE %s)
+                        AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
+                        ORDER BY rank DESC
+                        LIMIT %s
+                        """,
+                        (user_prompt, notebook_id, fname, user_prompt, fetch_k),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT chunk_text, metadata, chunk_index,
+                            ts_rank_cd(to_tsvector('english', chunk_text), websearch_to_tsquery('english', %s)) AS rank
+                        FROM embeddings
+                        WHERE file_id IN (select file_id from files where notebook_id=%s)
+                        AND to_tsvector('english', chunk_text) @@ websearch_to_tsquery('english', %s)
+                        ORDER BY rank DESC
+                        LIMIT %s
+                        """,
+                        (user_prompt, notebook_id, user_prompt, fetch_k),
+                    )
+                keyword_results = cur.fetchall()
+                logger.info(f"Keyword search returned {len(keyword_results)} raw results")
+                # logger.info(f"Keyword search result : {keyword_results}")
 
             # Filtering Vector Results (4-tuple: text, metadata, chunk_index, score)
             initial_count = len(vector_results)
@@ -457,6 +456,6 @@ class VectorRAG(RagPipeline):
 
             # return final_context
 
-        except Exception as e:
-            logger.exception(f"Error during context retrieval: {str(e)}")
+        except Exception:
+            logger.exception("Error during context retrieval")
             raise

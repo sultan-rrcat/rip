@@ -239,7 +239,7 @@ class RagQueryTool(Tool):
                 qs = [q.strip() for q in qs if isinstance(q, str) and q.strip()][:3]
                 if qs:
                     generated_queries = qs
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - decomposition fallback keeps original query
                 logger.warning(
                     "rag query generation failed, falling back to original query: %s", e
                 )
@@ -258,7 +258,7 @@ class RagQueryTool(Tool):
                         file_name=file_name,
                         mode=mode,
                     )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - one bad shard must not kill the merge
                     logger.warning("rag sub-query failed for '%s': %s", sub_q, e)
                     continue
                 for r in sub_results or []:

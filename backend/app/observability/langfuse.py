@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 from langfuse import (
     Langfuse,
@@ -90,7 +91,7 @@ class _DisabledObservation:
 
     id: str | None = None
 
-    def update(self, **kwargs: Any) -> None:  # noqa: ARG002 - deliberately no-op
+    def update(self, **kwargs: Any) -> None:
         return None
 
 
@@ -115,7 +116,7 @@ def get_trace_context() -> dict[str, str] | None:
     try:
         trace_id = _client.get_current_trace_id()
         parent_span_id = _client.get_current_observation_id()
-    except Exception:  # pragma: no cover - defensive; never break runs
+    except Exception:  # noqa: BLE001 - tracing must never break runs  # pragma: no cover - defensive
         return None
     if not trace_id or not parent_span_id:
         return None
@@ -273,6 +274,6 @@ def truncate(value: Any, n: int = 2000) -> str | None:
         return value[:n]
     try:
         text = json.dumps(value, default=str)
-    except Exception:  # pragma: no cover - extremely defensive
+    except Exception:  # noqa: BLE001 - truncate fallback must never raise  # pragma: no cover - extremely defensive
         text = str(value)
     return text[:n]

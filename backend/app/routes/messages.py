@@ -1,10 +1,12 @@
-from pydantic import BaseModel
-from typing import Optional, Any, Literal
-from fastapi import APIRouter, Depends, HTTPException
 import json
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException
 from psycopg2 import errors as pg_errors
-from app.core.logging import setup_logging
+from pydantic import BaseModel
+
 from app.core.db import pg_connection
+from app.core.logging import setup_logging
 from app.routes.auth import UserResponse, get_current_user
 
 router = APIRouter()
@@ -15,8 +17,8 @@ MessageRole = Literal["user", "assistant", "error"]
 class MessageCreate(BaseModel):
     role: MessageRole
     text: str
-    sources: Optional[Any] = None
-    artifacts: Optional[Any] = None
+    sources: Any | None = None
+    artifacts: Any | None = None
 
 
 _ARTIFACTS_DDL = "ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS artifacts jsonb"
@@ -42,14 +44,13 @@ def ensure_artifacts_column() -> None:
 
 
 @router.get("/api/notebooks/{id}/messages")
-def get_messages(id: str, user: UserResponse = Depends(get_current_user)):
+def get_messages(id: str, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical
     logger.info(f"Fetching messages for notebook: {id}")
 
     try:
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                try:
-                    cur.execute("""
+        with pg_connection() as conn, conn.cursor() as cur:
+            try:
+                cur.execute("""
                         SELECT m.message_id, m.role, m.text, m.sources,
                                COALESCE(m.artifacts, '[]'::jsonb), m.created_at
                         FROM messages m
@@ -57,34 +58,34 @@ def get_messages(id: str, user: UserResponse = Depends(get_current_user)):
                         WHERE m.notebook_id = %s AND n.owner_id = %s
                         ORDER BY m.created_at ASC
                     """, (id, user.user_id))
-                except pg_errors.UndefinedColumn:
-                    # Pre-migration volume: roll back the aborted statement
-                    # and serve the legacy shape (no stored artifacts).
-                    conn.rollback()
-                    logger.warning(
-                        f"messages.artifacts column missing for notebook {id} "
-                        "— serving legacy shape"
-                    )
-                    cur.execute("""
+            except pg_errors.UndefinedColumn:
+                # Pre-migration volume: roll back the aborted statement
+                # and serve the legacy shape (no stored artifacts).
+                conn.rollback()
+                logger.warning(
+                    f"messages.artifacts column missing for notebook {id} "
+                    "— serving legacy shape"
+                )
+                cur.execute("""
                         SELECT m.message_id, m.role, m.text, m.sources, m.created_at
                         FROM messages m
                         JOIN notebooks n ON n.notebook_id = m.notebook_id
                         WHERE m.notebook_id = %s AND n.owner_id = %s
                         ORDER BY m.created_at ASC
                     """, (id, user.user_id))
-                    rows = cur.fetchall()
-                    return [
-                        {
-                            "id": r[0],
-                            "role": r[1],
-                            "text": r[2],
-                            "sources": r[3],
-                            "artifacts": [],
-                            "created_at": r[4],
-                        }
-                        for r in rows
-                    ]
                 rows = cur.fetchall()
+                return [
+                    {
+                        "id": r[0],
+                        "role": r[1],
+                        "text": r[2],
+                        "sources": r[3],
+                        "artifacts": [],
+                        "created_at": r[4],
+                    }
+                    for r in rows
+                ]
+            rows = cur.fetchall()
 
         logger.info(f"Fetched {len(rows)} messages for notebook: {id}")
 
@@ -106,61 +107,60 @@ def get_messages(id: str, user: UserResponse = Depends(get_current_user)):
 
 
 @router.post("/api/notebooks/{id}/messages")
-def create_message(id: str, data: MessageCreate, user: UserResponse = Depends(get_current_user)):
+def create_message(id: str, data: MessageCreate, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical
     logger.info(f"Creating message for notebook: {id}, role: {data.role}")
 
     try:
-        with pg_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT 1 FROM notebooks WHERE notebook_id = %s AND owner_id = %s",
-                    (id, user.user_id),
-                )
-                if not cur.fetchone():
-                    raise HTTPException(status_code=404, detail="Notebook not found")
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM notebooks WHERE notebook_id = %s AND owner_id = %s",
+                (id, user.user_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Notebook not found")
 
-                try:
-                    cur.execute("""
+            try:
+                cur.execute("""
                         INSERT INTO messages
                             (notebook_id, role, text, sources, artifacts)
                         VALUES (%s, %s, %s, %s, %s)
                         RETURNING message_id, role, text, sources,
                                   COALESCE(artifacts, '[]'::jsonb), created_at
                     """, (
-                        id,
-                        data.role,
-                        data.text,
-                        json.dumps(data.sources or []),
-                        json.dumps(data.artifacts or [])
-                    ))
-                except pg_errors.UndefinedColumn:
-                    # Pre-migration volume: drop the artifacts payload rather
-                    # than fail the write (chart refs are lost, chat survives).
-                    conn.rollback()
-                    logger.warning(
-                        f"messages.artifacts column missing for notebook {id} "
-                        "— storing without artifacts"
-                    )
-                    cur.execute("""
+                    id,
+                    data.role,
+                    data.text,
+                    json.dumps(data.sources or []),
+                    json.dumps(data.artifacts or [])
+                ))
+            except pg_errors.UndefinedColumn:
+                # Pre-migration volume: drop the artifacts payload rather
+                # than fail the write (chart refs are lost, chat survives).
+                conn.rollback()
+                logger.warning(
+                    f"messages.artifacts column missing for notebook {id} "
+                    "— storing without artifacts"
+                )
+                cur.execute("""
                         INSERT INTO messages (notebook_id, role, text, sources)
                         VALUES (%s, %s, %s, %s)
                         RETURNING message_id, role, text, sources, created_at
                     """, (
-                        id,
-                        data.role,
-                        data.text,
-                        json.dumps(data.sources or [])
-                    ))
-                    r = cur.fetchone()
-                    return {
-                        "id": r[0],
-                        "role": r[1],
-                        "text": r[2],
-                        "sources": r[3],
-                        "artifacts": [],
-                        "created_at": r[4],
-                    }
+                    id,
+                    data.role,
+                    data.text,
+                    json.dumps(data.sources or [])
+                ))
                 r = cur.fetchone()
+                return {
+                    "id": r[0],
+                    "role": r[1],
+                    "text": r[2],
+                    "sources": r[3],
+                    "artifacts": [],
+                    "created_at": r[4],
+                }
+            r = cur.fetchone()
 
         logger.info(f"Message created: {r[0]} for notebook: {id}")
 

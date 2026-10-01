@@ -103,7 +103,7 @@ def _frame(seq: Any, type: str, run_id: str, data: dict) -> str:
 def create_run(
     body: CreateRunRequest,
     manager=Depends(get_run_manager),  # noqa: B008 - FastAPI Depends-in-default is canonical
-    user: UserResponse = Depends(get_current_user),
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
 ):
     try:
         _verify_notebook_ownership(str(body.notebook_id), user.user_id)
@@ -121,7 +121,7 @@ def create_run(
 
 
 @router.get("/v1/runs/{run_id}", response_model=RunDetail)
-def get_run(run_id: str, user: UserResponse = Depends(get_current_user)):
+def get_run(run_id: str, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical
     _verify_run_ownership(run_id, user.user_id)
     row = run_store.get_run(run_id)
     if row is None:
@@ -135,7 +135,7 @@ def get_run(run_id: str, user: UserResponse = Depends(get_current_user)):
 def cancel_run(
     run_id: str,
     manager=Depends(get_run_manager),  # noqa: B008 - FastAPI Depends-in-default is canonical
-    user: UserResponse = Depends(get_current_user),
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
 ):
     _verify_run_ownership(run_id, user.user_id)
     handled, already_done = manager.cancel_run(run_id)
@@ -151,7 +151,7 @@ def run_events(
     run_id: str,
     request: Request,
     manager=Depends(get_run_manager),  # noqa: B008 - FastAPI Depends-in-default is canonical
-    user: UserResponse = Depends(get_current_user),
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
 ):
     _verify_run_ownership(run_id, user.user_id)
     try:
@@ -181,7 +181,7 @@ def run_events(
 def download_artifact(
     run_id: str,
     artifact_id: str,
-    user: UserResponse = Depends(get_current_user),
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
 ):
     _verify_run_ownership(run_id, user.user_id)
     row = run_store.get_run(run_id)

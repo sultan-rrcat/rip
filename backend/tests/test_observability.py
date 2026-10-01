@@ -4,11 +4,10 @@ No Langfuse server needed — everything here runs with
 langfuse_enabled=False (the default), proving the Athena-ported helpers
 cost nothing and change nothing when tracing is off.
 """
+import pytest
 from app.observability import langfuse as lf
 from app.providers.base import ModelProvider
 from app.providers.tracing import TracingProvider, wrap_provider
-
-import pytest
 
 
 @pytest.fixture(autouse=True)

@@ -12,10 +12,9 @@ test works inside an isolated notebook that is deleted afterwards.
 
 import os
 
+from app.core.config import settings
 from app.main import app
 from conftest import wait_for_file_status
-
-from app.core.config import settings
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
