@@ -32,13 +32,19 @@ class _FakeProvider(ModelProvider):
         return [{"id": "fake"}]
 
 
-def _validator() -> PlanValidator:
-    provider = _FakeProvider()
-    agents = AgentRegistry()
+def _registry_with(*extra) -> AgentRegistry:
+    """Reasoning plus any extra agent (the coding builder needs `coding`)."""
     from app.agents.reasoning import ReasoningAgent
 
-    agents.register(ReasoningAgent(provider))
-    return PlanValidator(agents, get_default_tool_registry())
+    registry = AgentRegistry()
+    registry.register(ReasoningAgent(_FakeProvider()))
+    for agent in extra:
+        registry.register(agent)
+    return registry
+
+
+def _validator(*extra) -> PlanValidator:
+    return PlanValidator(_registry_with(*extra), get_default_tool_registry())
 
 
 def test_compare_multi_structure_and_placeholders() -> None:
@@ -190,12 +196,21 @@ def test_convert_all_star_shape() -> None:
     _validator().validate(plan)
 
 
-def test_convert_all_without_format_falls_to_react() -> None:
+def _assert_asks_counter_question(plan) -> None:
+    """An unresolvable convert must ask, never guess (one reasoning call)."""
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].tool_id is None
+    assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
+    _validator().validate(plan)
+
+
+def test_convert_all_without_format_asks_for_format() -> None:
     route = RouterResult(
         intent=Intent.CONVERT_ALL, confidence=0.9, routed_by="llm",
         file_hint="*",
     )
-    assert build("convert everything", route) is None
+    # ADR-035: no format stated -> counter-question, not a ReAct round trip.
+    _assert_asks_counter_question(build("convert everything", route))
 
 
 def test_convert_one_resolves_literal_id() -> None:
@@ -209,31 +224,38 @@ def test_convert_one_resolves_literal_id() -> None:
     _validator().validate(plan)
 
 
-def test_convert_one_unresolvable_falls_to_react() -> None:
+def test_convert_one_unresolvable_asks_counter_question() -> None:
+    # Unresolvable file hint / no snapshot / no format: ask instead of
+    # converting the wrong artifact (was: None -> L3 ReAct).
     hint = RouterResult(
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
         file_hint="missing", target_format="md",
     )
-    assert build("convert missing to md", hint, _SNAPSHOT) is None
+    _assert_asks_counter_question(build("convert missing to md", hint, _SNAPSHOT))
     no_snapshot = RouterResult(
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
         file_hint="faultbook", target_format="md",
     )
-    assert build("convert faultbook to md", no_snapshot, None) is None
+    _assert_asks_counter_question(
+        build("convert faultbook to md", no_snapshot, None)
+    )
     no_format = RouterResult(
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
         file_hint="faultbook",
     )
-    assert build("convert faultbook", no_format, _SNAPSHOT) is None
+    _assert_asks_counter_question(build("convert faultbook", no_format, _SNAPSHOT))
 
 
-def test_convert_one_ambiguous_match_falls_to_react() -> None:
+def test_convert_one_ambiguous_match_asks_counter_question() -> None:
     snapshot = "2 file(s): report-a.pdf [ready] id=1; report-b.pdf [ready] id=2"
     route = RouterResult(
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
         file_hint="report", target_format="md",
     )
-    assert build("convert report to md", route, snapshot) is None
+    plan = build("convert report to md", route, snapshot)
+    _assert_asks_counter_question(plan)
+    # The question names both candidates so the user can pick one.
+    assert "report-a.pdf" in plan.steps[0].input["message"]
 
 
 def test_convert_one_skips_unready_files() -> None:
@@ -242,7 +264,10 @@ def test_convert_one_skips_unready_files() -> None:
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
         file_hint="big", target_format="pdf",
     )
-    assert build("convert big to pdf", route, snapshot) is None
+    # Not ready -> nothing to convert; ask instead of a guaranteed failure.
+    plan = build("convert big to pdf", route, snapshot)
+    _assert_asks_counter_question(plan)
+    assert "none is ready" in plan.steps[0].input["message"]
 
 
 def test_summarize_plot_goes_to_react() -> None:
@@ -270,9 +295,134 @@ def test_deterministic_intents_all_dispatched() -> None:
 
     assert Intent.SUMMARIZE_PLOT not in DETERMINISTIC_INTENTS
     assert {
-        Intent.CHAT, Intent.QA_SINGLE, Intent.COMPARE_MULTI,
-        Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.QUIZ,
+        Intent.CHAT, Intent.KNOWLEDGE_QA, Intent.CODE, Intent.QA_SINGLE,
+        Intent.COMPARE_MULTI, Intent.SUMMARIZE, Intent.QUIZ, Intent.REPORT,
+        Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.CONVERT_AMBIGUOUS,
     } <= DETERMINISTIC_INTENTS
+
+
+# --- ADR-035: the non-doc and report builders ---------------------------
+
+
+def test_knowledge_qa_is_one_reasoning_step() -> None:
+    # The parametric home: never rag.query, never a ReAct hop.
+    route = RouterResult(
+        intent=Intent.KNOWLEDGE_QA, confidence=0.9, routed_by="llm",
+    )
+    plan = build("What is QLoRA?", route, _SNAPSHOT)
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].agent_id == "reasoning"
+    assert plan.steps[0].input == {"message": "What is QLoRA?"}
+    _validator().validate(plan)
+
+
+def test_knowledge_qa_ignores_the_corpus() -> None:
+    # Same plan with and without documents — a non-doc intent cannot be
+    # pulled into retrieval by a populated notebook.
+    route = RouterResult(
+        intent=Intent.KNOWLEDGE_QA, confidence=0.9, routed_by="llm",
+    )
+    with_docs = build("What is QLoRA?", route, _SNAPSHOT)
+    without = build("What is QLoRA?", route, "(no documents)")
+    assert [s.tool_id for s in with_docs.steps] == [None]
+    assert [s.tool_id for s in without.steps] == [None]
+
+
+def test_code_is_one_coding_step() -> None:
+    from app.agents.coding import CodingAgent
+
+    route = RouterResult(intent=Intent.CODE, confidence=0.9, routed_by="llm")
+    plan = build("write a python quicksort", route, "(no documents)")
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].agent_id == "coding"
+    assert plan.steps[0].tool_id is None
+    assert plan.steps[0].input == {"message": "write a python quicksort"}
+    _validator(CodingAgent(_FakeProvider())).validate(plan)
+
+
+def test_report_routes_through_an_answer_step() -> None:
+    from app.orchestration.builders import build_report
+
+    plan = build_report("write a report on both docs", _SNAPSHOT)
+    # 2 shards + writer + doc.generate
+    assert len(plan.steps) == 4
+    assert [s.tool_id for s in plan.steps[:2]] == ["rag.query", "rag.query"]
+    assert all(
+        (s.expected_output_type or "").lower() == "chunks" for s in plan.steps[:2]
+    )
+    writer = plan.steps[2]
+    assert writer.agent_id == "reasoning"
+    assert (writer.expected_output_type or "").lower() == "answer"
+    assert writer.depends_on == ["1", "2"]
+    assert "{{1}}" in writer.input["message"] and "{{2}}" in writer.input["message"]
+    report = plan.steps[3]
+    assert report.tool_id == "doc.generate"
+    assert report.depends_on == ["3"]
+    assert report.input["title"] == "write a report on both docs"
+    # The report body carries the writer's output — ADR-027 grounding is
+    # structural (the validator requires an upstream answer step).
+    assert report.input["sections"] == [
+        {"heading": "Report", "body": "{{3}}"}
+    ]
+    _validator().validate(plan)
+
+
+def test_report_title_is_derived_and_bounded() -> None:
+    from app.orchestration.builders import _report_title, build_report
+
+    assert _report_title("  multi\nline   request  ") == "multi line request"
+    long_request = "x" * 400
+    assert len(_report_title(long_request)) == 90
+    assert _report_title("") == "Report"
+    plan = build_report("report please", _SNAPSHOT)
+    _validator().validate(plan)
+
+
+def test_report_without_snapshot_uses_one_global_shard() -> None:
+    from app.orchestration.builders import build_report
+
+    plan = build_report("report please", None)
+    assert len(plan.steps) == 3  # 1 shard + writer + doc.generate
+    assert plan.steps[0].input.get("file_id") is None
+    _validator().validate(plan)
+
+
+def test_report_empty_corpus_asks_to_upload() -> None:
+    route = RouterResult(intent=Intent.REPORT, confidence=0.9, routed_by="llm")
+    plan = build("write a report", route, "(no documents)")
+    assert plan is not None and len(plan.steps) == 1
+    assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
+    _validator().validate(plan)
+
+
+def test_report_too_many_files_falls_to_react() -> None:
+    snapshot = "; ".join(f"f{i}.pdf [ready] id=id{i}" for i in range(6))
+    route = RouterResult(intent=Intent.REPORT, confidence=0.9, routed_by="llm")
+    assert build("write a report", route, snapshot) is None
+
+
+def test_convert_ambiguous_names_the_candidates() -> None:
+    route = RouterResult(
+        intent=Intent.CONVERT_AMBIGUOUS, confidence=0.9, routed_by="llm",
+    )
+    plan = build("convert it", route, _SNAPSHOT)
+    assert plan is not None and len(plan.steps) == 1
+    message = plan.steps[0].input["message"]
+    assert "aaa111" not in message  # ids are never asked for
+    assert "Faultbook.pdf" in message and "Fire Report.pdf" in message
+    assert "file(s)" not in message  # snapshot prefix stripped for display
+    assert "md, docx or pdf" in message
+    _validator().validate(plan)
+
+
+def test_convert_ambiguous_with_single_ready_file() -> None:
+    snapshot = "1 file(s): only.pdf [ready] id=one"
+    route = RouterResult(
+        intent=Intent.CONVERT_AMBIGUOUS, confidence=0.9, routed_by="llm",
+    )
+    plan = build("convert this", route, snapshot)
+    assert "one ready file (only.pdf)" in plan.steps[0].input["message"]
+    _validator().validate(plan)
 
 
 def _qa_route(queries=None) -> RouterResult:
