@@ -41,10 +41,14 @@ class NotebookInspectTool(Tool):
     input_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
+            # Injected by the engine; the model must never emit it, and the
+            # schema checker exempts it from `required` for that reason.
             "notebook_id": {"type": "string"},
         },
         "required": ["notebook_id"],
+        "additionalProperties": False,
     }
+    input_example: ClassVar[str] = "notebook.inspect {} (takes no input)"
     output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {

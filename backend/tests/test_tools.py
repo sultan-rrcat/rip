@@ -338,6 +338,76 @@ class TestRagQuery:
 # --- plot.chart ---
 
 
+class TestToolContract:
+    """The contract lives with the tool (ADR-035).
+
+    `execute()` and any pre-flight caller must reach the same verdict, and a
+    caller must never re-implement a rule — the drift that left ReAct's copy
+    of plot.chart's shape four revisions behind the tool's.
+    """
+
+    def _registry(self):
+        return get_default_tool_registry()
+
+    def test_preflight_and_execute_agree(self):
+        from app.orchestration.react import _validate_react_input
+
+        registry = self._registry()
+        cases = [
+            ("plot.chart", {"chart_type": "line", "labels": ["a"],
+                            "values": [[1, 2]]}),
+            ("plot.chart", {"chart_type": "line", "labels": ["a"],
+                            "values": [1], "series": [{"label": "s",
+                                                        "values": [1]}]}),
+            ("plot.chart", {"labels": ["a"], "values": [1]}),
+            ("plot.chart", {"chart_type": "line", "labels": ["a"],
+                            "values": [1], "china_values": [2]}),
+            ("rag.query", {"query": "x", "mode": "bogus"}),
+            ("rag.query", {"query": "x", "file_id": "{{1}}"}),
+            ("doc.convert", {"target_format": "txt", "file_id": "f"}),
+            ("doc.generate", {"title": "t", "sections": [{"heading": "h"}]}),
+            ("code.sandbox", {}),
+            ("image.generate", {}),
+        ]
+        for tool_id, payload in cases:
+            # notebook_id is injected by the engine, so execute() sees it —
+            # without it the injection guard (a different failure) fires first.
+            injected = {**payload, "notebook_id": "nb-1"}
+            hint = _validate_react_input(tool_id, payload, registry)
+            resp = execute_tool(registry, tool_id, injected)
+            assert not resp.ok, (tool_id, payload)
+            assert hint is not None, (tool_id, payload)
+            assert resp.error in hint, (tool_id, resp.error, hint)
+
+    def test_every_tool_declares_an_example_and_closes_its_keys(self):
+        for manifest_entry in self._registry().manifest():
+            tool = self._registry().get(manifest_entry["tool_id"])
+            assert manifest_entry["input_schema"].get(
+                "additionalProperties"
+            ) is False, manifest_entry["tool_id"]
+            assert tool.input_example.strip(), manifest_entry["tool_id"]
+
+    def test_engine_injected_keys_are_not_unknown(self):
+        # run_plan_graph injects notebook_id AND expected_output_type into
+        # every resolved step input; a closed key set must tolerate both.
+        for tool_id, payload in (
+            ("rag.query", {"query": "x"}),
+            ("doc.convert", {"file_id": "f", "target_format": "md"}),
+            ("plot.chart", {"chart_type": "bar", "labels": ["a"], "values": [1]}),
+            ("notebook.inspect", {}),
+        ):
+            tool = self._registry().get(tool_id)
+            injected = {**payload, "notebook_id": "nb", "expected_output_type": "x"}
+            assert tool.validate_input(injected) is None, tool_id
+
+    def test_a_placeholder_in_file_id_is_still_rejected(self):
+        # Exempting engine-owned keys must not exempt invented ones.
+        tool = self._registry().get("rag.query")
+        assert tool.validate_input(
+            {"query": "x", "notebook_id": "nb", "file_id": "{{1}}"}
+        ) is not None
+
+
 class TestPlotChart:
     def test_bar_renders_svg(self):
         reg = get_default_tool_registry()

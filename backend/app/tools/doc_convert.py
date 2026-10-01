@@ -255,10 +255,19 @@ class DocConvertTool(Tool):
             "notebook_id": {"type": "string"},
             "file_id": {"type": "string"},
             "file_name": {"type": "string"},
-            "target_format": {"type": "string"},
+            "target_format": {
+                "type": "string",
+                "enum": sorted(_TARGET_FORMATS),
+            },
         },
         "required": ["notebook_id", "target_format"],
+        "additionalProperties": False,
     }
+    input_example: ClassVar[str] = (
+        'doc.convert {"file_id": "<literal snapshot id>", "target_format": '
+        '"md"}. Use file_id "*" for every ready file, or file_name for a '
+        "name. Never a {{id}} placeholder for file_id."
+    )
     output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -271,6 +280,24 @@ class DocConvertTool(Tool):
     effect_class = "sandboxed"  # type: ignore[assignment]
     cost_class = "low"
 
+    def validate_input(self, tool_input: dict) -> str | None:
+        err = super().validate_input(tool_input)
+        if err is not None:
+            return err
+        file_id = tool_input.get("file_id")
+        file_name = tool_input.get("file_name")
+        # isinstance, not truthiness: str(None) is "None" and would read as
+        # a target.
+        has_target = (isinstance(file_id, str) and file_id.strip()) or (
+            isinstance(file_name, str) and file_name.strip()
+        )
+        if not has_target:
+            return (
+                "'file_id' (or \"*\" for all files, or 'file_name') is "
+                "required in input"
+            )
+        return None
+
     def execute(self, request: ToolRequest) -> ToolResponse:
         notebook_id = request.input.get("notebook_id")
         if not notebook_id:
@@ -280,28 +307,17 @@ class DocConvertTool(Tool):
                 output=None,
                 error="'notebook_id' is required in input (injected by the orchestrator, never the LLM)",
             )
+        invalid = self.invalid_response(request.input)
+        if invalid.error is not None:
+            return invalid
         target = str(request.input.get("target_format") or "").strip().lower()
-        if target not in _TARGET_FORMATS:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error=f"'target_format' must be one of {list(_TARGET_FORMATS)}",
-            )
         file_id = request.input.get("file_id")
         file_name = request.input.get("file_name")
         if file_id == "*":
             return self._execute_all(str(notebook_id), target)
         if isinstance(file_id, str) and file_id:
             return self._execute_one_by_id(str(notebook_id), file_id, target)
-        if isinstance(file_name, str) and file_name:
-            return self._execute_one_by_name(str(notebook_id), file_name, target)
-        return ToolResponse(
-            tool_id=self.tool_id,
-            ok=False,
-            output=None,
-            error="'file_id' (or \"*\" for all files, or 'file_name') is required in input",
-        )
+        return self._execute_one_by_name(str(notebook_id), str(file_name), target)
 
     def _execute_one_by_id(
         self, notebook_id: str, file_id: str, target: str

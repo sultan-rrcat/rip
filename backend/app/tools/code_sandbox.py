@@ -91,7 +91,11 @@ class CodeSandboxTool(Tool):
         "type": "object",
         "properties": {"code": {"type": "string"}},
         "required": ["code"],
+        "additionalProperties": False,
     }
+    input_example: ClassVar[str] = (
+        'code.sandbox {"code": "print(sum(range(10)))"}'
+    )
     output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -105,15 +109,11 @@ class CodeSandboxTool(Tool):
     cost_class = "medium"
 
     def execute(self, request: ToolRequest) -> ToolResponse:
-        code = request.input.get("code")
-        if not code:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'code' is required in input",
-            )
-        result = run_python(str(code))
+        invalid = self.invalid_response(request.input)
+        if invalid.error is not None:
+            return invalid
+        code = str(request.input["code"])
+        result = run_python(code)
         data = {
             "stdout": result.stdout,
             "stderr": result.stderr,

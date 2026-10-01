@@ -171,8 +171,13 @@ class PlotChartTool(Tool):
         "type": "object",
         "properties": {
             "chart_type": {"type": "string", "enum": ["bar", "line"]},
-            "labels": {"type": "array", "items": {"type": "string"}},
-            "values": {"type": "array", "items": {"type": "number"}},
+            # Untyped items on purpose: `labels` are str()-coerced, and
+            # `values` legitimately arrive as numeric strings — a resolved
+            # "{{id}}" placeholder lands as ONE CSV element ("0.82, 0.88")
+            # that `_to_numbers` splits (ADR-027). Type-checking them here
+            # would reject the very shape the placeholder path produces.
+            "labels": {"type": "array", "minItems": 1},
+            "values": {"type": "array"},
             "series": {
                 "type": "array",
                 "items": {
@@ -187,7 +192,27 @@ class PlotChartTool(Tool):
             "title": {"type": "string"},
         },
         "required": ["chart_type", "labels"],
+        # Closed key set: an invented per-entity array (`india_values`,
+        # `china_values`) or label array (`series_labels`) would otherwise
+        # pass as a single-series call and silently drop a series — the
+        # ADR-027 hallucination class wearing a new costume (trace c9b02eef).
+        "additionalProperties": False,
     }
+    #: The shape a 3B model could not derive from prose. Trace c9b02eef
+    #: proposed `series_labels` + a parallel `china_values` array twice; the
+    #: prose rule ("grouped comparisons use series:[{label, values}]") was
+    #: not copyable, so it needs saying as a literal call.
+    input_example: ClassVar[str] = (
+        "Comparison of two or more entities = ONE 'series' array over shared "
+        "'labels': "
+        '{"chart_type": "line", "labels": ["2015", "2016", "2017"], "series": ['
+        '{"label": "India", "values": [7.2, 7.1, 7.0]}, '
+        '{"label": "China", "values": [6.9, 6.5, 6.0]}], '
+        '"title": "GDP growth %: India vs China"}. '
+        "There is no 'series_labels' key and no per-entity array like "
+        "'india_values'/'china_values' — put every entity in 'series'. "
+        "ONE entity = 'labels' + 'values' only, never 'series'."
+    )
     output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -203,92 +228,104 @@ class PlotChartTool(Tool):
     #: At most this many series per chart (legend space + readability).
     _MAX_SERIES = 5
 
+    def validate_input(self, request_input: dict) -> str | None:
+        """Full input contract, cross-field rules included.
+
+        The declarative schema cannot say "exactly one of values/series",
+        "values are flat numbers", or "series values agree with labels", so
+        those live here — beside the renderer, not in a caller.
+        """
+        err = super().validate_input(request_input)
+        if err is not None:
+            return err
+        labels = request_input.get("labels")
+        values = request_input.get("values")
+        series_in = request_input.get("series")
+        if not isinstance(labels, list) or not labels:
+            return "'labels' must be a non-empty array"
+        if series_in is not None:
+            if values is not None:
+                return (
+                    "pass either 'values' (single series) or 'series', never both"
+                )
+            if not isinstance(series_in, list) or not series_in:
+                return "'series' must be a non-empty array of {label, values}"
+            if len(series_in) > self._MAX_SERIES:
+                return f"at most {self._MAX_SERIES} series per chart"
+            for entry in series_in:
+                if not isinstance(entry, dict):
+                    return (
+                        "'series' entries must be {label, values} objects"
+                    )
+                name = entry.get("label")
+                if not isinstance(name, str) or not name.strip():
+                    return (
+                        "'series' entries need a non-empty string 'label'"
+                    )
+                numbers = self._to_numbers(entry.get("values"))
+                if numbers is None:
+                    return f"series {name!r} 'values' must all be numbers"
+                if len(numbers) != len(labels):
+                    return (
+                        f"series {name!r} has {len(numbers)} values "
+                        f"but {len(labels)} labels"
+                    )
+            if len(labels) > _MAX_POINTS:
+                return f"at most {_MAX_POINTS} points per chart"
+            return None
+        if not isinstance(values, list) or not values:
+            return (
+                "'values' must be a non-empty array "
+                "(or pass 'series' for multi-series)"
+            )
+        numbers = self._to_numbers(values)
+        if numbers is None:
+            return (
+                "'values' must all be numbers (a flat array, one per label); "
+                "for a comparison pass series: [{label, values}] with shared "
+                "'labels' instead of nesting arrays inside 'values'"
+            )
+        if len(labels) != len(numbers):
+            return "'labels' and 'values' must have the same length"
+        if len(labels) > _MAX_POINTS:
+            return f"at most {_MAX_POINTS} points per chart"
+        return None
+
+    def required_for_model(self, request_input: dict) -> str | None:
+        """A model-authored chart must name its metric.
+
+        Direct callers may omit it — `_default_title` derives a heading from
+        the data (trace affdbbd4: ReAct omitted titles on 3 of 4 charts).
+        """
+        if self.validate_input(request_input) is not None:
+            return None  # report the real problem, not the missing title
+        if not str(request_input.get("title", "")).strip():
+            return (
+                "plot.chart needs a short 'title' naming the metric and "
+                "comparison (e.g. 'mAP@50-95: FASDD_CV vs AgniNetra')"
+            )
+        return None
+
     def execute(self, request: ToolRequest) -> ToolResponse:
+        # The contract is validated before anything is rendered, so this
+        # method can assume chart_type/labels/values|series are coherent.
+        invalid = self.invalid_response(request.input)
+        if invalid.error is not None:
+            return invalid
         chart_type = request.input.get("chart_type")
         labels = request.input.get("labels")
         values = request.input.get("values")
         series_in = request.input.get("series")
         title = str(request.input.get("title", "") or "")
-        if chart_type not in ("bar", "line"):
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'chart_type' must be 'bar' or 'line'",
-            )
-        if not isinstance(labels, list) or not labels:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'labels' must be a non-empty array",
-            )
+        str_labels = [str(label) for label in labels]
         if series_in is not None:
-            if values is not None:
-                return ToolResponse(
-                    tool_id=self.tool_id,
-                    ok=False,
-                    output=None,
-                    error="pass either 'values' (single series) or 'series', never both",
-                )
-            if not isinstance(series_in, list) or not series_in:
-                return ToolResponse(
-                    tool_id=self.tool_id,
-                    ok=False,
-                    output=None,
-                    error="'series' must be a non-empty array of {label, values}",
-                )
-            if len(series_in) > self._MAX_SERIES:
-                return ToolResponse(
-                    tool_id=self.tool_id,
-                    ok=False,
-                    output=None,
-                    error=f"at most {self._MAX_SERIES} series per chart",
-                )
-            multi: list[tuple[str, list[float]]] = []
-            for entry in series_in:
-                if not isinstance(entry, dict):
-                    return ToolResponse(
-                        tool_id=self.tool_id,
-                        ok=False,
-                        output=None,
-                        error="'series' entries must be {label, values} objects",
-                    )
-                name = entry.get("label")
-                if not isinstance(name, str) or not name.strip():
-                    return ToolResponse(
-                        tool_id=self.tool_id,
-                        ok=False,
-                        output=None,
-                        error="'series' entries need a non-empty string 'label'",
-                    )
-                numbers = self._to_numbers(entry.get("values"))
-                if numbers is None:
-                    return ToolResponse(
-                        tool_id=self.tool_id,
-                        ok=False,
-                        output=None,
-                        error=f"series {name!r} 'values' must all be numbers",
-                    )
-                if len(numbers) != len(labels):
-                    return ToolResponse(
-                        tool_id=self.tool_id,
-                        ok=False,
-                        output=None,
-                        error=f"series {name!r} has {len(numbers)} values "
-                        f"but {len(labels)} labels",
-                    )
-                multi.append((name, numbers))
-            if len(labels) > _MAX_POINTS:
-                return ToolResponse(
-                    tool_id=self.tool_id,
-                    ok=False,
-                    output=None,
-                    error=f"at most {_MAX_POINTS} points per chart",
-                )
-            str_labels = [str(label) for label in labels]
+            multi = [
+                (str(entry["label"]), self._to_numbers(entry["values"]))
+                for entry in series_in
+            ]
             svg = render_svg(
-                str(chart_type), str_labels, [], title=title or _default_title(str_labels, multi),
+                chart_type, str_labels, [],
+                title=title or _default_title(str_labels, multi),
                 series=multi,
             )
             return ToolResponse(
@@ -298,42 +335,13 @@ class PlotChartTool(Tool):
                 data={
                     "svg": svg,
                     "chart_type": chart_type,
-                    "point_count": len(labels),
+                    "point_count": len(str_labels),
                     "series_count": len(multi),
                 },
             )
-        if not isinstance(values, list) or not values:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'values' must be a non-empty array (or pass 'series' for multi-series)",
-            )
         numbers = self._to_numbers(values)
-        if numbers is None:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'values' must all be numbers",
-            )
-        if len(labels) != len(numbers):
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'labels' and 'values' must have the same length",
-            )
-        if len(labels) > _MAX_POINTS:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error=f"at most {_MAX_POINTS} points per chart",
-            )
-        str_labels = [str(label) for label in labels]
         svg = render_svg(
-            str(chart_type), str_labels, numbers,
+            chart_type, str_labels, numbers,
             title=title or _default_title(str_labels, []),
         )
         return ToolResponse(

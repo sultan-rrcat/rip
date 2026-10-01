@@ -191,7 +191,14 @@ class DocGenerateTool(Tool):
             "tables": {"type": "array"},
         },
         "required": ["title", "sections"],
+        "additionalProperties": False,
     }
+    input_example: ClassVar[str] = (
+        'doc.generate {"title": "Docker Overview", "sections": '
+        '[{"heading": "Intro", "body": "..."}], "tables": []}. A section '
+        "body may be a {{id}} placeholder carrying an upstream answer step's "
+        "prose."
+    )
     output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -203,31 +210,23 @@ class DocGenerateTool(Tool):
     effect_class = "sandboxed"  # type: ignore[assignment]
     cost_class = "medium"
 
+    def validate_input(self, tool_input: dict) -> str | None:
+        err = super().validate_input(tool_input)
+        if err is not None:
+            return err
+        if _valid_sections(tool_input.get("sections")) is None:
+            return "'sections' must be a non-empty array of {heading, body}"
+        if _valid_tables(tool_input.get("tables")) is None:
+            return "'tables' must be an array of {headers[], rows[][]}"
+        return None
+
     def execute(self, request: ToolRequest) -> ToolResponse:
-        title = request.input.get("title")
-        if not isinstance(title, str) or not title:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'title' is required in input",
-            )
-        sections = _valid_sections(request.input.get("sections"))
-        if sections is None:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'sections' must be a non-empty array of {heading, body}",
-            )
+        invalid = self.invalid_response(request.input)
+        if invalid.error is not None:
+            return invalid
+        title = str(request.input["title"])
+        sections = _valid_sections(request.input["sections"])
         tables = _valid_tables(request.input.get("tables"))
-        if tables is None:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'tables' must be an array of {headers[], rows[][]}",
-            )
         markdown = render_markdown(title, sections, tables)
         try:
             docx_bytes = render_docx(title, sections, tables)

@@ -37,7 +37,11 @@ class ImageGenerateTool(Tool):
         "type": "object",
         "properties": {"message": {"type": "string"}},
         "required": ["message"],
+        "additionalProperties": False,
     }
+    input_example: ClassVar[str] = (
+        'image.generate {"message": "a watercolour sketch of a lighthouse"}'
+    )
     output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -57,14 +61,10 @@ class ImageGenerateTool(Tool):
         self._provider = provider
 
     def execute(self, request: ToolRequest) -> ToolResponse:
-        prompt = request.input.get("message")
-        if not prompt:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'message' is required in input",
-            )
+        invalid = self.invalid_response(request.input)
+        if invalid.error is not None:
+            return invalid
+        prompt = str(request.input["message"])
         if self._provider is None:
             return ToolResponse(
                 tool_id=self.tool_id,

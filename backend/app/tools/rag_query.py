@@ -121,13 +121,24 @@ class RagQueryTool(Tool):
         "properties": {
             "notebook_id": {"type": "string"},
             "query": {"type": "string"},
+            # `message` is the Athena-era alias, still accepted (see
+            # validate_input) — declared so the closed key set allows it.
+            "message": {"type": "string"},
             "top_k": {"type": "integer"},
             "file_id": {"type": "string"},
             "file_name": {"type": "string"},
-            "mode": {"type": "string"},
+            "mode": {"type": "string", "enum": ["specific", "overview"]},
         },
         "required": ["notebook_id", "query"],
+        "additionalProperties": False,
     }
+    input_example: ClassVar[str] = (
+        'rag.query {"query": "fault tolerance in chapter 3", "file_id": '
+        '"<literal snapshot id>", "mode": "specific"}. `file_id` scopes to '
+        "one file; mode='overview' returns a stratified one-per-section "
+        "sample for summarize/compare/quiz asks. No {{placeholders}} in "
+        "file_id."
+    )
     output_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -148,6 +159,34 @@ class RagQueryTool(Tool):
         """Direct binding for the worker and non-factory construction."""
         self._rag = rag
 
+    def validate_input(self, tool_input: dict) -> str | None:
+        # `query` is the contract name; `message` stays accepted so plans
+        # written against the Athena-era schema still execute — normalize the
+        # alias before the schema check so both spellings validate once, here.
+        normalized = dict(tool_input)
+        if not str(normalized.get("query", "") or "").strip():
+            alias = str(normalized.get("message", "") or "").strip()
+            if alias:
+                normalized["query"] = alias
+        err = super().validate_input(normalized)
+        if err is not None:
+            return err
+        if "top_k" in normalized:
+            try:
+                int(normalized["top_k"])
+            except (TypeError, ValueError):
+                return "'top_k' must be an integer"
+        raw_file_id = normalized.get("file_id")
+        if isinstance(raw_file_id, str):
+            if not raw_file_id.strip():
+                return "'file_id' must be a non-empty snapshot id when provided"
+            if "{{" in raw_file_id:
+                return (
+                    "'file_id' must be a literal snapshot id, never a {{id}} "
+                    "placeholder"
+                )
+        return None
+
     def execute(self, request: ToolRequest) -> ToolResponse:
         notebook_id = request.input.get("notebook_id")
         if not notebook_id:
@@ -157,16 +196,10 @@ class RagQueryTool(Tool):
                 output=None,
                 error="'notebook_id' is required in input (injected by the orchestrator, never the LLM)",
             )
-        # `query` is the contract name; `message` stays accepted so plans
-        # written against the Athena-era schema still execute.
         query = request.input.get("query") or request.input.get("message")
-        if not query:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'query' is required in input",
-            )
+        invalid = self.invalid_response(request.input)
+        if invalid.error is not None:
+            return invalid
         try:
             top_k = int(request.input.get("top_k", _DEFAULT_TOP_K))
         except (TypeError, ValueError):
@@ -178,20 +211,6 @@ class RagQueryTool(Tool):
             )
         raw_file_id = request.input.get("file_id")
         file_id = str(raw_file_id).strip() if isinstance(raw_file_id, str) else None
-        if file_id is not None and not file_id:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'file_id' must be a non-empty snapshot id when provided",
-            )
-        if file_id is not None and "{{" in file_id:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'file_id' must be a literal snapshot id, never a {{id}} placeholder",
-            )
         raw_file_name = request.input.get("file_name")
         file_name = (
             str(raw_file_name).strip() if isinstance(raw_file_name, str) else None
@@ -200,13 +219,6 @@ class RagQueryTool(Tool):
             file_name = None
         raw_mode = request.input.get("mode", "specific")
         mode = str(raw_mode).strip().lower() if raw_mode is not None else "specific"
-        if mode not in _VALID_MODES:
-            return ToolResponse(
-                tool_id=self.tool_id,
-                ok=False,
-                output=None,
-                error="'mode' must be one of ['overview', 'specific']",
-            )
         # Whole-file shortcut: when the scoped file(s) fit the context window,
         # return every chunk and skip BOTH the sub-query planner LLM call and
         # the embed -> vector -> FTS -> RRF -> rerank pipeline. Returns None
@@ -305,6 +317,12 @@ class RagQueryTool(Tool):
                         file_name=file_name,
                         mode=mode,
                     )
+                except RuntimeError:
+                    # Unbound singleton (or malformed context) must fail
+                    # honest via the outer handler, not masquerade as an
+                    # empty result set. One bad shard still must not kill
+                    # the merge, so only RuntimeError escapes.
+                    raise
                 except Exception as e:  # noqa: BLE001 - one bad shard must not kill the merge
                     logger.warning("rag sub-query failed for '%s': %s", sub_q, e)
                     continue
