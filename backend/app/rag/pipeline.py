@@ -105,38 +105,44 @@ class RagPipeline:
 
             final_chunks = []
 
-            for doc in documents:
-                structured_docs = md_splitter.split_text(doc.page_content)
+            # Join pages BEFORE splitting. Loaders return one Document per
+            # page, and a Markdown heading that lands at the end of a page
+            # carries no body until the next page. Splitting per page made
+            # MarkdownHeaderTextSplitter emit no chunk for such a trailing
+            # heading, silently discarding it — its body then reappeared on
+            # the next page with NO header metadata at all (observed live:
+            # 18-page lab report whose "Lab 4: Network and Information Lab"
+            # heading sat at the end of page 10; Lab 4's content was stored
+            # but unlabelled, so "Lab 4" existed nowhere in `embeddings` and
+            # a whole-file rag.query answer had to omit it). Joining lets the
+            # heading attach to the body it introduces.
+            joined_markdown = "\n\n".join(doc.page_content for doc in documents)
 
-                for chunk in structured_docs:
-                    # 🔥 Extract clean filename
-                    # source = doc.metadata.get("source", "")
-                    # file_name = os.path.basename(source) if source else "unknown"
+            for chunk in md_splitter.split_text(joined_markdown):
+                # 🔥 Extract headers safely
+                h1 = chunk.metadata.get("H1")
+                h2 = chunk.metadata.get("H2")
+                h3 = chunk.metadata.get("H3")
 
-                    # 🔥 Extract headers safely
-                    h1 = chunk.metadata.get("H1")
-                    h2 = chunk.metadata.get("H2")
-                    h3 = chunk.metadata.get("H3")
+                # 🔥 Build clean metadata
+                clean_metadata = {
+                    "source": file_name,  # only filename, not full path
+                }
 
-                    # 🔥 Build clean metadata
-                    clean_metadata = {
-                        "source": file_name,  # only filename, not full path
-                    }
+                # Only include headers if they exist
+                if h1:
+                    clean_metadata["H1"] = h1.strip()
+                if h2:
+                    clean_metadata["H2"] = h2.strip()
+                if h3:
+                    clean_metadata["H3"] = h3.strip()
 
-                    # Only include headers if they exist
-                    if h1:
-                        clean_metadata["H1"] = h1.strip()
-                    if h2:
-                        clean_metadata["H2"] = h2.strip()
-                    if h3:
-                        clean_metadata["H3"] = h3.strip()
-
-                    final_chunks.append(
-                        Document(
-                            page_content=chunk.page_content.strip(),
-                            metadata=clean_metadata,
-                        )
+                final_chunks.append(
+                    Document(
+                        page_content=chunk.page_content.strip(),
+                        metadata=clean_metadata,
                     )
+                )
 
             logger.info(
                 f"[Step 1] Final chunks (Markdown Splitter): {len(final_chunks)}"
@@ -175,10 +181,25 @@ class RagPipeline:
             return metadata
 
         embedding_ids = []
+        deleted = 0
 
         try:
             with pg_connection() as conn:
                 with conn.cursor() as cur:
+                    # Replace, never append. Re-processing a file is the
+                    # documented recovery path (POST /api/files/{id}/process,
+                    # ADR-005 / PLAN B3), and INSERT-only left the previous
+                    # chunks in place — so every retry duplicated content,
+                    # corrupted `chunk_index`, and inflated the whole-file
+                    # size probe until ADR-033's shortcut silently stopped
+                    # firing for the file. Same transaction as the inserts
+                    # below, so a failure mid-write rolls back to the old set.
+                    cur.execute(
+                        "DELETE FROM embeddings WHERE file_id = %s",
+                        (file_id,),
+                    )
+                    deleted = cur.rowcount
+
                     for i, (doc, embedding) in enumerate(zip(chunks, embeddings)):
                         cur.execute(
                             """
@@ -200,7 +221,10 @@ class RagPipeline:
 
                 conn.commit()
 
-            logger.info(f"✅ Stored {len(embedding_ids)} embeddings.")
+            logger.info(
+                f"✅ Replaced {len(embedding_ids)} embeddings "
+                f"(deleted {deleted} previous for this file)."
+            )
             return embedding_ids
 
         except Exception:
