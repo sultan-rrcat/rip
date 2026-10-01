@@ -122,11 +122,15 @@ Ingest (`services/file_processor.py`, background task): PDF→Markdown via the `
 
 Retrieve (`rag/vector_rag.py:retrieve_context(notebook_id, query, top_k=4, file_id=None, mode=specific|overview)`): pgvector cosine + full-text `ts_rank_cd` → dedupe → RRF (k=60) → BGE CrossEncoder rerank → threshold/filter, capped at `top_k`. `file_id`/`file_name` scope both SQL paths to one file; `mode=overview` fetches `top_k*3` candidates, boosts overview sections (H1/H2/H3 keyword match), and stratifies one chunk per H1 in `chunk_index` order. Deterministic builders fan out one file-scoped shard per ready file (compare → `specific`, summarize/quiz → `overview`) into a single reduce step. `rag.query` reuses the lifespan `VectorRAG` singleton (never re-instantiated — PyTorch weights are heavy).
 
+Whole-file early return (ADR-033): before any retrieval work, `VectorRAG.retrieve_whole_file` probes `SUM(char_length(chunk_text))`/`COUNT(*)` over the same scope. If the scope fits `int(ollama_context_window * rag_whole_file_pct) * 4` chars (15% per shard, `len//4` estimator shared with `memory.py`) and ≤400 chunks, every chunk is returned in `chunk_index` order with `rerank_score=None`, and `rag.query` skips both the sub-query planner LLM call and the whole embed/vector/FTS/RRF/rerank pipeline. Otherwise it returns `None` and the ranked path runs unchanged. `OLLAMA_CONTEXT_WINDOW` must equal the Ollama server's `OLLAMA_CONTEXT_LENGTH` — `num_ctx` is ignored on the `/v1/chat/completions` endpoint the provider uses (see ADR-033).
+
 ---
 
 ## 6. Memory
 
 `orchestration/memory.py`: token estimate `len//4`; when accumulated history exceeds ~70% of `ollama_context_window` (32768), Ollama folds aged-out turns into `notebooks.conversation_summary` (max 512 tokens). Recent window (`memory_window_size=10`) stays verbatim. `conversation_summary` is internal state — never rendered; distinct from the SSE `summary` event (the final answer).
+
+The same `len//4` estimator and `ollama_context_window` bound retrieved context (ADR-033): one whole-file dump may claim `rag_whole_file_pct` (15%) of the window, because up to 5 file-scoped shards are concatenated into a single reduce prompt. `ollama_context_window` must match the Ollama server's `OLLAMA_CONTEXT_LENGTH`, because `num_ctx` is not enforced on the `/v1/chat/completions` endpoint `providers/ollama.py` uses.
 
 ---
 

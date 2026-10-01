@@ -136,6 +136,14 @@ class Settings(BaseSettings):
     memory_window_size: int = 10  # advisory verbatim window (WINDOW_SIZE); real constraint is budget
     summary_threshold_pct: float = 0.7
     summary_max_tokens: int = 512  # _SUMMARY_MAX_TOKENS; summary LLM call cap
+    # Whole-file RAG shortcut: when every chunk of the scoped file(s) fits in
+    # this share of the context window, rag.query returns them all and skips
+    # the LLM sub-query planner + embed/vector/FTS/RRF/rerank entirely.
+    # Per-SHARD share, not per-run: builders fan out up to 5 file-scoped
+    # shards (compare_multi/summarize/quiz) and plan_graph concatenates every
+    # shard into ONE reduce prompt, so 0.15 keeps the worst case (5 shards)
+    # inside the window alongside memory + system prompt + answer.
+    rag_whole_file_pct: float = 0.15
     # build_memory_context(provider, stored_conversation_summary, messages[{role,content}] oldest-first,
     #   window_size, folded_count) -> (MemoryContext, new_summary, new_count);
     # fold only newly-aged-out turns (folded_count dedup → notebooks.summary_message_count);

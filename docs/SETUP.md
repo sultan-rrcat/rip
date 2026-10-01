@@ -34,7 +34,8 @@ Keys ( authoritative defaults in `backend/app/core/config.py`):
 | `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; **host-local runs use `127.0.0.1` + `DB_PORT=<HOST_PG_PORT>`** (see CAVEATS — bare `localhost` can hang; sync `DB_PORT` to the mapped host port). Split-brain warning: the backend reads `.env` via `env_file`, but `POSTGRES_*` interpolate from the *shell* — stale shell `DB_*` exports shadow `.env` (see CAVEATS) |
 | `OLLAMA_BASE_URL` | Interpolated: `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}` — your `.env` value flows into the container, gateway is the fallback. Host-local default `http://localhost:11434` (`config.py` default is the gateway form for compose) |
 | `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` (config default; a local `.env` may override, e.g. a smaller router model) |
-| `OLLAMA_CONTEXT_WINDOW` | `32768` (budget = `*0.7` ≈ 22900 tokens, `len//4` estimator) |
+| `OLLAMA_CONTEXT_WINDOW` | `32768` (memory budget = `*SUMMARY_THRESHOLD_PCT` ≈ 22900 tokens, `len//4` estimator). **Must equal the Ollama server's `OLLAMA_CONTEXT_LENGTH`** — the backend posts to `/v1/chat/completions`, where `num_ctx` is silently ignored (verified 2026-10-01; only native `/api/chat` enforces it), so this value does not size the server window. Mismatching it silently mis-sizes both the memory fold and the whole-file RAG gate (ADR-033) |
+| `RAG_WHOLE_FILE_PCT` | `0.15` — share of the window one whole-file `rag.query` dump may fill before falling back to ranked retrieval (ADR-033). Per-shard, since up to 5 shards share one reduce prompt; `0` disables the shortcut |
 | `OLLAMA_TIMEOUT_MS` | `120000` (Ollama HTTP timeout) |
 | `OLLAMA_IMAGE_MODEL` | `""` (empty = `image.generate` fails honestly) |
 | `MAX_UPLOAD_SIZE_MB` | `50` (must match nginx `client_max_body_size 50M`) |

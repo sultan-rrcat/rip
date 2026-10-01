@@ -65,6 +65,47 @@ class FakeRAG:
         return {"query": query, "mode": mode, "results": list(self.results)}
 
 
+class WholeFileRAG(FakeRAG):
+    """FakeRAG that also implements the whole-file shortcut."""
+
+    #: Sentinel: "no override given" so an explicit `whole=None` (shortcut
+    #: declines) stays distinguishable from the default whole-file hit.
+    _DEFAULT = object()
+
+    def __init__(self, whole=_DEFAULT):
+        super().__init__()
+        self._whole = (
+            [
+                {"content": "whole a", "source": "f.pdf", "section": "H1", "rerank_score": None},
+                {"content": "whole b", "source": "f.pdf", "section": "H1", "rerank_score": None},
+                {"content": "whole c", "source": "f.pdf", "section": "H2", "rerank_score": None},
+            ]
+            if whole is self._DEFAULT
+            else whole
+        )
+        self.ranked_calls = 0
+        self.whole_file_calls: list[tuple] = []
+
+    def retrieve_whole_file(self, notebook_id, *, file_id=None, file_name=None):
+        self.whole_file_calls.append((notebook_id, file_id, file_name))
+        return self._whole
+
+    def retrieve_context(self, *args, **kwargs):
+        self.ranked_calls += 1
+        return super().retrieve_context(*args, **kwargs)
+
+
+class SpyProvider:
+    """Counts planner invocations; returns one sub-query."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def generate_structured(self, model, messages, schema, temperature=0):
+        self.calls += 1
+        return {"queries": ["sub one"]}
+
+
 # --- Registry / executor ---
 
 
@@ -206,6 +247,84 @@ class TestRagQuery:
         fake = FakeRAG()
         out = rag_query("nb-1", "hello", rag=fake)
         assert len(out) == 3 and out[0]["source"] == "f.pdf"
+
+    def test_whole_file_shortcut_skips_ranked_retrieval(self):
+        """Whole-file hit returns every chunk and never calls the planner."""
+        rag = WholeFileRAG()
+        provider = SpyProvider()
+        tool = RagQueryTool(rag=rag, provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "hi"})
+        )
+        assert resp.ok
+        assert len(resp.data["results"]) == 3
+        assert resp.data["whole_file"] is True
+        assert [r["content"] for r in resp.data["results"]] == [
+            "whole a",
+            "whole b",
+            "whole c",
+        ]
+        # The whole point: no embed/vector/FTS/RRF/rerank, no planner LLM call.
+        assert rag.ranked_calls == 0
+        assert provider.calls == 0
+        assert resp.data["generated_queries"] == ["hi"]
+        # Sources still carry every chunk's section (SSE `sources` stays
+        # intact). `extract_sources` dedupes via a set, so order is not
+        # guaranteed — compare as a set.
+        assert {tuple(sorted(s.items())) for s in resp.data["sources"]} == {
+            (("section", "H1"), ("source", "f.pdf")),
+            (("section", "H2"), ("source", "f.pdf")),
+        }
+        assert "whole a" in resp.output
+
+    def test_whole_file_shortcut_scopes_to_file_id(self):
+        rag = WholeFileRAG()
+        tool = RagQueryTool(rag=rag)
+        tool.execute(
+            ToolRequest(
+                tool_id="rag.query",
+                input={"notebook_id": "nb-1", "query": "hi", "file_id": "f1"},
+            )
+        )
+        assert rag.whole_file_calls == [("nb-1", "f1", None)]
+
+    def test_shortcut_disabled_falls_back_to_ranked(self):
+        """None (over budget) keeps today's path exactly."""
+        rag = WholeFileRAG(whole=None)
+        provider = SpyProvider()
+        tool = RagQueryTool(rag=rag, provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "hi"})
+        )
+        assert resp.ok
+        assert resp.data["whole_file"] is False
+        assert rag.ranked_calls == 1
+        assert provider.calls == 1
+
+    def test_shortcut_error_does_not_fail_retrieval(self):
+        """A raising shortcut must not fail the tool."""
+
+        class BoomRAG(WholeFileRAG):
+            def retrieve_whole_file(self, notebook_id, *, file_id=None, file_name=None):
+                raise RuntimeError("db down")
+
+        tool = RagQueryTool(rag=BoomRAG())
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "hi"})
+        )
+        assert resp.ok
+        assert resp.data["whole_file"] is False
+
+    def test_legacy_double_without_shortcut_still_runs(self):
+        """Plain FakeRAG exposes no retrieve_whole_file (back-compat)."""
+        rag = FakeRAG()
+        tool = RagQueryTool(rag=rag)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "hi"})
+        )
+        assert resp.ok
+        assert resp.data["whole_file"] is False
+        assert rag.seen == [("nb-1", "hi", 4, None, "specific")]
 
     def test_module_singleton_binding(self):
         fake = FakeRAG()

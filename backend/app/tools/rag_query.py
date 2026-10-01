@@ -79,6 +79,12 @@ def rag_query(
     sample in doc order). Raises RuntimeError when the singleton is unbound;
     VectorRAG retrieval errors propagate to the caller (the Tool converts
     them to ok=False).
+
+    Whole-file shortcut: when every chunk in scope fits the context window
+    (``settings.rag_whole_file_pct``), the ranked path is skipped entirely and
+    all chunks come back in document order with ``rerank_score=None`` (no
+    CrossEncoder ran, so there is no score to report). ``ToolResponse.data
+    ["whole_file"]`` records which path ran.
     """
     resolved = rag if rag is not None else get_rag_singleton()
     try:
@@ -201,6 +207,47 @@ class RagQueryTool(Tool):
                 output=None,
                 error="'mode' must be one of ['overview', 'specific']",
             )
+        # Whole-file shortcut: when the scoped file(s) fit the context window,
+        # return every chunk and skip BOTH the sub-query planner LLM call and
+        # the embed -> vector -> FTS -> RRF -> rerank pipeline. Returns None
+        # (over budget / empty / DB error / legacy double without the method),
+        # which falls through to the ranked path below unchanged.
+        try:
+            resolved_rag = self._rag if self._rag is not None else get_rag_singleton()
+            whole_file_fn = getattr(resolved_rag, "retrieve_whole_file", None)
+            whole_file = (
+                whole_file_fn(
+                    str(notebook_id),
+                    file_id=file_id,
+                    file_name=file_name,
+                )
+                if callable(whole_file_fn)
+                else None
+            )
+        except Exception as e:  # noqa: BLE001 - optimization must never fail retrieval
+            logger.warning("whole-file shortcut unavailable, using ranked retrieval: %s", e)
+            whole_file = None
+
+        if whole_file:
+            sources = extract_sources({"results": whole_file})
+            output = format_context_for_llm({"results": whole_file})
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=True,
+                output=output or "(no chunks retrieved)",
+                data={
+                    "results": whole_file,
+                    "sources": sources,
+                    "query": str(query),
+                    # No planner call ran, so the request is its own only query.
+                    "generated_queries": [str(query)],
+                    "notebook_id": str(notebook_id),
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "mode": mode,
+                    "whole_file": True,
+                },
+            )
         # Generate sub-queries via LLM, always.
         generated_queries: list[str] = [str(query)]
         if self._provider:
@@ -297,5 +344,6 @@ class RagQueryTool(Tool):
                 "file_id": file_id,
                 "file_name": file_name,
                 "mode": mode,
+                "whole_file": False,
             },
         )

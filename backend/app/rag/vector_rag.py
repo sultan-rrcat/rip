@@ -1,8 +1,19 @@
+from app.core.config import settings
 from app.core.db import pg_connection
 from app.core.logging import setup_logging
 from app.rag.pipeline import RagPipeline
 
 logger = setup_logging()
+
+#: Hard ceiling on chunks returned by the whole-file shortcut. The token
+#: budget is the real gate; this bounds pathological cases the estimator
+#: under-measures (dense tables, CJK) and keeps the reduce prompt sane.
+_WHOLE_FILE_MAX_CHUNKS = 400
+
+#: Chars-per-token factor, matching ``memory.estimate_tokens`` (len//4, no
+#: tiktoken). Shared so the shortcut and conversational memory agree on what
+#: "a token" means.
+_CHARS_PER_TOKEN = 4
 
 def _interleave_by_source(items: list[dict]) -> list[dict]:
     """Round-robin items so no single file starves the others.
@@ -120,6 +131,39 @@ def _select_top(
     return top_results
 
 
+def _whole_file_budget_chars() -> int:
+    """Char budget one whole-file dump may fill (read live so tests can override)."""
+    window = int(settings.ollama_context_window)
+    pct = float(settings.rag_whole_file_pct)
+    return max(0, int(window * pct) * _CHARS_PER_TOKEN)
+
+
+def _whole_file_rows_to_results(rows: list[tuple]) -> list[dict]:
+    """Map ``(chunk_text, metadata, chunk_index)`` rows to the result shape.
+
+    Same dict shape `retrieve_context` emits so every downstream consumer
+    (`extract_sources`, `format_context_for_llm`, SSE `sources`, the rag.query
+    dedupe) works unchanged. `rerank_score` is None: the shortcut skips the
+    CrossEncoder by design, so there is no score to report — inventing one
+    would rank-order a set that is ordered by document position instead.
+    """
+    results = []
+    for row in rows:
+        text, metadata, _chunk_index = (list(row) + [None, None, None])[:3]
+        metadata = metadata if isinstance(metadata, dict) else {}
+        results.append(
+            {
+                "content": _rerank_text({"text": text, "metadata": metadata}),
+                "source": metadata.get("source", "unknown"),
+                "section": " > ".join(
+                    filter(None, [metadata.get("H1"), metadata.get("H2"), metadata.get("H3")])
+                ),
+                "rerank_score": None,
+            }
+        )
+    return results
+
+
 def _stratify_overview(items: list[dict], top_k: int) -> list[dict]:
     """Pick at most one top chunk per H1 section, in document order.
 
@@ -154,7 +198,131 @@ def _stratify_overview(items: list[dict], top_k: int) -> list[dict]:
     return picks[:top_k]
 
 
+def _scope_sql(fid: str | None, fname: str | None) -> tuple[str, list]:
+    """Shared WHERE fragment for the file/notebook scoping variants.
+
+    Mirrors the four branch variants in `retrieve_context` so the shortcut
+    measures exactly the rows the ranked path would consider.
+    """
+    if fid and fname:
+        return (
+            (
+                "file_id IN (SELECT file_id FROM files WHERE notebook_id=%s)"
+                " AND file_id = %s"
+                " AND file_id IN (SELECT file_id FROM files"
+                " WHERE notebook_id=%s AND file_name ILIKE %s)"
+            ),
+            ["nb", "fid", "nb", "fname"],
+        )
+    if fid:
+        return (
+            "file_id IN (SELECT file_id FROM files WHERE notebook_id=%s) AND file_id = %s",
+            ["nb", "fid"],
+        )
+    if fname:
+        return (
+            (
+                "file_id IN (SELECT file_id FROM files"
+                " WHERE notebook_id=%s AND file_name ILIKE %s)"
+            ),
+            ["nb", "fname"],
+        )
+    return "file_id IN (SELECT file_id FROM files WHERE notebook_id=%s)", ["nb"]
+
+
+def _bind_scope(where: str, keys: list[str], notebook_id, fid, fname) -> tuple:
+    """Bind the `where` fragment's ordered params to actual values."""
+    lookup = {
+        "nb": notebook_id,
+        "fid": fid,
+        "fname": fname,
+    }
+    return tuple(lookup[k] for k in keys)
+
+
 class VectorRAG(RagPipeline):
+    def retrieve_whole_file(
+        self,
+        notebook_id,
+        *,
+        file_id: str | None = None,
+        file_name: str | None = None,
+    ) -> list[dict] | None:
+        """Return every chunk in scope when the whole scope fits the window.
+
+        Returns `None` when the shortcut does not apply, so the caller falls
+        back to the ranked path untouched: over budget, over the chunk cap,
+        empty corpus, or any DB error.
+
+        The check is a single `SUM(char_length(chunk_text))` — cheap because it
+        reads no vectors and touches no rows outside `file_id` (idx_embeddings_file).
+        When it fits, we skip BGE-M3 embedding, pgvector + full-text search,
+        RRF, the CrossEncoder rerank AND the LLM sub-query planner.
+
+        Rows come back in `chunk_index` order (document order), which is the
+        right order for a whole-file read and supersedes `_stratify_overview`.
+        """
+        fid = (file_id or "").strip() or None
+        fname = (file_name or "").strip() or None
+        budget_chars = _whole_file_budget_chars()
+        if budget_chars <= 0:
+            return None
+
+        try:
+            where, keys = _scope_sql(fid, fname)
+            with pg_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT COALESCE(SUM(char_length(chunk_text)), 0) AS total_chars,
+                           COUNT(*) AS chunk_count
+                    FROM embeddings
+                    WHERE {where}
+                    """,
+                    _bind_scope(where, keys, notebook_id, fid, fname),
+                )
+                total_chars, chunk_count = cur.fetchone() or (0, 0)
+
+                total_chars = int(total_chars or 0)
+                chunk_count = int(chunk_count or 0)
+
+                if chunk_count == 0:
+                    logger.info("whole-file shortcut skipped: no chunks in scope")
+                    return None
+                if chunk_count > _WHOLE_FILE_MAX_CHUNKS:
+                    logger.info(
+                        f"whole-file shortcut skipped: {chunk_count} chunks > cap "
+                        f"{_WHOLE_FILE_MAX_CHUNKS}"
+                    )
+                    return None
+                if total_chars > budget_chars:
+                    logger.info(
+                        f"whole-file shortcut skipped: {total_chars} chars > budget "
+                        f"{budget_chars}"
+                    )
+                    return None
+
+                cur.execute(
+                    f"""
+                    SELECT chunk_text, metadata, chunk_index
+                    FROM embeddings
+                    WHERE {where}
+                    ORDER BY chunk_index
+                    """,
+                    _bind_scope(where, keys, notebook_id, fid, fname),
+                )
+                rows = cur.fetchall()
+
+            logger.info(
+                f"whole-file shortcut: {chunk_count} chunks / {total_chars} chars "
+                f"within budget {budget_chars}"
+            )
+            return _whole_file_rows_to_results(rows)
+        except Exception:
+            # Never fail retrieval over an optimization: any DB error falls
+            # back to the ranked path.
+            logger.exception("whole-file shortcut failed; falling back to ranked retrieval")
+            return None
+
     def retrieve_context(
         self,
         notebook_id,

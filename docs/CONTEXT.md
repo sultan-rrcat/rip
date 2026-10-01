@@ -34,6 +34,10 @@ _Avoid_: Intent (bare), objective, task
 The single retrieval path: vector similarity + Postgres full-text search combined by rank fusion, then reranked by BGE. Returns chunk-level context with source metadata.
 _Avoid_: GraphRAG, AgenticRAG, retrieval pipeline
 
+**Whole-file return**:
+The retrieval shortcut (ADR-033): when every chunk in a `rag.query` scope fits the context window (`rag_whole_file_pct`, 15% per shard), all chunks are returned in document order with `rerank_score=None`, skipping the sub-query planner LLM call and the embed/vector/FTS/rerank pipeline. Ranking is not a loss when nothing would be dropped. Otherwise the ranked path runs as usual.
+_Avoid_: Full-text mode, load-everything, bypass mode
+
 **rag.query**:
 The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=4)` reusing the lifespan `VectorRAG` singleton. On completion, the run worker emits an SSE `sources` event (Q32). Never used for verbatim file conversion.
 _Avoid_: Search, retrieve, lookup
@@ -119,7 +123,7 @@ The final user-visible answer text streamed at end of run. Not stored in `notebo
 _Avoid_: conversation_summary, compressed history
 
 **Memory window**:
-The set of recent messages kept verbatim alongside `conversation_summary`. Advisory cap (`memory_window_size=10`); real constraint is the token budget (`int(ollama_context_window=32768 * 0.7)` via `len//4` estimator, `summary_max_tokens=512`).
+The set of recent messages kept verbatim alongside `conversation_summary`. Advisory cap (`memory_window_size=10`); real constraint is the token budget (`int(ollama_context_window=32768 * 0.7)` via `len//4` estimator, `summary_max_tokens=512`). Retrieved context shares the same window and estimator: one whole-file return may claim `rag_whole_file_pct` (15%), since up to 5 shards are concatenated into one reduce prompt.
 _Avoid_: Context window, message buffer
 
 ### Infrastructure
