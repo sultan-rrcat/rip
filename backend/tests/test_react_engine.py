@@ -10,7 +10,7 @@ The full loop is covered through the `run_react` wrapper in
 """
 
 from app.orchestration.corpus import _ready_files, _snapshot_files, get_corpus_state
-from app.orchestration.idle_guard import MAX_IDLE_TURNS, IdleGuard
+from app.orchestration.idle_guard import MAX_BLOCKED_TURNS, MAX_IDLE_TURNS, IdleGuard
 from app.orchestration.react_engine import _default_react_mode
 
 
@@ -37,6 +37,38 @@ class TestIdleGuard:
     def test_default_threshold_is_two(self) -> None:
         assert MAX_IDLE_TURNS == 2
         assert IdleGuard().record_idle() is False
+
+
+class TestBlockedTurns:
+    """Environment refusals must not spend the model's idle budget.
+
+    Trace c9b02eef: one shape hint (idle) plus one empty-corpus block
+    (idle) tripped MAX_IDLE_TURNS and killed the run at iteration 2 with
+    zero executed steps.
+    """
+
+    def test_block_does_not_consume_idle_budget(self) -> None:
+        guard = IdleGuard()
+        guard.record_idle()
+        assert guard.record_blocked() is False
+        # Still only one idle turn — the block did not add to it.
+        assert guard.idle_turns == 1
+        assert guard.record_idle() is True
+
+    def test_block_budget_is_separate_and_looser(self) -> None:
+        guard = IdleGuard()
+        assert guard.record_blocked() is False
+        assert guard.record_blocked() is False
+        assert guard.record_blocked() is True
+        assert MAX_BLOCKED_TURNS == 3
+
+    def test_progress_resets_both_counters(self) -> None:
+        guard = IdleGuard()
+        guard.record_idle()
+        guard.record_blocked()
+        guard.record_progress()
+        assert guard.idle_turns == 0
+        assert guard.blocked_turns == 0
 
 
 class TestCorpusState:
@@ -66,6 +98,16 @@ class TestCorpusState:
             ("report.pdf", "abc123")
         ]
         assert _ready_files("report.pdf [processing] id=abc123") == []
+
+    def test_snapshot_count_prefix_stripped_from_names(self) -> None:
+        # "2 file(s): a.pdf [ready] id=aaa; b.pdf [ready] id=bbb" — the
+        # count prefix belongs to the snapshot, not to the first filename
+        # (it leaks into anything user-facing otherwise).
+        ctx = "2 file(s): a.pdf [ready] id=aaa; b.pdf [ready] id=bbb"
+        assert _snapshot_files(ctx) == [
+            ("a.pdf", "ready", "aaa"),
+            ("b.pdf", "ready", "bbb"),
+        ]
 
 
 class TestDefaultReactModePurity:

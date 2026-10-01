@@ -4,9 +4,9 @@ Turns a plan's per-step outputs into ONE final answer with NO LLM synthesis
 step (merge decision: cuts cost and latency; predictable and testable).
 
 Type-aware deterministic rules (ADR-023 as amended):
-- HIDE intermediate outputs (`expected_output_type` in chunks/numbers, or
-  the `notebook.inspect` freshness probe) unless they are the only output
-  (anti-blank fallback);
+- HIDE intermediate outputs (`expected_output_type` in
+  chunks/numbers/observation, or the `notebook.inspect` freshness probe)
+  unless they are the only output (anti-blank fallback);
 - SHOW terminal outputs (answer/summary/text/document/chart/clarification,
   plus any unknown type — fail-visible, never fail-blank); chart/SVG
   outputs aggregate to a short placeholder (the SVG bytes travel via the
@@ -140,7 +140,9 @@ class Aggregator:
             if meta is None:
                 return False  # unknown step: fail-visible, never fail-blank
             eot = (meta.expected_output_type or "text").lower()
-            if eot in ("chunks", "numbers"):
+            # "observation" = a non-terminal ReAct agent step: scratchpad
+            # kept for the loop, never the user's answer.
+            if eot in ("chunks", "numbers", "observation"):
                 return True
             return meta.executor_id == "notebook.inspect"
 

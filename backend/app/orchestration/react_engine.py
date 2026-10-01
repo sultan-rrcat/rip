@@ -5,9 +5,22 @@ each iteration proposes exactly ONE step, executes it immediately, and appends
 the observation to the scratchpad. No placeholder wiring is ever emitted, so
 the ecd93eb4 ungrounded-fan-in class cannot occur — inputs are inlined.
 
+Route-aware (ADR-035): the L1 router's verdict and the notebook's corpus
+state ride in on `run()` and are stated in the prompt, so ReAct *executes* a
+decided intent instead of re-deriving doc-vs-non-doc from scratch on every
+iteration. Two deterministic steering rules follow from the corpus state:
+- empty/processing corpus: a proposed `rag.query` is substituted by a
+  general-knowledge `reasoning` step (it executes, so the repeat guards
+  engage) instead of being refused as a wasted iteration;
+- unknown corpus (inventory unavailable): the prompt mandates
+  `notebook.inspect` as the first step — the one case where probing
+  carries information the prompt does not already hold.
+
 Bounded: max 6 iterations, cooperative cancel, per-step timeouts inherited
 from run_plan_graph. Returns a (Plan, ExecutionResult) pair so the standard
-deterministic Aggregator stays the single answer-assembly path.
+deterministic Aggregator stays the single answer-assembly path. A loop that
+ends with nothing executed still answers from the request verbatim (same
+shape as the `chat` builder) rather than surfacing a routing error.
 
 The loop lives on `ReActEngine` (composition-time deps in the constructor,
 per-request args on `run()`); the idle-turn guard lives in `idle_guard`;
@@ -38,6 +51,7 @@ from app.observability.langfuse import (
 )
 from app.orchestration.corpus import get_corpus_state
 from app.orchestration.idle_guard import IdleGuard
+from app.orchestration.intents import DOC_INTENTS, REACT_ONLY_INTENTS
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.plan_graph import run_plan_graph
 from app.orchestration.results import ExecutionResult, StepResult
@@ -47,6 +61,29 @@ from app.tools.registry import ToolRegistry
 logger = logging.getLogger("orchestration.react")
 
 MAX_REACT_ITERATIONS = 6
+
+#: Intents whose first step must produce numbers before any chart. Derived
+#: from the taxonomy (both plot intents) so a new REACT_ONLY intent cannot
+#: silently skip the rule.
+_NUMBERS_FIRST_INTENTS = frozenset(i.value for i in REACT_ONLY_INTENTS)
+
+#: Doc-intent values — a document question on an unknown inventory needs
+#: notebook.inspect before anything else (ADR-027 freshness probe).
+_DOC_INTENT_VALUES = frozenset(i.value for i in DOC_INTENTS)
+
+#: Corpus state → what ReAct may and may not do (prompt input, ADR-035).
+_CORPUS_ROUTE_LINES = {
+    "ready": "the notebook HAS ready documents — rag.query can answer document questions",
+    "empty": "the notebook is EMPTY (nothing uploaded) — rag.query returns nothing and is never run",
+    "processing": (
+        "the notebook's files are still uploading/processing — rag.query returns "
+        "nothing right now and is never run"
+    ),
+    "unknown": (
+        "the file inventory is unavailable — your FIRST step must be "
+        "notebook.inspect {} (it takes no input) to see what is uploaded"
+    ),
+}
 
 REACT_SCHEMA: dict = {
     "type": "object",
@@ -68,28 +105,36 @@ _TOOL_OUTPUT_TYPES = {
     "image.generate": "document",
 }
 
-#: Correct-shape hints surfaced when the ReAct model emits a malformed
-#: tool input (observed live trace c9e59039: {"agent": {"message": ...}}
-#: for rag.query/code.sandbox, {"tool_id": ...} without target_format
-#: for doc.convert — each burned a full iteration). Pre-flight validation
-#: appends these to the scratchpad WITHOUT executing, so the 6-step
-#: budget is preserved for real work.
-_TOOL_INPUT_HINTS = {
-    "rag.query": 'rag.query needs {"query": "..."} flat '
-    '(not {"agent": {...}}); add "file_id" to scope to one file',
-    "code.sandbox": 'code.sandbox needs {"code": "..."} flat (not {"agent": {...}})',
-    "plot.chart": 'plot.chart needs {"chart_type": "bar|line", '
-    '"labels": [...], "values": [...] or "series": [{label, values}], '
-    'plus a short "title" naming the metric and comparison '
-    '(e.g. {"title": "mAP@50-95: FASDD_CV vs AgniNetra"}) '
-    "with literal numbers from observations — never code.sandbox for charting",
-    "doc.convert": 'doc.convert needs {"file_id": "...", '
-    '"target_format": "md|docx|pdf"}',
-    "doc.generate": 'doc.generate needs {"title": "...", '
-    '"sections": [{"heading": ..., "body": ...}]}',
-    "image.generate": 'image.generate needs {"message": "..."}',
-    "notebook.inspect": "notebook.inspect needs {} (notebook_id is injected)",
-}
+def _tool_examples(tool_ids: list[str], tools: ToolRegistry) -> str:
+    """One copyable call per tool, taken from the tool that owns it.
+
+    ReAct used to carry a hand-written hint table for all seven tools; four
+    copies of the plot.chart shape drifted until the model could not produce
+    a two-series chart (trace c9b02eef). The shape shown to the model is now
+    the tool's own `input_example`, and a rejection is the tool's own
+    `explain_invalid()` — so a rule lives in exactly one place: the tool.
+    """
+    parts: list[str] = []
+    for tool_id in tool_ids:
+        if tool_id not in tools:
+            continue
+        example = tools.get(tool_id).input_example
+        if example:
+            parts.append(f"- {tool_id}: {example}")
+    return "\n".join(parts)
+
+
+def _plot_rules() -> str:
+    """plot.chart policy. The tool's SHAPE lives in `input_example` and is
+    rendered once by `_tool_examples`; only policy belongs here."""
+    return (
+        "Bar/line charts MUST use plot.chart with literal numbers from "
+        "observations (or a prior reasoning step) — never code.sandbox for "
+        "charting. Every plot.chart should name its metric in a short "
+        "'title' (e.g. 'mAP@50-95: FASDD_CV vs AgniNetra'). Each plot.chart "
+        "must cover a DIFFERENT metric — never re-plot numbers already "
+        "charted."
+    )
 
 
 def _normalize_react_input(executor: str, action_input: dict) -> dict:
@@ -100,7 +145,9 @@ def _normalize_react_input(executor: str, action_input: dict) -> dict:
     - stray {"tool_id": ...} inside input → dropped (executor already
       selects the tool; the key only confuses required-field checks).
     - rag.query message→query alias (mirrors RagQueryTool.execute);
-      code.sandbox message→code alias (same recovery philosophy).
+      code.sandbox message→code alias (same recovery philosophy). The
+      alias is MOVED, not copied: tool key sets are closed, so leaving
+      `message` behind after mapping it would be rejected as litter.
     Pure function — safe to unit test without Ollama/DB.
     """
     normalized = dict(action_input)
@@ -110,129 +157,49 @@ def _normalize_react_input(executor: str, action_input: dict) -> dict:
             normalized["message"] = nested["message"]
         normalized.pop("agent", None)
     normalized.pop("tool_id", None)
-    if (
-        executor == "rag.query"
-        and not str(normalized.get("query", "")).strip()
-        and str(normalized.get("message", "")).strip()
-    ):
-        normalized["query"] = str(normalized["message"]).strip()
-    elif (
-        executor == "code.sandbox"
-        and not str(normalized.get("code", "")).strip()
-        and str(normalized.get("message", "")).strip()
-    ):
-        normalized["code"] = str(normalized["message"]).strip()
+    alias_target = {
+        "rag.query": "query",
+        "code.sandbox": "code",
+    }.get(executor)
+    if alias_target is not None:
+        message = str(normalized.get("message", "") or "").strip()
+        if message and not str(normalized.get(alias_target, "") or "").strip():
+            normalized[alias_target] = message
+        normalized.pop("message", None)
     return normalized
 
 
-def _validate_react_input(executor: str, action_input: dict) -> str | None:
-    """Return None when valid, else a correct-shape hint string.
-
-    Agents need input.message; tools need their flat schema fields.
+def _validate_react_input(
+    executor: str, action_input: dict, tools: ToolRegistry
+) -> str | None:
+    """Return None when valid, else the tool's own correct-shape hint.
+    The pre-flight check exists for iteration economics, not correctness:
+    `execute_tool` validates too, but a failing step is retried twice inside
+    `run_plan_graph`, so a malformed call would cost three executions and
+    three identical errors in the scratchpad. Caught here it costs one idle
+    turn and nothing else (ADR-031).
+    The rules are NOT re-implemented here -- `tools.get(executor)` owns them
+    (schema + cross-field + example). This function only decides *whether* to
+    reject, using the tool that will actually run.
     """
-    if executor in ("reasoning", "coding", "vision"):
-        return None  # agent message check lives at the call site
-    if executor == "rag.query":
-        if str(action_input.get("query", "")).strip():
-            return None
-        return _TOOL_INPUT_HINTS["rag.query"]
-    if executor == "code.sandbox":
-        if str(action_input.get("code", "")).strip():
-            return None
-        return _TOOL_INPUT_HINTS["code.sandbox"]
-    if executor == "plot.chart":
-        labels = action_input.get("labels")
-        values = action_input.get("values")
-        series = action_input.get("series")
-        if not str(action_input.get("chart_type", "")).strip():
-            return _TOOL_INPUT_HINTS["plot.chart"]
-        if not isinstance(labels, list) or not labels:
-            return _TOOL_INPUT_HINTS["plot.chart"]
-        if "series_labels" in action_input:
-            # Trace 07fb4f59 iter-4 shape: invented key alongside nested
-            # values — the tool reads `series`, never `series_labels`.
-            return (
-                "plot.chart has no 'series_labels' field; for grouped "
-                "comparisons pass 'series: [{label, values}]' with shared "
-                "'labels', never nested 'values' arrays"
-            )
-        if series is not None:
-            if values is not None:
-                return (
-                    "plot.chart takes either 'values' (single series) or "
-                    "'series' (multi-series comparison), never both"
-                )
-            if not isinstance(series, list) or not series:
-                return _TOOL_INPUT_HINTS["plot.chart"]
-            for entry in series:
-                if (
-                    not isinstance(entry, dict)
-                    or not str(entry.get("label", "")).strip()
-                ):
-                    return (
-                        "plot.chart 'series' entries must be "
-                        "{label, values} objects with a non-empty label"
-                    )
-                entry_values = entry.get("values")
-                if (
-                    not isinstance(entry_values, list)
-                    or not entry_values
-                    or any(isinstance(v, (list, dict)) for v in entry_values)
-                ):
-                    return (
-                        f"plot.chart series {entry.get('label')!r} 'values' "
-                        "must be a flat array of numbers"
-                    )
-            if not str(action_input.get("title", "")).strip():
-                return (
-                    "plot.chart needs a short 'title' naming the metric "
-                    "and comparison (e.g. 'mAP@50-95: FASDD_CV vs "
-                    "AgniNetra'); retry with the same data plus a title"
-                )
-            return None
-        # Single-series: values must be a flat array of numbers. Nested
-        # arrays (trace 07fb4f59 iters 1+4) fail in the tool with
-        # "'values' must all be numbers" — catch here as an idle turn so
-        # the iteration budget is preserved for a corrected shape.
-        if not isinstance(values, list) or not values:
-            return _TOOL_INPUT_HINTS["plot.chart"]
-        if any(isinstance(v, (list, dict)) for v in values):
-            return (
-                "plot.chart 'values' must be a flat array of numbers "
-                "(one per label); for grouped comparisons use "
-                "'series: [{label, values}]' with shared 'labels' instead "
-                "of nesting arrays inside 'values'"
-            )
-        if not str(action_input.get("title", "")).strip():
-            return (
-                "plot.chart needs a short 'title' naming the metric "
-                "and comparison (e.g. 'mAP@50-95: FASDD_CV vs "
-                "AgniNetra'); retry with the same data plus a title"
-            )
-        return None
-    if executor == "doc.convert":
-        if str(action_input.get("file_id", "")).strip() and str(
-            action_input.get("target_format", "")
-        ).strip().lower() in ("md", "docx", "pdf"):
-            return None
-        return _TOOL_INPUT_HINTS["doc.convert"]
-    if executor == "doc.generate":
-        if str(action_input.get("title", "")).strip() and isinstance(
-            action_input.get("sections"), list
-        ):
-            return None
-        return _TOOL_INPUT_HINTS["doc.generate"]
-    if executor == "image.generate":
-        if str(action_input.get("message", "")).strip():
-            return None
-        return _TOOL_INPUT_HINTS["image.generate"]
-    return None  # notebook.inspect + unknown tools: execution is the check
+    if executor not in tools:
+        return None  # agents (the message check lives at the call site)
+    return tools.get(executor).explain_invalid(action_input)
 
 
 def _output_type(executor: str, is_final: bool) -> str:
     if is_final:
         return "answer"
-    return _TOOL_OUTPUT_TYPES.get(executor, "text")
+    tool_type = _TOOL_OUTPUT_TYPES.get(executor)
+    if tool_type is not None:
+        return tool_type
+    # A non-final AGENT step is a scratchpad observation, not an answer.
+    # Typed "text" it was SHOWn next to the final synthesis, duplicating it
+    # and leaking ASCII-art redraws of a chart the tool would have drawn
+    # (trace c9b02eef's summary led with an ASCII India/China plot). Hidden
+    # type instead: the aggregator's anti-blank fallback still surfaces it
+    # when it is the only output.
+    return "observation"
 
 
 #: Fields the ReAct model may (wrongly) put the final answer into when it
@@ -373,6 +340,35 @@ class ReactResult:
         self.result = result
 
 
+def _route_block(route_intent: str | None, corpus_state: str) -> str:
+    """Prompt block stating what L1 already decided and what the corpus allows.
+
+    The 3B model on the reported trace re-litigated "should I search the
+    documents?" on every iteration and answered differently each time. The
+    router's verdict is a fact by the time ReAct runs — state it, and state
+    the one deterministic rule that follows from the corpus state.
+    """
+    lines: list[str] = []
+    if route_intent and route_intent != "unknown":
+        lines.append(
+            f"Router intent: {route_intent} — serve THIS intent; do not "
+            f"re-classify the request."
+        )
+    lines.append(f"Corpus: {_CORPUS_ROUTE_LINES.get(corpus_state, _CORPUS_ROUTE_LINES['unknown'])}")
+    if route_intent in _NUMBERS_FIRST_INTENTS:
+        lines.append(
+            "No observation holds numbers yet unless the scratchpad shows some: "
+            "your FIRST step must be a reasoning step recalling the figures, "
+            "then plot.chart with those literal numbers."
+        )
+    if corpus_state in ("empty", "processing"):
+        lines.append(
+            "On an empty corpus a proposed rag.query is replaced by a "
+            "general-knowledge reasoning step — do not retry rag.query."
+        )
+    return "Route:\n" + "\n".join(lines)
+
+
 class ReActEngine:
     """Thought → action → observation loop with a single `run()` interface.
 
@@ -406,6 +402,7 @@ class ReActEngine:
         notebook_id: str | None,
         context: str | None = None,
         notebook_context: str | None = None,
+        route_intent: str | None = None,
         max_iterations: int = MAX_REACT_ITERATIONS,
         timeout_ms: int | None = None,
         cancel_event: threading.Event | None = None,
@@ -414,6 +411,8 @@ class ReActEngine:
     ) -> ReactResult:
         """Run the thought → action → observation loop to answer request_text.
 
+        `route_intent` is the L1 router's verdict (ADR-035) — it only sharpens
+        the prompt; the loop still fails honest if the intent cannot be served.
         `parent_span_ctx` is the `react`-span context opened by the caller
         (orchestrator) — per-iteration spans parent explicitly under it so the
         trace reads `run → react → react:iter-N → step:rN` even across
@@ -442,10 +441,17 @@ class ReActEngine:
         # under different labels). Re-plotting the same data renders the same
         # bars, so the frontend would show the same plot twice.
         plotted_data: set[tuple] = set()
-        # rag.query is provably useless when the snapshot holds zero ready
-        # files (same argument as the L2 empty-corpus short-circuit) — refuse
-        # it once instead of burning iterations on "(no chunks retrieved)".
-        corpus_empty = get_corpus_state(notebook_context) in ("empty", "processing")
+        # Corpus tri-state drives both the prompt and one deterministic
+        # substitution below: on empty/processing, a proposed rag.query is
+        # replaced by a general-knowledge reasoning step rather than refused
+        # (a refusal burned an iteration and, charged to the idle budget,
+        # could end the run with zero progress — trace c9b02eef).
+        corpus_state = get_corpus_state(notebook_context)
+        corpus_empty = corpus_state in ("empty", "processing")
+        route_block = _route_block(route_intent, corpus_state)
+        # Whether notebook.inspect has already run — the only case where
+        # probing is worth an iteration is an unavailable inventory.
+        inspected = False
         sandbox_available = _sandbox_available()
         # Consecutive turns that produced no observation (provider errors,
         # unknown executors, empty answers). Caps garbage-loops against a
@@ -493,15 +499,11 @@ class ReActEngine:
                     "Input shape (FLAT object, never nested under 'agent'):\n"
                     '- agent executor: {"message": "..."} with observations '
                     "inlined verbatim — never reference steps by number.\n"
-                    "- tool executor: its FLAT schema fields, e.g. rag.query "
-                    '{"query": "...", "file_id": "..."}, plot.chart '
-                    '{"chart_type": "bar", "labels": [...], "values": [...], '
-                    '"title": "<metric>: A vs B"}, '
-                    'code.sandbox {"code": "..."}, doc.convert '
-                    '{"file_id": "...", "target_format": "md|docx|pdf"}, '
-                    'doc.generate {"title": "...", "sections": [{"heading": '
-                    '...,"body": ...}]}, image.generate {"message": "..."}, '
-                    "notebook.inspect {}.\n"
+                    "- tool executor: its FLAT schema fields, exactly as the "
+                    "examples below show. A key the tool does not list is "
+                    "rejected, not ignored.\n"
+                    + _tool_examples(tool_ids, self._tools)
+                    + "\n"
                     'WRONG: {"agent": {"message": "..."}} for a tool — '
                     "the tool reads top-level fields, so this fails with "
                     "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
@@ -512,15 +514,10 @@ class ReActEngine:
                     "When the notebook has no documents and no observation "
                     "holds numbers, recall approximate figures with a reasoning "
                     "step first (state they are approximate), then plot.chart. "
-                    "Bar/line charts MUST use plot.chart with literal numbers "
-                    "from observations (or a prior reasoning step) — never "
-                    "code.sandbox for charting. Every plot.chart MUST include "
-                    "a short 'title' naming the metric and comparison "
-                    "(e.g. 'mAP@50-95: FASDD_CV vs AgniNetra'). "
-                    "Each plot.chart must cover a "
-                    "DIFFERENT metric — never re-plot numbers already charted; "
-                    "grouped comparisons use series:[{label, values}] with "
-                    "shared labels, never nested values arrays. "
+                    + _plot_rules()
+                    + " "
+                    + route_block
+                    + " "
                     + (
                         ""
                         if sandbox_available
@@ -660,14 +657,65 @@ class ReActEngine:
                         }
                     )
                     continue
+                if (
+                    not inspected
+                    and corpus_state == "unknown"
+                    and route_intent in _DOC_INTENT_VALUES
+                    and executor != "notebook.inspect"
+                    and not guard.record_blocked()
+                ):
+                    # The inventory failed to load, so the prompt cannot say
+                    # what is uploaded — probing is the only way to learn it
+                    # (ADR-027 freshness probe). Charged to the block budget,
+                    # not the idle budget: the proposal itself was valid.
+                    scratchpad.append(
+                        "the file inventory is unavailable, so call "
+                        "notebook.inspect {} first to see which documents are "
+                        "uploaded and their status."
+                    )
+                    iter_obs.update(
+                        output={
+                            "status": "retry",
+                            "thought": thought_in,
+                            "executor": executor,
+                            "error": "notebook.inspect required first",
+                        }
+                    )
+                    continue
                 raw_input = raw.get("input", {}) or {}
                 action_input = _normalize_react_input(
                     executor, dict(raw_input) if isinstance(raw_input, dict) else {}
                 )
-                if executor == "rag.query":
+                substituted_from: str | None = None
+                if corpus_empty and executor == "rag.query":
+                    # Deterministic substitution (ADR-035): retrieval on an
+                    # empty corpus can only return "(no chunks retrieved)",
+                    # so run the general-knowledge step the model actually
+                    # needs instead of refusing. It executes, so the
+                    # observation reaches the scratchpad and a repeat hits
+                    # the seen/failed guards rather than looping forever.
+                    # Runs BEFORE input validation on purpose: a malformed
+                    # rag.query on an empty corpus would otherwise burn an
+                    # idle turn correcting a call that was never going to run.
+                    substituted_from = executor
+                    executor = "reasoning"
+                    action_input = {
+                        "message": (
+                            "This notebook has no ready documents, so no "
+                            "retrieval was run. Answer the request from your "
+                            "own knowledge (state clearly when a figure is "
+                            f"approximate). Request: {request_text}"
+                        )
+                    }
+                    scratchpad.append(
+                        "note: rag.query was skipped — this notebook has no "
+                        "ready documents; the step below answers from general "
+                        "knowledge instead."
+                    )
+                elif executor == "rag.query":
                     action_input = _default_react_mode(request_text, action_input)
                 if executor in known_tools:
-                    hint = _validate_react_input(executor, action_input)
+                    hint = _validate_react_input(executor, action_input, self._tools)
                     if hint is not None:
                         if guard.record_idle():
                             iter_obs.update(
@@ -707,29 +755,6 @@ class ReActEngine:
                             "status": "retry",
                             "thought": thought_in,
                             "executor": executor,
-                        }
-                    )
-                    continue
-                if corpus_empty and executor == "rag.query":
-                    if guard.record_idle():
-                        iter_obs.update(
-                            output={
-                                "status": "failed",
-                                "error": "rag.query on a notebook with no ready documents",
-                            }
-                        )
-                        break
-                    scratchpad.append(
-                        "notebook has no ready documents — rag.query cannot "
-                        "return chunks; recall numbers with reasoning or answer "
-                        "directly."
-                    )
-                    iter_obs.update(
-                        output={
-                            "status": "retry",
-                            "thought": thought_in,
-                            "executor": executor,
-                            "error": "rag.query refused: empty corpus",
                         }
                     )
                     continue
@@ -876,6 +901,8 @@ class ReActEngine:
                 step_results.append(outcome)
                 guard.record_progress()  # an executed step is progress, even on tool failure
                 seen_actions.add(sig)
+                if executor == "notebook.inspect" and outcome.status is StepStatus.SUCCESS:
+                    inspected = True
                 thought = str(raw.get("thought", ""))[:300]
                 if outcome.status is StepStatus.SUCCESS:
                     if is_tool and executor == "plot.chart":
@@ -894,6 +921,7 @@ class ReActEngine:
                             "status": "success",
                             "thought": thought_in,
                             "executor": executor,
+                            "substituted_from": substituted_from,
                             "observation": _truncate(observation, 2000),
                         }
                     )
@@ -907,6 +935,7 @@ class ReActEngine:
                             "status": outcome.status.value,
                             "thought": thought_in,
                             "executor": executor,
+                            "substituted_from": substituted_from,
                             "error": _truncate(outcome.error, 500),
                         }
                     )
@@ -925,6 +954,50 @@ class ReActEngine:
                 steps.append(synth_step)
                 step_results.append(synth_outcome)
                 final_answered = True
+        if not final_answered and not any(
+            r.status is StepStatus.SUCCESS for r in step_results
+        ):
+            # Last resort (ADR-035): the loop executed nothing that worked, so
+            # answer the request verbatim with one reasoning step — the same
+            # shape as the `chat`/`knowledge_qa` builders. Trace c9b02eef
+            # ended a well-formed request as a run failure carrying the
+            # routing error "no deterministic builder for intent
+            # plot_standalone"; the routing was right and the user deserves
+            # an answer, not a taxonomy message.
+            last = self._last_resort_answer(
+                request_text,
+                context=context,
+                notebook_id=notebook_id,
+                timeout_ms=timeout_ms,
+                cancel_event=cancel_event,
+                on_event=on_event,
+            )
+            if last is not None:
+                steps.append(last[0])
+                step_results.append(last[1])
+                final_answered = True
+        if route_intent in _NUMBERS_FIRST_INTENTS and not any(
+            r.agent_id == "plot.chart" and r.status is StepStatus.SUCCESS
+            for r in step_results
+        ):
+            # The user asked for a chart and got prose. Report it: a plot
+            # intent whose malformed plot.chart attempts were all dropped
+            # as idle turns leaves no step result, so without this the run
+            # reports plain success and the missing artifact is invisible
+            # (trace c9b02eef: "success" with an ASCII-art redraw instead of
+            # a chart). No plan step — nothing executed.
+            step_results.append(
+                StepResult(
+                    step_id="r-chart",
+                    agent_id="plot.chart",
+                    status=StepStatus.FAILURE,
+                    error=(
+                        "no chart was generated for this plot request "
+                        "(every plot.chart proposal was rejected before "
+                        "execution)"
+                    ),
+                )
+            )
         plan = Plan(
             plan_id=str(uuid.uuid4()),
             goal=request_text,
@@ -1034,6 +1107,68 @@ class ReActEngine:
                     logger.warning("react final synthesis failed: %s", e)
         return None
 
+    def _last_resort_answer(
+        self,
+        request_text: str,
+        *,
+        context: str | None,
+        notebook_id: str | None,
+        timeout_ms: int | None,
+        cancel_event: threading.Event | None,
+        on_event: Callable[[dict], None] | None,
+    ) -> tuple[PlanStep, StepResult] | None:
+        """One ungrounded reasoning answer when the loop produced nothing.
+
+        Deliberately NOT document-grounded: there are no observations to
+        ground on, and the alternative (the aggregator's all-failed path)
+        shows the user the taxonomy's internal error text. Carries the
+        conversation context so the answer can still use prior turns.
+        Returns None on cancel or provider failure — the caller then fails
+        honest.
+        """
+        if cancel_event is not None and cancel_event.is_set():
+            return None
+        agent_id = (
+            "reasoning"
+            if "reasoning" in self._known_agents
+            else (self._agent_ids[0] if self._agent_ids else "")
+        )
+        if not agent_id:
+            return None
+        plan = Plan(
+            plan_id=f"react-lastresort-{uuid.uuid4().hex[:8]}",
+            goal=request_text,
+            steps=[
+                PlanStep(
+                    step_id="r-lastresort",
+                    agent_id=agent_id,
+                    input={"message": request_text},
+                    expected_output_type="answer",
+                )
+            ],
+        )
+        try:
+            result = run_plan_graph(
+                plan,
+                self._agents,
+                tool_registry=self._tools,
+                trace_id=self._trace_id,
+                notebook_id=notebook_id,
+                context=context,
+                fallback_message=request_text,
+                timeout_ms=timeout_ms or settings.default_timeout_ms,
+                on_event=on_event,
+                cancel_event=cancel_event,
+                parent_span_ctx=_get_trace_context(),
+            )
+        except Exception as e:  # noqa: BLE001 - honest failure below
+            logger.warning("react last-resort answer failed: %s", e)
+            return None
+        outcome = result.step_results[0] if result.step_results else None
+        if outcome is None or outcome.status is not StepStatus.SUCCESS:
+            return None
+        return plan.steps[0], outcome
+
 
 def run_react(
     request_text: str,
@@ -1045,6 +1180,7 @@ def run_react(
     notebook_id: str | None,
     context: str | None = None,
     notebook_context: str | None = None,
+    route_intent: str | None = None,
     max_iterations: int = MAX_REACT_ITERATIONS,
     timeout_ms: int | None = None,
     cancel_event: threading.Event | None = None,
@@ -1055,7 +1191,8 @@ def run_react(
 
     Thin wrapper over `ReActEngine` — preserved so existing callers
     (orchestrator, tests) are unaffected. `parent_span_ctx` is the
-    `react`-span context opened by the caller (orchestrator).
+    `react`-span context opened by the caller (orchestrator);
+    `route_intent` is the L1 router's verdict (ADR-035).
     """
     engine = ReActEngine(provider, agents, tools, trace_id)
     return engine.run(
@@ -1063,6 +1200,7 @@ def run_react(
         notebook_id=notebook_id,
         context=context,
         notebook_context=notebook_context,
+        route_intent=route_intent,
         max_iterations=max_iterations,
         timeout_ms=timeout_ms,
         cancel_event=cancel_event,

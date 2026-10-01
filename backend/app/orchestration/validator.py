@@ -35,11 +35,13 @@ _PROSE_STEP_REF = re.compile(
 )
 
 #: Known expected_output_type vocabulary. "summary" is a legacy/planner
-#: variant of "answer" (both are terminal prose). Unknown types are allowed
-#: (forward-compatible — the aggregator treats them as SHOW) but logged.
+#: variant of "answer" (both are terminal prose). "observation" is the
+#: ReAct internal type for a non-terminal agent step (scratchpad, never
+#: the answer). Unknown types are allowed (forward-compatible — the
+#: aggregator treats them as SHOW) but logged.
 _KNOWN_OUTPUT_TYPES = frozenset({
     "chunks", "answer", "numbers", "chart", "document", "text",
-    "clarification", "summary",
+    "clarification", "summary", "observation",
 })
 
 #: Terminal prose types that can ground a doc.generate report.

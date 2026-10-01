@@ -87,14 +87,20 @@ class FakeAgent(Agent):
     description = "test agent"
 
     def __init__(self, output: str = "done", stream: bool = False,
-                 clarify: bool = False):
+                 clarify: bool = False, fail: bool = False):
         self.output = output
         self.stream = stream
         self.clarify = clarify
+        self.fail = fail
         self.seen: list[dict] = []
 
     def execute(self, request: DelegationRequest) -> DelegationResponse:
         self.seen.append(dict(request.input))
+        if self.fail:
+            return DelegationResponse(
+                step_id=request.step_id, status=StepStatus.FAILURE,
+                output=None, error="fake agent failure",
+            )
         if self.stream and request.on_delta is not None:
             request.on_delta("chunk-")
         return DelegationResponse(
@@ -966,7 +972,10 @@ class TestReactFallback:
         assert result.status == "success" and result.summary == "react rescued"
         assert len(provider.models) == 3  # router + 2 react turns
 
-    def test_react_failure_surfaces_honest(self):
+    def test_react_failure_falls_back_to_last_resort_answer(self):
+        # The loop still fails fast (2 idle turns, no recall) but ADR-035
+        # adds one last-resort reasoning answer, so the user gets an answer
+        # instead of the internal "no deterministic builder" text.
         provider, orch = _recall_orchestrator([
             _router_miss(),
             {"thought": "bad pick", "executor": "ghost",
@@ -974,9 +983,12 @@ class TestReactFallback:
             {"thought": "bad pick again", "executor": "ghost",
              "input": {}, "is_final": False},
         ])
-        with pytest.raises(OrchestrationError, match="L3 ReAct required"):
-            orch.run("a vague request with no clear shape", "nb-1")
-        assert len(provider.models) == 3  # router + 2 idle react turns, no retry
+        result = orch.run("a vague request with no clear shape", "nb-1")
+        assert result.status == "success"
+        assert [r.step_id for r in result.step_results] == ["r-lastresort"]
+        # router + 2 idle react turns, no recall; the last-resort answer
+        # runs on the agent, not the provider.
+        assert len(provider.models) == 3
 
     def test_builder_clarification_is_terminal(self):
         provider, orch = _recall_orchestrator(
@@ -1005,11 +1017,10 @@ class TestReactFallback:
 
 class TestOrchestrator:
     def _orchestrator(self, queued: list[dict], rag=None, stream=False,
-                      output="final answer"):
+                      output="final answer", agent=None):
         provider = FakeProvider(queued=queued)
-        agent = ReasoningFakeAgent(output=output, stream=stream)
         agents = AgentRegistry()
-        agents.register(agent)
+        agents.register(agent or ReasoningFakeAgent(output=output, stream=stream))
         tools = get_default_tool_registry(rag=rag or FakeRAG())
         planner = Planner(provider, agents, tools)
         validator = PlanValidator(agents, tools)
@@ -1054,7 +1065,7 @@ class TestOrchestrator:
         assert len(result.step_results) == 1
         assert result.summary == "final answer"
 
-    def test_builder_miss_with_failed_react_raises(self):
+    def test_builder_miss_with_failed_react_still_answers(self):
         _provider, orch = self._orchestrator([
             {"intent": "unknown", "queries": [], "confidence": 0.0},
             {"thought": "bad pick", "executor": "ghost",
@@ -1062,8 +1073,9 @@ class TestOrchestrator:
             {"thought": "bad pick again", "executor": "ghost",
              "input": {}, "is_final": False},
         ])
-        with pytest.raises(OrchestrationError):
-            orch.run("a vague request with no clear shape here", "nb-1")
+        result = orch.run("a vague request with no clear shape here", "nb-1")
+        assert result.status == "success"
+        assert [r.step_id for r in result.step_results] == ["r-lastresort"]
 
     def test_cancelled_run_raises(self):
         provider, orch = self._orchestrator(
@@ -1084,8 +1096,8 @@ class TestOrchestrator:
         ]
 
     def test_failed_react_surfaces_honest_without_retry(self):
-        # No planner recall: builder miss → L3 ReAct → honest error.
-        # Router + 2 idle react turns, then the original error surfaces.
+        # No planner recall: builder miss → L3 ReAct → 2 idle turns → the
+        # single last-resort answer (ADR-035). Still exactly one pass.
         provider, orch = self._orchestrator([
             {"intent": "unknown", "queries": [], "confidence": 0.0},
             {"thought": "bad pick", "executor": "ghost",
@@ -1093,9 +1105,25 @@ class TestOrchestrator:
             {"thought": "bad pick again", "executor": "ghost",
              "input": {}, "is_final": False},
         ])
+        result = orch.run("a vague request with no clear shape here", "nb-1")
+        assert result.summary == "final answer"
+        # router + 2 idle react turns; the last-resort answer uses the
+        # agent (no provider call), and there is no recall.
+        assert len(provider.models) == 3
+
+    def test_last_resort_failure_still_raises(self):
+        # The last-resort answer is a best effort, not a fabrication: when
+        # the agent/provider is down the run fails honest with the original
+        # routing error (no silent empty answer).
+        _provider, orch = self._orchestrator([
+            {"intent": "unknown", "queries": [], "confidence": 0.0},
+            {"thought": "bad pick", "executor": "ghost",
+             "input": {}, "is_final": False},
+            {"thought": "bad pick again", "executor": "ghost",
+             "input": {}, "is_final": False},
+        ], agent=ReasoningFakeAgent(output="", fail=True))
         with pytest.raises(OrchestrationError, match="L3 ReAct required"):
             orch.run("a vague request with no clear shape here", "nb-1")
-        assert len(provider.models) == 3
 
 
 # --- Nested executor ids (live trace: model buries agent_id/tool_id in input) ---
