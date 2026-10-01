@@ -28,6 +28,10 @@ _Avoid_: Chat entry, turn, response
 The Router's structured restatement of the user's intent (`{intent, confidence}` + slots). Derived from the user's message by the L1 router LLM; L2 builders construct the plan around the goal, L3 ReAct answers directly when no builder applies.
 _Avoid_: Intent (bare), objective, task
 
+**DOC intent** vs **NON-DOC intent**:
+Whether an intent's answer comes from the notebook or from the model. DOC intents (`qa_single/compare_multi/summarize/summarize_plot/report/convert_*/quiz`) are the only ones allowed to retrieve; NON-DOC intents (`chat/knowledge_qa/code/plot_standalone`) answer from general knowledge and must never emit `rag.query`. The split is the taxonomy's organizing principle (ADR-035) and decides router precedence on an empty notebook.
+_Avoid_: Retrieval intent, grounded intent
+
 ### Retrieval
 
 **VectorRAG**:
@@ -57,15 +61,15 @@ _Avoid_: Passage, segment, slice
 ### Orchestration
 
 **Router**:
-L1 sole dispatcher (ADR-032): one cheap `generate_structured` call per request (`{intent, confidence}`; `<0.6` → `unknown` → ReAct; failures fail open to ReAct). Every request — including greetings — goes through the router; the L0 fast-path and L3 mega-prompt were deleted.
+L1 sole dispatcher (ADR-032): one cheap `generate_structured` call per request (`{intent, confidence}` + convert slots; `<0.6` → `unknown` → ReAct; failures fail open to ReAct). Every request — including greetings — goes through the router; the L0 fast-path and L3 mega-prompt were deleted. The prompt states the notebook snapshot and its corpus line, and splits the menu into **DOC-BASED** intents (the answer lives in the notebook) and **NON-DOC** intents (the answer lives in the model's own knowledge) — the doc/non-doc line is the decisive rule (ADR-035).
 _Avoid_: Planner (deleted), dispatcher (bare), coordinator
 
 **Builder**:
-L2 deterministic plan constructor: fixed DAGs for `chat/qa_single/compare_multi/summarize/quiz/convert_one/convert_all` (wiring by construction, `top_k=4` per file shard, `>5` files → ReAct). Trivial/conversational requests yield a single `reasoning` step via the `chat` builder or engine trivial-plan repair (never an empty plan — ADR-026).
+L2 deterministic plan constructor: fixed DAGs for every deterministic intent — `chat/knowledge_qa/code` (NON-DOC, never retrieve) and `qa_single/compare_multi/summarize/quiz/report/convert_one/convert_all/convert_ambiguous` (DOC, corpus tri-state first). Wiring by construction, `top_k=4` per file shard, `>5` files → ReAct; an unresolvable convert yields one counter-question naming the ready files. Trivial/conversational requests yield a single `reasoning` step via the `chat` builder or engine trivial-plan repair (never an empty plan — ADR-026). `DETERMINISTIC_INTENTS` is derived as `(DOC_INTENTS | NON_DOC_INTENTS) − REACT_ONLY_INTENTS`, so a new intent is deterministic by default.
 _Avoid_: Planner, template
 
 **ReAct fallback**:
-L3 general fallback (promoted from L4 per ADR-032): thought → action → observation loop (max 6 iterations, no placeholders) when no L2 builder applies, the router is unsure, or validation rejects the plan. Failure stays honest (`OrchestrationError`).
+L3 general fallback (promoted from L4 per ADR-032): thought → action → observation loop (max 6 iterations, no placeholders) when no L2 builder applies, the router is unsure, or validation rejects the plan. It is route-aware (ADR-035): the router's intent and the corpus state are prompt input, not something it re-derives. A loop that executes nothing still answers the request verbatim; a genuinely failed run stays honest (`OrchestrationError`).
 _Avoid_: Planner, mega-prompt
 
 **Step**:
@@ -78,6 +82,9 @@ _Avoid_: AgentPlugin, model, brain
 
 **Tool**:
 A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `doc.generate` (make reports from answer text), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless), `code.sandbox` (run code), `image.generate` (make images). Tools receive structured input and return structured output.
+
+**Tool contract** (ADR-035):
+The three declarations a tool owns and no consumer copies: `input_schema` (declarative shape, enforced by `tools/schema.py` — closed key set, required fields, types, enums), `validate_input` (cross-field rules only the tool can state, called by its own `execute()`), and `input_example` (one copyable call shown to the model). `required_for_model` adds rules a *model* must satisfy that direct callers may omit. Callers read these through `ToolRegistry`; the ReAct pre-flight check is a registry lookup, not a second rule set.
 _Avoid_: ToolPlugin, function, capability
 
 **Plan DAG**:
@@ -89,8 +96,9 @@ Deterministic check that agents/tools exist, dependencies have no cycles, step b
 _Avoid_: Checker, pre-validator
 
 **Aggregator**:
-Component that assembles step outputs into a final answer. Deterministic only (Q36, type-aware per ADR-023) — hides intermediate `chunks`/`numbers`, shows terminal text + chart placeholder; no LLM synthesis step.
+Component that assembles step outputs into a final answer. Deterministic only (Q36, type-aware per ADR-023), hides intermediate `chunks`/`numbers`/`observation` (a non-terminal ReAct scratchpad step) and `notebook.inspect`, shows terminal text + chart placeholder; no LLM synthesis step.
 _Avoid_: Synthesizer, combiner
+
 
 **Engine**:
 Executor (built on LangGraph) that runs the plan steps in dependency order. No retry loop — failures are returned honestly.
@@ -157,7 +165,7 @@ _Avoid_: Tracing, monitoring, analytics
 1. Frontend ensures login (`GET /api/auth/me`, else login) then persists user **message** via `POST /api/notebooks/{id}/messages` (`credentials:include`)
 2. Frontend calls `POST /v1/runs {notebook_id, message}` → `202 {run_id}`
 3. Run worker loads `conversation_summary` + messages → `build_memory_context()` → starts orchestration with `context=`
-4. **Router** (L1) classifies intent → **Builder** (L2) emits a fixed DAG or **ReAct** (L3) answers stepwise; **Engine** executes **steps** (parallel where possible)
+4. **Router** (L1) classifies intent — DOC-based or NON-DOC, against the notebook's corpus state — then **Builder** (L2) emits a fixed DAG or **ReAct** (L3, seeded with that same intent + corpus state) answers stepwise; **Engine** executes **steps** (parallel where possible)
 5. `rag.query` receives `notebook_id` from the Run; worker emits SSE **sources** on completion
 6. **Aggregator** assembles step outputs (deterministic, type-aware per ADR-023: terminal text shown, intermediates hidden); chart/SVG step outputs aggregate to a short placeholder — the SVG bytes travel via the SSE **artifacts** event only. Every live `delta` streams into the main bubble; the Steps panel is a mirror-only, ephemeral view.
 7. Worker persists updated `conversation_summary` if memory folded new turns
