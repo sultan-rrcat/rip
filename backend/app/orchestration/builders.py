@@ -656,10 +656,22 @@ def build(
         # No file and/or no format named: one counter-question, no guess.
         return build_convert_ambiguous(request_text, notebook_context)
     if route.intent is Intent.CONVERT_ALL:
+        # Unlike convert_one (unresolvable hints fall through to the
+        # counter-question), "*" with zero ready files builds a doomed
+        # doc.convert that fails after retries — clarify instead.
+        state = _corpus_state(notebook_context)
+        if state in ("empty", "processing"):
+            return build_no_docs_clarification(
+                request_text, processing=(state == "processing")
+            )
         if not route.target_format:
             return build_convert_ambiguous(request_text, notebook_context)
         return build_convert_all(route.target_format, request_text)
     if route.intent is Intent.CONVERT_ONE:
+        # No corpus guard here on purpose: an unresolvable hint (empty
+        # notebook, unready match, ambiguous match) already falls through
+        # to the counter-question below, which names the ready files — a
+        # better message than the generic upload/wait clarification.
         if not route.target_format:
             return build_convert_ambiguous(request_text, notebook_context)
         file_id = _resolve_convert_file_id(route.file_hint, notebook_context)

@@ -213,6 +213,34 @@ def test_convert_all_without_format_asks_for_format() -> None:
     _assert_asks_counter_question(build("convert everything", route))
 
 
+def test_convert_all_empty_corpus_clarifies_instead_of_failing() -> None:
+    # "*" with zero ready files would build a doomed doc.convert (fails
+    # after retries) — clarify instead. Live UAT: "Convert it to docx" on
+    # an empty notebook recovered format=docx and failed the run.
+    route = RouterResult(
+        intent=Intent.CONVERT_ALL, confidence=0.9, routed_by="llm",
+        file_hint="*", target_format="docx",
+    )
+    plan = build("convert it to docx", route, "(no documents)")
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].tool_id is None
+    assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
+    _validator().validate(plan)
+
+
+def test_convert_all_processing_corpus_asks_to_wait() -> None:
+    route = RouterResult(
+        intent=Intent.CONVERT_ALL, confidence=0.9, routed_by="llm",
+        file_hint="*", target_format="pdf",
+    )
+    plan = build(
+        "convert all to pdf", route, "1 file(s): big.pdf [processing] id=zzz"
+    )
+    assert plan is not None and len(plan.steps) == 1
+    assert "wait" in plan.steps[0].input["message"]
+    _validator().validate(plan)
+
+
 def test_convert_one_resolves_literal_id() -> None:
     route = RouterResult(
         intent=Intent.CONVERT_ONE, confidence=0.9, routed_by="llm",
