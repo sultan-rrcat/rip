@@ -81,7 +81,7 @@ A named capability (reasoning, coding, vision). Agents execute steps that requir
 _Avoid_: AgentPlugin, model, brain
 
 **Tool**:
-A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `doc.generate` (make reports from answer text), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless), `code.sandbox` (run code), `image.generate` (make images). Tools receive structured input and return structured output.
+A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `doc.generate` (write files: titled reports from answer text, or verbatim txt/csv/md/json/code files from content, byte-for-byte), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless), `code.sandbox` (run code), `image.generate` (make images). Tools receive structured input and return structured output.
 
 **Tool contract** (ADR-035):
 The three declarations a tool owns and no consumer copies: `input_schema` (declarative shape, enforced by `tools/schema.py` — closed key set, required fields, types, enums), `validate_input` (cross-field rules only the tool can state, called by its own `execute()`), and `input_example` (one copyable call shown to the model). `required_for_model` adds rules a *model* must satisfy that direct callers may omit. Callers read these through `ToolRegistry`; the ReAct pre-flight check is a registry lookup, not a second rule set.

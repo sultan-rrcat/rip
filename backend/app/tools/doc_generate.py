@@ -1,12 +1,19 @@
-"""doc.generate tool — MD + DOCX + PDF from one template model.
+"""doc.generate tool — report files AND verbatim text files.
 
-Input is a small report model: ``title``, ``sections[{heading, body}]``,
-optional ``tables[{headers[], rows[][]}]``. Markdown renders with the stdlib;
-DOCX (`python-docx`) and PDF (`reportlab`) are LAZY imports — a deployment
-without them fails honest per call instead of breaking tool import.
+Two paths, exactly one per call:
 
-Binaries travel as base64 in ToolResponse.data with Markdown inline as
-`output`; durable delivery arrives with file-based artifacts (Q34).
+1. Report path (``title`` + ``sections[{heading, body}]``, optional
+   ``tables``): renders Markdown + DOCX + PDF from one template model.
+   Markdown renders with the stdlib; DOCX (`python-docx`) and PDF
+   (`reportlab`) are LAZY imports — a deployment without them fails honest
+   per call instead of breaking tool import.
+2. Verbatim path (``content`` + ``format``/``filename``): writes the text
+   byte-for-byte as a txt/csv/md/json/code file (no LLM rendering, no
+   report template). The writer's prose is the file — e.g. a reasoning
+   step's CSV table becomes ``result.csv``.
+
+Binaries travel as base64 in ToolResponse.data with Markdown/text inline
+as `output`; durable delivery arrives with file-based artifacts (Q34).
 
 Effect class: sandboxed (bounded compute producing artifacts).
 
@@ -164,14 +171,78 @@ def _valid_tables(tables: Any) -> list[dict] | None:
     return clean
 
 
+#: Plain-text extensions the verbatim path may write. Deliberately
+#: data/text only — no executables, no archives, no rendered binaries
+#: (those stay on the report path or doc.convert).
+_VERBATIM_EXTENSIONS = frozenset({
+    "txt", "md", "csv", "json", "py", "js", "ts", "html", "css", "sh",
+    "yaml", "yml", "xml",
+})
+
+_VERBATIM_MIMES = {
+    "txt": "text/plain",
+    "md": "text/markdown",
+    "csv": "text/csv",
+    "json": "application/json",
+    "py": "text/x-python",
+    "js": "text/javascript",
+    "ts": "text/typescript",
+    "html": "text/html",
+    "css": "text/css",
+    "sh": "text/x-sh",
+    "yaml": "text/yaml",
+    "yml": "text/yaml",
+    "xml": "text/xml",
+}
+
+
+def _verbatim_extension(tool_input: dict) -> tuple[str | None, str | None]:
+    """Resolve (extension, error) for the verbatim path.
+
+    `filename` (e.g. "result.csv") wins when present; else `format`
+    (default "txt"). Both present must agree — a caller saying
+    format=csv for "notes.txt" is confused, fail honest.
+    """
+    raw_name = tool_input.get("filename")
+    name_ext: str | None = None
+    if raw_name is not None:
+        name = str(raw_name).strip()
+        if "/" in name or "\\" in name or not name or name.startswith("."):
+            return None, "'filename' must be a bare file name like 'result.csv'"
+        ext = name.rsplit(".", 1)[1].lower() if "." in name else ""
+        if ext not in _VERBATIM_EXTENSIONS:
+            return None, (
+                f"'filename' extension must be one of {sorted(_VERBATIM_EXTENSIONS)} "
+                f"(got {ext!r})"
+            )
+        name_ext = ext
+    raw_format = tool_input.get("format")
+    fmt: str | None = None
+    if raw_format is not None:
+        fmt = str(raw_format).strip().lower()
+        if fmt not in _VERBATIM_EXTENSIONS:
+            return None, (
+                f"'format' must be one of {sorted(_VERBATIM_EXTENSIONS)} "
+                f"(got {fmt!r})"
+            )
+    if name_ext is not None and fmt is not None and name_ext != fmt:
+        return None, (
+            f"'filename' (.{name_ext}) and 'format' ({fmt!r}) disagree — "
+            "pass one, or make them agree"
+        )
+    return name_ext or fmt or "txt", None
+
+
 class DocGenerateTool(Tool):
     tool_id = "doc.generate"
     name = "Doc Generate"
     description = (
-        "Render a titled report as Markdown, DOCX and PDF. "
-        "Required input fields: title:string, sections:array of {heading:string, body:string}, "
-        "tables: optional array of {headers:[string], rows:[[any]]}. "
-        'Example: {"title":"Docker Overview","sections":[{"heading":"Intro","body":"..."}],"tables":[]}'
+        "Write a file: either a titled report (title + sections[{heading, body}], "
+        "optional tables → Markdown/DOCX/PDF) or a verbatim text file "
+        "(content + format/filename → txt/csv/md/json/code, byte-for-byte). "
+        'Report example: {"title":"Docker Overview","sections":[{"heading":"Intro","body":"..."}]}. '
+        'Verbatim example: {"content":"a,b\\n1,2\\n","filename":"result.csv"}. '
+        "Exactly one of sections/content per call."
     )
     input_schema: ClassVar[dict] = {
         "type": "object",
@@ -189,15 +260,19 @@ class DocGenerateTool(Tool):
                 },
             },
             "tables": {"type": "array"},
+            "content": {"type": "string"},
+            "format": {"type": "string"},
+            "filename": {"type": "string"},
         },
-        "required": ["title", "sections"],
+        "required": [],
         "additionalProperties": False,
     }
     input_example: ClassVar[str] = (
         'doc.generate {"title": "Docker Overview", "sections": '
         '[{"heading": "Intro", "body": "..."}], "tables": []}. A section '
         "body may be a {{id}} placeholder carrying an upstream answer step's "
-        "prose."
+        "prose. Verbatim file instead: "
+        'doc.generate {"content": "a,b\\n1,2\\n", "filename": "result.csv"}.'
     )
     output_schema: ClassVar[dict] = {
         "type": "object",
@@ -211,19 +286,74 @@ class DocGenerateTool(Tool):
     cost_class = "medium"
 
     def validate_input(self, tool_input: dict) -> str | None:
+        # Path presence first (before the closed-key schema check) so a
+        # call on neither path names both paths instead of one stray key.
+        has_sections = (
+            "sections" in tool_input and tool_input["sections"] is not None
+        )
+        has_content = (
+            "content" in tool_input and tool_input["content"] is not None
+        )
+        if has_sections and has_content:
+            return (
+                "pass either 'sections' (titled report) or 'content' "
+                "(verbatim file), never both"
+            )
+        if not has_sections and not has_content:
+            return (
+                "pass either 'sections' (titled report: title + sections) or "
+                "'content' (verbatim file: content + format/filename)"
+            )
         err = super().validate_input(tool_input)
         if err is not None:
             return err
-        if _valid_sections(tool_input.get("sections")) is None:
-            return "'sections' must be a non-empty array of {heading, body}"
-        if _valid_tables(tool_input.get("tables")) is None:
-            return "'tables' must be an array of {headers[], rows[][]}"
-        return None
+        if has_sections:
+            for stray in ("content", "format", "filename"):
+                if stray in tool_input and tool_input[stray] is not None:
+                    return (
+                        f"'{stray}' belongs to the verbatim file path — "
+                        "omit it for a titled report"
+                    )
+            if (
+                not isinstance(tool_input.get("title"), str)
+                or not tool_input["title"].strip()
+            ):
+                return "'title' is required in input"
+            if _valid_sections(tool_input.get("sections")) is None:
+                return "'sections' must be a non-empty array of {heading, body}"
+            if _valid_tables(tool_input.get("tables")) is None:
+                return "'tables' must be an array of {headers[], rows[][]}"
+            return None
+        if has_content:
+            for stray in ("sections", "tables"):
+                if stray in tool_input and tool_input[stray] is not None:
+                    return (
+                        f"'{stray}' belongs to the titled report path — "
+                        "omit it for a verbatim file"
+                    )
+            if (
+                not isinstance(tool_input.get("content"), str)
+                or not tool_input["content"]
+            ):
+                return "'content' must be a non-empty string"
+            _ext, ext_err = _verbatim_extension(tool_input)
+            if ext_err is not None:
+                return ext_err
+            return None
+        return (
+            "pass either 'sections' (titled report: title + sections) or "
+            "'content' (verbatim file: content + format/filename)"
+        )
 
     def execute(self, request: ToolRequest) -> ToolResponse:
         invalid = self.invalid_response(request.input)
         if invalid.error is not None:
             return invalid
+        if (
+            "content" in request.input
+            and request.input["content"] is not None
+        ):
+            return self._execute_verbatim(request.input)
         title = str(request.input["title"])
         sections = _valid_sections(request.input["sections"])
         tables = _valid_tables(request.input.get("tables"))
@@ -247,5 +377,31 @@ class DocGenerateTool(Tool):
                 "markdown": markdown,
                 "docx_b64": base64.b64encode(docx_bytes).decode("ascii"),
                 "pdf_b64": base64.b64encode(pdf_bytes).decode("ascii"),
+            },
+        )
+
+    def _execute_verbatim(self, tool_input: dict) -> ToolResponse:
+        """Write `content` byte-for-byte; no template, no rendering."""
+        content = str(tool_input["content"])
+        ext, ext_err = _verbatim_extension(tool_input)
+        if ext_err is not None:  # validated above; fail honest anyway
+            return ToolResponse(
+                tool_id=self.tool_id, ok=False, output=None, error=ext_err
+            )
+        raw_name = tool_input.get("filename")
+        filename = (
+            str(raw_name).strip()
+            if isinstance(raw_name, str) and str(raw_name).strip()
+            else f"document.{ext}"
+        )
+        mime = _VERBATIM_MIMES[ext]
+        return ToolResponse(
+            tool_id=self.tool_id,
+            ok=True,
+            output=content,
+            data={
+                "file_b64": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+                "filename": filename,
+                "mime": mime,
             },
         )

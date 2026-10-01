@@ -16,6 +16,8 @@ Collection keys on DATA SHAPES, never on tool ids (same shapes as Athena):
 - {"image_b64": ..., "mime": ...} → image
 - {"docx_b64": ...} / {"pdf_b64": ...} → document
 - {"markdown": ...} (only when it rides with binaries) → document (.md)
+- {"file_b64": ..., "filename": ..., "mime": ...} → document (verbatim
+  text file from doc.generate: txt/csv/md/json/code, byte-for-byte)
 - {"rows": [...], "row_count": ...} → data (.json)
 
 Anything else (plain text answers, stdout dumps, RAG passages) is NOT an
@@ -200,6 +202,24 @@ def _collect_from_data(
     rows = data.get("rows")
     if isinstance(rows, list) and "row_count" in data:
         add("data", MIME_JSON, f"{step_id}.json", json.dumps(rows).encode("utf-8"))
+
+    file_b64 = data.get("file_b64")
+    if isinstance(file_b64, str) and file_b64:
+        raw_name = data.get("filename")
+        filename = (
+            _safe(str(raw_name)) if isinstance(raw_name, str) and raw_name.strip()
+            else f"{step_id}.txt"
+        )
+        raw_mime = data.get("mime")
+        mime = (
+            str(raw_mime)
+            if isinstance(raw_mime, str) and raw_mime.strip()
+            else "text/plain"
+        )
+        try:
+            add("document", mime, filename, base64.b64decode(file_b64))
+        except ValueError:
+            logger.warning("artifact file_b64 undecodable run=%s step=%s", run_id, step_id)
 
     return out
 

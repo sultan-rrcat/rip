@@ -214,6 +214,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-036: doc.generate writes verbatim text files, not just reports
+
+- **Status:** Accepted
+- **Context:** UAT case 9 ("save the figures as scores.csv", "write me a quicksort script") has no legal tool call: `doc.generate` only rendered `title`+`sections` reports, `doc.convert` only converts uploads byte-for-byte, and `code.sandbox` runs code without persisting it. The report template is the wrong shape for CSV/JSON/code output.
+- **Decision:** `doc.generate` gains a second path, exactly one per call: `content` + `format`/`filename` writes the text byte-for-byte (txt/csv/md/json/py/js/ts/html/css/sh/yaml/yml/xml allowlist — data/text only, no executables or archives). `filename` wins when present and must agree with `format`; the report path (`title`+`sections`) is unchanged and rejects verbatim keys. Delivery reuses the artifact pipeline via a generic `file_b64`/`filename`/`mime` shape. The plan validator checks the either/or contract through the tool itself (placeholder-tolerant: inputs carrying `{{id}}` still validate, execution re-checks after resolution).
+- **Consequences:** Report builders/prompts unchanged; a new verbatim intent is future work — ReAct reaches the path via the tool example today. `artifacts.py` collects the generic file shape for any current or future producer.
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

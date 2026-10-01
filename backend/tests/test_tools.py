@@ -588,6 +588,94 @@ class TestDocGenerate:
         resp = execute_tool(reg, "doc.generate", {"sections": []})
         assert not resp.ok
 
+    def test_neither_path_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(reg, "doc.generate", {"title": "T"})
+        assert not resp.ok and "sections" in (resp.error or "")
+
+    def test_both_paths_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "doc.generate",
+            {"title": "T", "sections": [{"heading": "H", "body": "B"}],
+             "content": "raw"},
+        )
+        assert not resp.ok and "never both" in (resp.error or "")
+
+
+class TestDocGenerateVerbatim:
+    """Verbatim file path: content + format/filename, byte-for-byte."""
+
+    def test_csv_by_filename(self):
+        import base64
+
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "doc.generate",
+            {"content": "a,b\n1,2\n", "filename": "result.csv"},
+        )
+        assert resp.ok
+        assert resp.output == "a,b\n1,2\n"
+        assert resp.data["filename"] == "result.csv"
+        assert resp.data["mime"] == "text/csv"
+        assert base64.b64decode(resp.data["file_b64"]).decode() == "a,b\n1,2\n"
+
+    def test_code_file_by_format(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "doc.generate",
+            {"content": "print('hi')\n", "format": "py"},
+        )
+        assert resp.ok
+        assert resp.data["filename"] == "document.py"
+        assert resp.data["mime"] == "text/x-python"
+
+    def test_default_is_txt(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(reg, "doc.generate", {"content": "hello"})
+        assert resp.ok and resp.data["filename"] == "document.txt"
+
+    def test_filename_format_mismatch_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "doc.generate",
+            {"content": "x", "filename": "n.txt", "format": "csv"},
+        )
+        assert not resp.ok and "disagree" in (resp.error or "")
+
+    def test_executable_extension_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(
+            reg, "doc.generate", {"content": "x", "filename": "run.exe"}
+        )
+        assert not resp.ok and "extension" in (resp.error or "")
+
+    def test_empty_content_rejected(self):
+        reg = get_default_tool_registry()
+        resp = execute_tool(reg, "doc.generate", {"content": ""})
+        assert not resp.ok and "content" in (resp.error or "")
+
+    def test_verbatim_collects_as_artifact(self):
+        import base64
+
+        from app.agents.base import StepStatus
+        from app.artifacts import collect_artifacts
+        from app.orchestration.results import StepResult
+
+        result = StepResult(
+            step_id="s1", agent_id="doc.generate", status=StepStatus.SUCCESS,
+            output="a,b\n1,2\n",
+            data={
+                "file_b64": base64.b64encode(b"a,b\n1,2\n").decode(),
+                "filename": "result.csv", "mime": "text/csv",
+            },
+        )
+        found = collect_artifacts(
+            [result], upload_dir="x", notebook_id="nb", run_id="r",
+        )
+        assert found and found[0]["filename"] == "result.csv"
+        assert found[0]["mime"] == "text/csv"
+
 
 # --- code.sandbox (live docker) ---
 

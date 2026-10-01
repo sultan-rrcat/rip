@@ -48,6 +48,17 @@ _KNOWN_OUTPUT_TYPES = frozenset({
 _ANSWER_TYPES = frozenset({"answer", "summary", "text"})
 
 
+def _contains_placeholder(value: object) -> bool:
+    """Whether any string in `value` carries a {{id}} placeholder."""
+    if isinstance(value, str):
+        return bool(_PLACEHOLDER.search(value))
+    if isinstance(value, dict):
+        return any(_contains_placeholder(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_placeholder(v) for v in value)
+    return False
+
+
 class PlanValidationError(ValueError):
     """Raised when a plan fails validation. Message is the reason."""
 
@@ -492,6 +503,11 @@ class PlanValidator:
         `notebook_id` is exempt: the engine injects run-scoped truth at
         execution time, so the planner must never emit it. A value containing
         a {{id}} placeholder counts as present — it resolves at runtime.
+
+        doc.generate's either/or contract (report vs verbatim file) cannot
+        be a static `required` list, so its full input contract is checked
+        through the tool itself — unless the input carries placeholders,
+        which resolve at runtime past what a static contract can judge.
         """
         schemas: dict[str, dict] = {}
         for tool in self._tool_registry.manifest():
@@ -501,28 +517,40 @@ class PlanValidator:
                 continue
             schema = schemas.get(step.tool_id, {})
             required = schema.get("required", []) or []
-            if not required or not isinstance(step.input, dict):
-                continue
-            for field in required:
-                if field == "notebook_id":
-                    continue
-                value = step.input.get(field)
-                if value is None:
-                    raise PlanValidationError(
-                        f"step {step.step_id} ({step.tool_id}) is missing required "
-                        f"input field {field!r} — refusing to execute an "
-                        "unguarded tool call"
-                    )
-                if isinstance(value, str):
-                    if not value.strip():
+            if required and isinstance(step.input, dict):
+                for field in required:
+                    if field == "notebook_id":
+                        continue
+                    value = step.input.get(field)
+                    if value is None:
+                        raise PlanValidationError(
+                            f"step {step.step_id} ({step.tool_id}) is missing required "
+                            f"input field {field!r} — refusing to execute an "
+                            "unguarded tool call"
+                        )
+                    if isinstance(value, str):
+                        if not value.strip():
+                            raise PlanValidationError(
+                                f"step {step.step_id} ({step.tool_id}) has empty "
+                                f"required input field {field!r}"
+                            )
+                    elif isinstance(value, list) and not value:
                         raise PlanValidationError(
                             f"step {step.step_id} ({step.tool_id}) has empty "
                             f"required input field {field!r}"
                         )
-                elif isinstance(value, list) and not value:
+            if step.tool_id == "doc.generate" and isinstance(step.input, dict):
+                if _contains_placeholder(step.input):
+                    continue  # runtime-resolved; execution validates
+                try:
+                    tool = self._tool_registry.get(step.tool_id)
+                except KeyError:
+                    continue
+                err = tool.validate_input(step.input)
+                if err is not None:
                     raise PlanValidationError(
-                        f"step {step.step_id} ({step.tool_id}) has empty "
-                        f"required input field {field!r}"
+                        f"step {step.step_id} (doc.generate) {err} — refusing "
+                        "to execute an unguarded tool call"
                     )
 
     def _check_retrieval_output_types(self, plan: Plan) -> None:
