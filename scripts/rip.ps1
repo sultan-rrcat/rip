@@ -59,7 +59,7 @@ function Clear-StaleEnv {
     # Session-only: stale exports shadow .env for compose interpolation
     # (DB_* for POSTGRES_*, OLLAMA_* for OLLAMA_BASE_URL/model/timeout).
     Remove-Item Env:DB_HOST, Env:DB_PORT, Env:DB_NAME, Env:DB_USER, Env:DB_PASSWORD, Env:DB_CONNECT_TIMEOUT_S -ErrorAction SilentlyContinue
-    Remove-Item Env:OLLAMA_BASE_URL, Env:OLLAMA_DEFAULT_MODEL, Env:OLLAMA_TIMEOUT_MS, Env:OLLAMA_CONTEXT_WINDOW, Env:OLLAMA_IMAGE_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:OLLAMA_BASE_URL, Env:OLLAMA_DEFAULT_MODEL, Env:OLLAMA_TIMEOUT_MS, Env:OLLAMA_CONTEXT_WINDOW -ErrorAction SilentlyContinue
 }
 
 function Ensure-BackendCpus {

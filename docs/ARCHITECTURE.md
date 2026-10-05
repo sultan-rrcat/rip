@@ -19,12 +19,10 @@ Offline, single-codebase research assistant: document RAG + multi-agent orchestr
 │  ┌──────────────────┐    ┌────────────────────────────────┐  │
 │  │ RAG Pipeline      │    │ Orchestration (LangGraph)      │  │
 │  │ Docling → chunk   │◄───│ Plan → Execute DAG → Aggregate │  │
-│  │ BGE-M3 embed +    │    │ Agents: reasoning, coding,     │  │
-│  │ hybrid search +   │    │   vision                       │  │
-│  │ BGE rerank        │    │ Tools: rag.query, notebook.inspect,│  │
-│  └──────────────────┘    │   doc.generate, doc.convert,     │  │
-│                           │   plot.chart, code.sandbox,      │  │
-│                           │   image.generate                 │  │
+│  │ BGE-M3 embed +    │    │ Agents: reasoning              │  │
+│  │ hybrid search +   │    │ Tools: rag.query, notebook.inspect,│  │
+│  │ BGE rerank        │    │   doc.generate, doc.convert,     │  │
+│  └──────────────────┘    │   plot.chart                   │  │
 │                           │ Provider: Ollama (direct)      │  │
 │                           └────────────────────────────────┘  │
 │                                                               │
@@ -62,9 +60,9 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `services/file_processor.py`, `chat.py` | Background ingest job; context formatting + source extraction |
 | `providers/base.py`, `ollama.py`, `streaming.py` | `ModelProvider` contract, Ollama OpenAI-compat client, `<think>` filtering |
 | `providers/tracing.py` | `wrap_provider()` — records `llm.generate[.stream|_structured]` generations (no-op when Langfuse off) |
-| `agents/base.py`, `registry.py`, `reasoning.py`, `coding.py`, `vision.py` | Agent contract + fixed 3-agent set |
-| `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 7-tool set, direct execution (no approval gate) |
-| `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py`, `code_sandbox.py`, `image_generate.py` | The seven tools |
+| `agents/base.py`, `registry.py`, `reasoning.py` | Agent contract + fixed 1-agent set |
+| `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 5-tool set, direct execution (no approval gate) |
+| `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py` | The five tools |
 | `orchestration/plan.py`, `results.py` | Plan DAG models, step/execution results |
 | `orchestration/router.py` | L1 intent router — sole dispatcher, one `generate_structured` call (`{intent, confidence}`; `<0.6` → `unknown` → ReAct; failures fail open to ReAct) |
 | `orchestration/intents.py` | `Intent` enum + `ROUTER_CONFIDENCE_THRESHOLD=0.6` + `DETERMINISTIC_INTENTS` (7 builder intents) |

@@ -21,9 +21,9 @@ rag/pipeline.py, vector_rag.py
 routes/notebooks.py, files.py, messages.py, auth.py
 services/chat.py, file_processor.py
 providers/base.py, ollama.py, streaming.py, tracing.py
-agents/base.py, registry.py, reasoning.py, coding.py, vision.py
+agents/base.py, registry.py, reasoning.py
 tools/base.py, registry.py, executor.py, rag_query.py, notebook_inspect.py,
-  plot_chart.py, doc_generate.py, doc_convert.py, code_sandbox.py, image_generate.py
+  plot_chart.py, doc_generate.py, doc_convert.py
 orchestration/plan.py, planner.py (thin holder, no DAG prompt), router.py,
   intents.py, builders.py, react.py (shim over react_engine), react_engine.py,
   idle_guard.py, corpus.py, validator.py, aggregator.py,

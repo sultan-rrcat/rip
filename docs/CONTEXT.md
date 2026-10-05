@@ -73,11 +73,11 @@ A single unit of work in the plan. Each step has an agent (or tool) assignment a
 _Avoid_: PlanStep, task, unit
 
 **Agent**:
-A named capability (reasoning, coding, vision). Agents execute steps that require LLM reasoning. Each agent uses Ollama.
+A named capability (reasoning). Agents execute steps that require LLM reasoning. Each agent uses Ollama.
 _Avoid_: AgentPlugin, model, brain
 
 **Tool**:
-A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `doc.generate` (make reports from answer text), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless), `code.sandbox` (run code), `image.generate` (make images). Tools receive structured input and return structured output.
+A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `doc.generate` (make reports from answer text), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless). Tools receive structured input and return structured output.
 _Avoid_: ToolPlugin, function, capability
 
 **Plan DAG**:
@@ -101,7 +101,7 @@ Coordinator for the full run lifecycle: Router → Builder/ReAct → Engine → 
 _Avoid_: Coordinator, conductor, manager
 
 **Artifact**:
-A file produced by a tool that persists beyond the chat response (chart, document, image). Stored at `{UPLOAD_DIR}/{notebook_id}/artifacts/{run_id}/{step_id}/{filename}` (plus per-run `index.json`); surfaced via SSE `artifacts` event as download URLs (Q34). Charts (`kind: "chart"`, `image/svg+xml`) render inline in chat as `<img>` over the same URL — raw SVG markup is never injected into the DOM and never stored in the user-visible summary. Chart refs are also persisted on the assistant `messages.artifacts` by the frontend so previews survive reload. Distinct from `File` (user upload).
+A file produced by a tool that persists beyond the chat response (chart, document). Stored at `{UPLOAD_DIR}/{notebook_id}/artifacts/{run_id}/{step_id}/{filename}` (plus per-run `index.json`); surfaced via SSE `artifacts` event as download URLs (Q34). Charts (`kind: "chart"`, `image/svg+xml`) render inline in chat as `<img>` over the same URL — raw SVG markup is never injected into the DOM and never stored in the user-visible summary. Chart refs are also persisted on the assistant `messages.artifacts` by the frontend so previews survive reload. Distinct from `File` (user upload).
 _Avoid_: Output, result, file
 
 **File**:

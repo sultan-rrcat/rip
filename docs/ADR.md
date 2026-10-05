@@ -196,6 +196,13 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Migration:** the fix only applies to newly parsed documents. **Every already-ingested file must be re-processed** (`POST /api/files/{file_id}/process`, or re-upload) or it keeps its orphaned headings. Re-processing is now safe to repeat.
 - **Consequences:** Sections keep their titles across page boundaries, which improves reranking and grounding generally, not just for this report. Chunk counts drop for multi-page documents (finer page-local splits had been silently producing extra unlabelled chunks), so per-file `SUM(char_length)` falls and the ADR-033 shortcut fires more often. `test_ingest_chunking.py` pins heading survival across a page boundary, the no-empty-chunk guarantee, and delete-before-insert ordering.
 
+## ADR-035: Remove coding/vision agents and code.sandbox/image.generate tools
+
+- **Status:** Accepted
+- **Context:** Audit showed all 3 agents + 7 tools were implemented with docs/prompts matching registries exactly — nothing phantom. But `coding`/`vision` agents and `code.sandbox`/`image.generate` tools were degraded in practice: sandbox needs a Docker daemon (absent on the office host), image generation needs an image model (`OLLAMA_IMAGE_MODEL` empty by default), vision is text-only with no image plumbing. They cost prompt surface, validator branches, provider surface, config keys, docs, and tests while only failing honestly.
+- **Decision:** Delete `agents/coding.py`, `agents/vision.py`, `tools/code_sandbox.py`, `tools/image_generate.py`; unregister from both registries (1 agent + 5 tools remain). Remove `ModelProvider.generate_image` (+ `Ollama` override), `ollama_image_model` + `sandbox_*` settings, the artifacts `image_b64` branch, and all ReAct prompt/validation/normalization branches. Keep `CODE`/`IMAGE`/`VISION` router intents — they fall through to L3 ReAct, where the `reasoning` agent answers in text honestly. `CODE`-intent code questions still get code as text; image draws get an honest can't-do.
+- **Consequences:** Smaller prompt, no dead branches, no inert env keys (`SANDBOX_*`, `OLLAMA_IMAGE_MODEL` removed from `.env.example`). Saved runs referencing removed executors replay with unknown-executor labels (display-only).
+
 ---
 
 ## Historical (superseded, one line each)

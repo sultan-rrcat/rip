@@ -39,7 +39,7 @@ clear_stale_env() {
   # Session-only: stale exports shadow .env for compose interpolation
   # (DB_* for POSTGRES_*, OLLAMA_* for OLLAMA_BASE_URL/model/timeout).
   unset DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_CONNECT_TIMEOUT_S || true
-  unset OLLAMA_BASE_URL OLLAMA_DEFAULT_MODEL OLLAMA_TIMEOUT_MS OLLAMA_CONTEXT_WINDOW OLLAMA_IMAGE_MODEL || true
+  unset OLLAMA_BASE_URL OLLAMA_DEFAULT_MODEL OLLAMA_TIMEOUT_MS OLLAMA_CONTEXT_WINDOW || true
 }
 
 ensure_backend_cpus() {

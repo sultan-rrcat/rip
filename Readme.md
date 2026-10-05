@@ -8,7 +8,7 @@ Offline research assistant: upload documents into notebooks, then chat over them
 
 - **Notebooks** group documents + chat history (one notebook = one conversation).
 - **Uploads** are parsed (Docling), chunked by Markdown headers, embedded (BGE-M3), and stored in Postgres+pgvector.
-- **Chat** runs through `POST /v1/runs` + SSE (`run_started → plan → step_started → delta (live-only) → step_completed → sources → artifacts → summary → run_completed`, plus `error`/`cancelled`) with reasoning, coding, and vision agents plus seven tools: `rag.query`, `notebook.inspect`, `plot.chart`, `doc.generate`, `doc.convert`, `code.sandbox`, `image.generate`.
+- **Chat** runs through `POST /v1/runs` + SSE (`run_started → plan → step_started → delta (live-only) → step_completed → sources → artifacts → summary → run_completed`, plus `error`/`cancelled`) with the reasoning agent plus five tools: `rag.query`, `notebook.inspect`, `plot.chart`, `doc.generate`, `doc.convert`.
 - **Runs persist** to Postgres: they survive page refresh, replay structural events on reconnect (`delta` is live-only), and can be cancelled with the stop button.
 - **Auth** gates the UI + API: login (`POST /api/auth/login`, cookie `rip_session`) before notebooks/runs; rows scoped by `owner_id` (404-on-foreign).
 
