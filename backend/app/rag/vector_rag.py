@@ -350,7 +350,7 @@ class VectorRAG(RagPipeline):
             # The reranker + top_k cut below restore precision.
             fetch_k = top_k * 3
 
-            prompt_embeddings = self.embedding_model.embed_query(user_prompt)
+            prompt_embeddings = self.embed_query(user_prompt)
 
             # Vector and Keyword Search (file-scoped when fid/fname set)
             with pg_connection() as conn, conn.cursor() as cur:
@@ -551,7 +551,7 @@ class VectorRAG(RagPipeline):
                 # Score section-prefixed text: headers live in metadata only,
                 # and the pair must match what the LLM receives below.
                 pairs = [(user_prompt, _rerank_text(c)) for c in rerank_subset]
-                scores = self.reranker_model.predict(pairs)
+                scores = self.rerank(pairs)
 
                 for i, score in enumerate(scores):
                     # Cast to plain float: numpy scalars break LangGraph's
