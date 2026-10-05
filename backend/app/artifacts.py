@@ -17,6 +17,12 @@ Collection keys on DATA SHAPES, never on tool ids (same shapes as Athena):
 - {"markdown": ...} (only when it rides with binaries) → document (.md)
 - {"rows": [...], "row_count": ...} → data (.json)
 
+Naming: doc.convert files keep the source-file stem; doc.generate
+reports are named after the report `title` slug (never the step id), and
+only the LAST successful report per run is surfaced — earlier attempts
+are superseded. A report's companion .md is skipped (its markdown
+already renders in chat), so a pdf ask yields exactly one file.
+
 Anything else (plain text answers, stdout dumps, RAG passages) is NOT an
 artifact — it already travels via the step output / final answer.
 """
@@ -39,15 +45,42 @@ MIME_JSON = "application/json"
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 
+#: Max filename stem length for title-derived names (long report titles
+#: would otherwise produce unwieldy filenames).
+_TITLE_STEM_MAX = 80
+
 
 def _safe(name: str) -> str:
     """Filesystem-safe segment (planner-generated ids are untrusted input)."""
     return _SAFE.sub("_", name).strip("._") or "file"
 
 
+def _slug(title: str) -> str:
+    """Title-derived stem: readable, bounded, never empty."""
+    slug = _SAFE.sub("_", title.strip()).strip("._")
+    if len(slug) > _TITLE_STEM_MAX:
+        slug = slug[:_TITLE_STEM_MAX].rstrip("._")
+    return slug or "report"
+
+
 def _write_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
+
+
+def _is_generate_report(result) -> bool:
+    """True for successful doc.generate report steps (not doc.convert).
+
+    doc.generate payloads carry the report `title`; doc.convert payloads
+    carry `source_file_id`/`conversions` instead. Only one report per run
+    is intended (the ReAct loop is told to generate once and answer from
+    it), so earlier reports are superseded by later ones.
+    """
+    aid = getattr(result, "agent_id", "")
+    if str(getattr(aid, "value", aid)) != "doc.generate":
+        return False
+    data = getattr(result, "data", None)
+    return isinstance(data, dict) and isinstance(data.get("title"), str)
 
 
 def collect_artifacts(
@@ -72,8 +105,23 @@ def collect_artifacts(
     # (trace 07fb4f59 r2/r3 plotted the same data twice) would otherwise
     # surface the same plot twice in the frontend Artifacts panel.
     seen_charts: set[str] = set()
-    for result in step_results:
+    # doc.generate reports are last-wins: a run that generated twice (junk
+    # first attempt, corrected second) must surface only the final report,
+    # not every intermediate (r1.pdf + r3.pdf side by side).
+    last_report_idx: int | None = None
+    for i, result in enumerate(step_results):
         if getattr(result.status, "value", result.status) != "success":
+            continue
+        if _is_generate_report(result):
+            last_report_idx = i
+    for i, result in enumerate(step_results):
+        if getattr(result.status, "value", result.status) != "success":
+            continue
+        if _is_generate_report(result) and i != last_report_idx:
+            logger.info(
+                "artifact superseded report skipped run=%s step=%s",
+                run_id, getattr(result, "step_id", "?"),
+            )
             continue
         data = getattr(result, "data", None) or {}
         if not isinstance(data, dict):
@@ -110,14 +158,30 @@ def _collect_from_data(
         return out
 
     def _stem() -> str:
-        """Filename stem: source file name when present, else the step id."""
+        """Filename stem: source file name, then report title, else step id."""
         raw = data.get("source_file_name")
         if isinstance(raw, str) and raw.strip():
             stem = raw.strip().rsplit(".", 1)[0]
             return _safe(stem)
+        title = data.get("title")
+        if isinstance(title, str) and title.strip():
+            return _slug(title)
         return _safe(step_id)
 
+    def _is_report() -> bool:
+        """True for doc.generate payloads (title, no conversion markers)."""
+        return (
+            isinstance(data.get("title"), str)
+            and bool(data.get("title").strip())
+            and not isinstance(data.get("source_file_id"), str)
+            and not isinstance(data.get("conversions"), list)
+        )
+
     def _filename(ext: str) -> str:
+        # Reports are named after their title alone ("r1.pdf" tells the user
+        # nothing); per-step directories already isolate same-named files.
+        if _is_report():
+            return f"{_stem()}.{ext}"
         stem = _stem()
         if stem == _safe(step_id):
             return f"{stem}.{ext}"
@@ -173,10 +237,13 @@ def _collect_from_data(
             logger.warning("artifact pdf_b64 undecodable run=%s step=%s", run_id, step_id)
 
     markdown = data.get("markdown")
-    if isinstance(markdown, str) and markdown and ("docx_b64" in data or "pdf_b64" in data):
+    has_binary = ("docx_b64" in data or "pdf_b64" in data)
+    if isinstance(markdown, str) and markdown and has_binary and not _is_report():
         # Only a file artifact when it rides with rendered binaries; a bare
         # markdown string is just step output — EXCEPT doc.convert output,
         # which is a verbatim file conversion (source_file_id marks it).
+        # doc.generate reports skip the companion .md: the markdown already
+        # renders in chat, so a pdf ask would otherwise surface two files.
         add("document", MIME_MARKDOWN, _filename("md"), markdown.encode("utf-8"))
     elif (
         isinstance(markdown, str)

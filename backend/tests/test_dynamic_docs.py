@@ -277,6 +277,103 @@ class TestConvertArtifacts:
         assert {a["step_id"] for a in charts} == {"r2", "r5"}
 
 
+class TestGenerateArtifacts:
+    """doc.generate report naming + supersede rules (trace 4b2ac161).
+
+    That run executed doc.generate twice (r1 stub with a Source-only
+    section, r3 with the real table) and each pdf step emitted a pdf +
+    a companion .md — the Artifacts panel showed r1.pdf/r1.md/r3.pdf/r3.md.
+    """
+
+    @staticmethod
+    def _pdf_data(title: str, body: str = "# T") -> dict:
+        import base64 as _b64
+
+        return {
+            "markdown": body,
+            "pdf_b64": _b64.b64encode(b"%PDF-1.4 fake").decode("ascii"),
+            "title": title,
+            "target_format": "pdf",
+        }
+
+    def test_report_named_after_title_not_step_id(self, tmp_path):
+        step = StepResult(
+            step_id="r3",
+            agent_id="doc.generate",
+            status=StepStatus.SUCCESS,
+            output="# T",
+            data=self._pdf_data(
+                "Labs Visited by the Trainee (with Supervisor Names & Summary)"
+            ),
+        )
+        found = collect_artifacts(
+            [step], upload_dir=str(tmp_path), notebook_id="nb", run_id="run-9"
+        )
+        assert len(found) == 1
+        assert found[0]["filename"] == (
+            "Labs_Visited_by_the_Trainee_with_Supervisor_Names_Summary.pdf"
+        )
+        assert found[0]["step_id"] == "r3"
+
+    def test_report_skips_companion_md(self, tmp_path):
+        # The markdown already renders in chat; a pdf ask yields one file.
+        step = StepResult(
+            step_id="r3",
+            agent_id="doc.generate",
+            status=StepStatus.SUCCESS,
+            output="# T",
+            data=self._pdf_data("Some Report"),
+        )
+        found = collect_artifacts(
+            [step], upload_dir=str(tmp_path), notebook_id="nb", run_id="run-9"
+        )
+        assert [a["filename"] for a in found] == ["Some_Report.pdf"]
+
+    def test_only_last_report_surfaces(self, tmp_path):
+        steps = [
+            StepResult(
+                step_id="r1",
+                agent_id="doc.generate",
+                status=StepStatus.SUCCESS,
+                output="# stub",
+                data=self._pdf_data("First Attempt", body="# stub"),
+            ),
+            StepResult(
+                step_id="r3",
+                agent_id="doc.generate",
+                status=StepStatus.SUCCESS,
+                output="# final",
+                data=self._pdf_data("Final Report", body="# final"),
+            ),
+        ]
+        found = collect_artifacts(
+            steps, upload_dir=str(tmp_path), notebook_id="nb", run_id="run-9"
+        )
+        assert [a["filename"] for a in found] == ["Final_Report.pdf"]
+        assert [a["step_id"] for a in found] == ["r3"]
+
+    def test_convert_naming_untouched(self, tmp_path):
+        import base64 as _b64
+
+        step = StepResult(
+            step_id="1",
+            agent_id="doc.convert",
+            status=StepStatus.SUCCESS,
+            output="# T",
+            data={
+                "markdown": "# T",
+                "pdf_b64": _b64.b64encode(b"%PDF-1.4 fake").decode("ascii"),
+                "source_file_id": "fid-1",
+                "source_file_name": "CD_lab_report.pdf",
+            },
+        )
+        found = collect_artifacts(
+            [step], upload_dir=str(tmp_path), notebook_id="nb", run_id="run-9"
+        )
+        names = sorted(a["filename"] for a in found)
+        assert names == ["1_CD_lab_report.md", "1_CD_lab_report.pdf"]
+
+
 class _FakeProvider:
     def __init__(self, payload):
         self._payload = payload

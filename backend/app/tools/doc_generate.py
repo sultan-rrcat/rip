@@ -199,6 +199,8 @@ class DocGenerateTool(Tool):
             "markdown": {"type": "string"},
             "docx_b64": {"type": "string"},
             "pdf_b64": {"type": "string"},
+            "title": {"type": "string"},
+            "target_format": {"type": "string"},
         },
     }
     effect_class = "sandboxed"  # type: ignore[assignment]
@@ -233,7 +235,13 @@ class DocGenerateTool(Tool):
         if target not in ("md", "docx", "pdf"):
             target = "md"
         markdown = render_markdown(title, sections, tables)
-        data: dict[str, str] = {"markdown": markdown}
+        # `title`/`target_format` ride along so the artifacts layer can name
+        # the file after the report (not the step id) without re-reading input.
+        data: dict[str, str] = {
+            "markdown": markdown,
+            "title": title,
+            "target_format": target,
+        }
         if target in ("docx", "pdf"):
             try:
                 if target == "docx":
