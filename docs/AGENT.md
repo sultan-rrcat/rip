@@ -43,7 +43,7 @@ frontend/src/
 
 - **Backend:** strict type hints, `from app.*` imports, DI via `core/dependencies.py`, async I/O, `asyncio.to_thread` for ML. Config in `core/config.py` only. Ruff 88/py311.
 - **Frontend:** functional components + hooks. API in `services/*`, data in `hooks/*`, no direct `fetch` in components. Tailwind + MUI v9 default theme. Explain *why*, not *what*.
-- **Deps:** backend root `pyproject.toml` (no `requirements.txt`); frontend `package.json`. New dependencies need justification + ADR note.
+- **Deps:** backend root `pyproject.toml` (no `requirements.txt`); frontend `package.json`. New dependencies need justification + ADR note. Before changing, updating, or dropping any dependency that forces `pip install` again, you must reconfirm with the user.
 
 ## 4. Workflow
 
@@ -95,3 +95,4 @@ OLLAMA_BASE_URL=http://10.10.30.77:21434
 - `delta` live-only; `conversation_summary` ≠ SSE `summary`; sources via SSE after `rag.query`; artifacts as disk URLs.
 - `notebook_id` injected by the engine, never LLM-generated. No query rewrite. Admin health stub only.
 - Tests live in `backend/tests/`. In-compose backend uses `DB_HOST=postgres:5432`; host-local uses `127.0.0.1` (see CAVEATS).
+- Dependencies are locked: before changing, updating, or dropping any dependency that forces `pip install` again, you must reconfirm with the user.
