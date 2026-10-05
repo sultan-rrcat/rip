@@ -47,6 +47,7 @@ from app.tools.registry import ToolRegistry
 logger = logging.getLogger("orchestration.react")
 
 MAX_REACT_ITERATIONS = 6
+MAX_PLOT_CHARTS_PER_RUN = 3
 
 REACT_SCHEMA: dict = {
     "type": "object",
@@ -270,35 +271,40 @@ def _action_signature(executor: str, action_input: dict) -> str:
 
 
 def _plot_data_key(action_input: dict) -> tuple | None:
-    """Normalized data identity for a plot.chart proposal.
+    """Canonical data identity for a plot.chart proposal.
 
-    Same chart data under cosmetic tweaks (retitled, relabeled — trace
-    07fb4f59 r5/r6 re-plotted [229, 135] with different labels) renders the
-    same bars, so the frontend would show the same plot twice. The key
-    covers chart_type + the numeric data only, ignoring title/labels/legend
-    cosmetics. Returns None when the numbers cannot be read (validation
-    owns that shape — this is a dedupe helper, not a validator).
+    Builds a (chart_type, sorted values) key so that reordering labels,
+    switching between values/series, or minor float tweaks all map to the
+    same key. Trace 07fb4f59 r3/r4/r5 re-plotted the same six latency
+    numbers under different orders and shapes — the old order-sensitive
+    key missed all three. Returns None when the numbers cannot be read
+    (validation owns that shape — this is a dedupe helper, not a validator).
     """
     try:
         chart_type = str(action_input.get("chart_type", "")).strip()
         series = action_input.get("series")
         if isinstance(series, list) and series:
-            parts = []
+            all_values = []
             for entry in series:
                 if not isinstance(entry, dict):
                     return None
-                numbers = tuple(float(v) for v in (entry.get("values") or []))
-                parts.append(numbers)
-            return (chart_type, tuple(parts))
+                vals = entry.get("values")
+                if not isinstance(vals, list):
+                    return None
+                for v in vals:
+                    if isinstance(v, (list, dict)):
+                        return None
+                    all_values.append(round(float(v), 2))
+            return (chart_type, tuple(sorted(all_values)))
         values = action_input.get("values")
         if not isinstance(values, list):
             return None
-        flat: list[float] = []
+        flat = []
         for v in values:
             if isinstance(v, (list, dict)):
                 return None
-            flat.append(float(v))
-        return (chart_type, tuple(flat))
+            flat.append(round(float(v), 2))
+        return (chart_type, tuple(sorted(flat)))
     except (TypeError, ValueError):
         return None
 
@@ -310,26 +316,48 @@ def _chart_observation(action_input: dict) -> str:
     and teach the model nothing; the chart itself travels via the SSE
     artifacts event. Trace 07fb4f59's r-final redrew the charts as ASCII
     blocks because all it could see was SVG soup.
+
+    Includes a compact data fingerprint so the model can see what numbers
+    were already plotted and avoid re-plotting them under a different
+    order or shape.
     """
     title = str(action_input.get("title", "") or "").strip()
-    labels = action_input.get("labels")
+    series = action_input.get("series")
+    values = action_input.get("values")
+    data_bits = []
+    if isinstance(series, list) and series:
+        for entry in series:
+            if isinstance(entry, dict):
+                name = str(entry.get("label", "")).strip()
+                vals = entry.get("values")
+                if isinstance(vals, list):
+                    data_bits.append(f"{name}={vals}")
+    elif isinstance(values, list):
+        data_bits.append(f"values={values}")
+    result = "chart generated"
     if title:
-        return f"chart generated: {title}"
-    if isinstance(labels, list) and labels:
-        return f"chart generated for labels {labels}"
-    return "chart generated"
+        result += f": {title}"
+    if data_bits:
+        result += " [" + ", ".join(data_bits) + "]"
+    return result
 
 
-def _synthesis_evidence_line(result) -> str:
+def _synthesis_evidence_line(result, fingerprint: str = "") -> str:
     """One evidence line for the final-synthesis prompt.
 
     Chart successes collapse to a one-liner (the SVG bytes already travel
     via Artifacts; pasting them here only invites ASCII redraws like trace
-    07fb4f59's r-final). Everything else keeps its truncated text.
+    07fb4f59's r-final). The optional fingerprint carries the plotted
+    data so the synthesis knows what each chart showed and cannot
+    hallucinate diversity (trace 07fb4f59's r-final invented four
+    distinct charts from four identical SVGs). Everything else keeps its
+    truncated text.
     """
     if result.agent_id == "plot.chart" or (result.output or "").lstrip().startswith(
         "<svg"
     ):
+        if fingerprint:
+            return f"[{result.step_id} (plot.chart)] chart already generated: {fingerprint}"
         return f"[{result.step_id} (plot.chart)] chart already generated and shown in Artifacts"
     return f"[{result.step_id} ({result.agent_id})]\n{(result.output or '')[:1500]}"
 
@@ -442,6 +470,10 @@ class ReActEngine:
         # under different labels). Re-plotting the same data renders the same
         # bars, so the frontend would show the same plot twice.
         plotted_data: set[tuple] = set()
+        # Data fingerprints keyed by step_id so the final synthesis knows
+        # what each chart actually showed (prevents hallucinated diversity
+        # when multiple charts carry the same data).
+        chart_fingerprints: dict[str, str] = {}
         # rag.query is provably useless when the snapshot holds zero ready
         # files (same argument as the L2 empty-corpus short-circuit) — refuse
         # it once instead of burning iterations on "(no chunks retrieved)".
@@ -883,6 +915,7 @@ class ReActEngine:
                         if data_key is not None:
                             plotted_data.add(data_key)
                         observation = _chart_observation(action_input)
+                        chart_fingerprints[step_id] = observation
                     else:
                         observation = (outcome.output or "")[:1500]
                     scratchpad.append(
@@ -897,6 +930,17 @@ class ReActEngine:
                             "observation": _truncate(observation, 2000),
                         }
                     )
+                    if is_tool and executor == "plot.chart":
+                        plot_successes = sum(
+                            1 for r in step_results
+                            if r.agent_id == "plot.chart" and r.status is StepStatus.SUCCESS
+                        )
+                        if plot_successes >= MAX_PLOT_CHARTS_PER_RUN:
+                            scratchpad.append(
+                                f"plot.chart has succeeded {plot_successes} times — "
+                                "answer from what you have, do not plot more charts."
+                            )
+                            break
                 else:
                     failed_actions[sig] = outcome.error or "unknown error"
                     scratchpad.append(
@@ -919,6 +963,7 @@ class ReActEngine:
                 timeout_ms=timeout_ms,
                 cancel_event=cancel_event,
                 on_event=on_event,
+                chart_fingerprints=chart_fingerprints,
             )
             if synth is not None:
                 synth_step, synth_outcome = synth
@@ -961,6 +1006,7 @@ class ReActEngine:
         timeout_ms: int | None,
         cancel_event: threading.Event | None,
         on_event: Callable[[dict], None] | None,
+        chart_fingerprints: dict[str, str] | None = None,
     ) -> tuple[PlanStep, StepResult] | None:
         """Grounded final answer when the loop exhausts iterations without is_final.
 
@@ -982,9 +1028,15 @@ class ReActEngine:
                 else (self._agent_ids[0] if self._agent_ids else "")
             )
             if synth_id:
-                evidence = "\n\n".join(
-                    _synthesis_evidence_line(r) for r in successes[-4:]
-                )
+                fingerprints = chart_fingerprints or {}
+                evidence_lines: list[str] = []
+                seen_evidence: set[str] = set()
+                for r in successes[-4:]:
+                    line = _synthesis_evidence_line(r, fingerprints.get(r.step_id, ""))
+                    if line not in seen_evidence:
+                        seen_evidence.add(line)
+                        evidence_lines.append(line)
+                evidence = "\n\n".join(evidence_lines)
                 synth_message = (
                     f"Synthesize the final answer to the request using ONLY "
                     f"these observations. Cover every document below; do not "

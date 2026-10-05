@@ -12,6 +12,7 @@ from app.orchestration.react_engine import (
     _OVERVIEW_HINTS,
     _TOOL_INPUT_HINTS,
     _TOOL_OUTPUT_TYPES,
+    MAX_PLOT_CHARTS_PER_RUN,
     MAX_REACT_ITERATIONS,
     REACT_SCHEMA,
     ReActEngine,
@@ -30,6 +31,7 @@ from app.orchestration.react_engine import (
 )
 
 __all__ = [
+    "MAX_PLOT_CHARTS_PER_RUN",
     "MAX_REACT_ITERATIONS",
     "REACT_SCHEMA",
     "_ANSWER_FALLBACK_FIELDS",
