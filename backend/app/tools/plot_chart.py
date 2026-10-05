@@ -68,6 +68,21 @@ def render_svg(
         f"<rect x='{_PAD_LEFT}' y='{_PAD_TOP}' width='{plot_w}' "
         f"height='{plot_h}' fill='none' stroke='#888'/>"
     )
+    y_min = min(0.0, min(all_values) if all_values else 0.0)
+    y_max = max(all_values) if all_values else 1.0
+    y_ticks = 4
+    for t in range(y_ticks + 1):
+        frac = t / y_ticks
+        y_val = y_min + (y_max - y_min) * frac
+        y_pos = _PAD_TOP + plot_h - frac * plot_h
+        parts.append(
+            f"<line x1='{_PAD_LEFT}' y1='{y_pos:.1f}' x2='{_PAD_LEFT + plot_w}' "
+            f"y2='{y_pos:.1f}' stroke='#ddd' stroke-width='1'/>"
+        )
+        parts.append(
+            f"<text x='{_PAD_LEFT - 6}' y='{y_pos + 4:.1f}' text-anchor='end' "
+            f"font-size='10' font-family='sans-serif'>{y_val:.1f}</text>"
+        )
     if chart_type == "bar":
         gap = 6.0
         if multi:
@@ -130,8 +145,12 @@ def render_svg(
                     f"<text x='{lx - 114:.1f}' y='{y + 10:.1f}' font-size='11' "
                     f"font-family='sans-serif'>{escape(name)}</text>"
                 )
-    # x labels: first, middle, last (keeps small SVGs readable)
-    for i in sorted({0, n // 2, n - 1}):
+    # x labels: show all when n <= 6, else first/middle/last
+    if n <= 6:
+        label_indices = list(range(n))
+    else:
+        label_indices = sorted({0, n // 2, n - 1})
+    for i in label_indices:
         x = _PAD_LEFT + (i + 0.5) * (plot_w / n) if chart_type == "bar" else _PAD_LEFT + i * step
         parts.append(
             f"<text x='{x:.1f}' y='{_HEIGHT - 12}' text-anchor='middle' "
