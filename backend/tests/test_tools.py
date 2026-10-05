@@ -507,11 +507,19 @@ class TestDocGenerate:
         reg = get_default_tool_registry()
         resp = execute_tool(
             reg, "doc.generate",
-            {"title": "T", "sections": [{"heading": "H", "body": "B"}]},
+            {"title": "T", "sections": [{"heading": "H", "body": "B"}],
+             "target_format": "docx"},
         )
         assert resp.ok
         assert (resp.output or "").startswith("# T")
-        assert resp.data["docx_b64"] and resp.data["pdf_b64"]
+        assert resp.data["docx_b64"]
+        resp = execute_tool(
+            reg, "doc.generate",
+            {"title": "T", "sections": [{"heading": "H", "body": "B"}],
+             "target_format": "pdf"},
+        )
+        assert resp.ok
+        assert resp.data["pdf_b64"]
 
     def test_missing_title_rejected(self):
         reg = get_default_tool_registry()

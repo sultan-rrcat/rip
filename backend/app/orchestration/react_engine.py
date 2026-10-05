@@ -532,7 +532,8 @@ class ReActEngine:
                     'code.sandbox {"code": "..."}, doc.convert '
                     '{"file_id": "...", "target_format": "md|docx|pdf"}, '
                     'doc.generate {"title": "...", "sections": [{"heading": '
-                    '...,"body": ...}]}, image.generate {"message": "..."}, '
+                    '...,"body": ...}], "target_format": "md|docx|pdf"}, '
+                    'image.generate {"message": "..."}, '
                     "notebook.inspect {}.\n"
                     'WRONG: {"agent": {"message": "..."}} for a tool — '
                     "the tool reads top-level fields, so this fails with "
@@ -941,6 +942,11 @@ class ReActEngine:
                                 "answer from what you have, do not plot more charts."
                             )
                             break
+                    if is_tool and executor in ("doc.generate", "doc.convert"):
+                        scratchpad.append(
+                            f"document generated successfully — use it as the final "
+                            f"answer, do not run {executor} again."
+                        )
                 else:
                     failed_actions[sig] = outcome.error or "unknown error"
                     scratchpad.append(

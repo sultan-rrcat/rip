@@ -189,6 +189,7 @@ class DocGenerateTool(Tool):
                 },
             },
             "tables": {"type": "array"},
+            "target_format": {"type": "string", "enum": ["md", "docx", "pdf"]},
         },
         "required": ["title", "sections"],
     }
@@ -228,25 +229,32 @@ class DocGenerateTool(Tool):
                 output=None,
                 error="'tables' must be an array of {headers[], rows[][]}",
             )
+        target = str(request.input.get("target_format") or "md").strip().lower()
+        if target not in ("md", "docx", "pdf"):
+            target = "md"
         markdown = render_markdown(title, sections, tables)
-        try:
-            docx_bytes = render_docx(title, sections, tables)
-            pdf_bytes = render_pdf(title, sections, tables)
-        except RuntimeError as e:
-            return ToolResponse(
-                tool_id=self.tool_id, ok=False, output=None, error=str(e)
-            )
-        except Exception as e:  # noqa: BLE001 - render failure is a tool failure
-            return ToolResponse(
-                tool_id=self.tool_id, ok=False, output=None, error=f"render failed: {e}"
-            )
+        data: dict[str, str] = {"markdown": markdown}
+        if target in ("docx", "pdf"):
+            try:
+                if target == "docx":
+                    data["docx_b64"] = base64.b64encode(
+                        render_docx(title, sections, tables)
+                    ).decode("ascii")
+                else:
+                    data["pdf_b64"] = base64.b64encode(
+                        render_pdf(title, sections, tables)
+                    ).decode("ascii")
+            except RuntimeError as e:
+                return ToolResponse(
+                    tool_id=self.tool_id, ok=False, output=None, error=str(e)
+                )
+            except Exception as e:  # noqa: BLE001 - render failure is a tool failure
+                return ToolResponse(
+                    tool_id=self.tool_id, ok=False, output=None, error=f"render failed: {e}"
+                )
         return ToolResponse(
             tool_id=self.tool_id,
             ok=True,
             output=markdown,
-            data={
-                "markdown": markdown,
-                "docx_b64": base64.b64encode(docx_bytes).decode("ascii"),
-                "pdf_b64": base64.b64encode(pdf_bytes).decode("ascii"),
-            },
+            data=data,
         )
