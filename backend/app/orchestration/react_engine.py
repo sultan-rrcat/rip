@@ -35,7 +35,7 @@ from app.observability.langfuse import (
 from app.observability.langfuse import (
     truncate as _truncate,
 )
-from app.orchestration.corpus import get_corpus_state
+from app.orchestration.corpus import _snapshot_files, get_corpus_state
 from app.orchestration.idle_guard import IdleGuard
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.plan_graph import run_plan_graph
@@ -409,6 +409,40 @@ def _default_react_mode(request_text: str, action_input: dict) -> dict:
     return action_input
 
 
+def _redundant_convert_hint(
+    action_input: dict,
+    generated_formats: set[str],
+    source_ids: set[str],
+) -> str | None:
+    """Idle-turn hint when doc.convert would re-render a delivered report.
+
+    Returns None when the convert is legitimate work, else the scratchpad
+    hint. Pure function — safe to unit test without Ollama/DB.
+
+    The confusion (trace 126a2e57): doc.generate already delivered the
+    table as a PDF, and the next iteration "converted" the ORIGINAL
+    18-page upload to pdf — a full copy of the source alongside the
+    report. A convert counts as redundant only when ALL hold: a report
+    was already generated in this run, the convert targets the same
+    format, and the file_id is a snapshot source upload (or "*").
+    Anything else (different format, non-source id) still executes.
+    """
+    if not generated_formats:
+        return None
+    target = str(action_input.get("target_format", "")).strip().lower()
+    if target not in generated_formats:
+        return None
+    fid = action_input.get("file_id")
+    if not (isinstance(fid, str) and fid.strip() in source_ids):
+        return None
+    return (
+        f"a doc.generate report in {target} format already exists in this "
+        f"run — converting source file {fid.strip()!r} to {target} only "
+        f"re-renders the ORIGINAL upload, never the report just built; "
+        f"answer from what you have (is_final=true), do not run doc.convert."
+    )
+
+
 class ReactResult:
     def __init__(self, plan: Plan, result: ExecutionResult):
         self.plan = plan
@@ -495,6 +529,18 @@ class ReActEngine:
         # files (same argument as the L2 empty-corpus short-circuit) — refuse
         # it once instead of burning iterations on "(no chunks retrieved)".
         corpus_empty = get_corpus_state(notebook_context) in ("empty", "processing")
+        # Source-upload ids from the snapshot: doc.convert only ever targets
+        # these (or "*" for all). A convert of anything else is either a
+        # literal the tool will reject or a generated file, both of which
+        # must still execute to fail honestly.
+        source_ids = {
+            fid for _, _, fid in _snapshot_files(notebook_context) if fid
+        } | {"*"}
+        # Report formats already delivered by doc.generate in THIS run
+        # (effective target_format, after request-text defaulting). A later
+        # doc.convert of a source upload to the same format can only
+        # re-render the original — never the report just built.
+        generated_formats: set[str] = set()
         # Consecutive turns that produced no observation (provider errors,
         # unknown executors, empty answers). Caps garbage-loops against a
         # degraded model; any executed step or final answer resets it.
@@ -550,6 +596,16 @@ class ReActEngine:
                     'doc.generate {"title": "...", "sections": [{"heading": '
                     '...,"body": ...}], "target_format": "md|docx|pdf"}, '
                     "notebook.inspect {}.\n"
+                    "doc.generate sections must carry the COMPLETE "
+                    "user-visible answer (full table/text verbatim, never a "
+                    "stub) — the file renders ONLY sections, so a stub "
+                    "section yields a stub file.\n"
+                    "doc.generate creates a NEW report file from answer "
+                    "text (its pdf/docx output IS the deliverable); "
+                    "doc.convert only re-renders an ORIGINAL upload named "
+                    "in the snapshot — never convert a source file to "
+                    "satisfy a report/table ask that doc.generate already "
+                    "fulfilled.\n"
                     'WRONG: {"agent": {"message": "..."}} for a tool — '
                     "the tool reads top-level fields, so this fails with "
                     "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
@@ -783,6 +839,29 @@ class ReActEngine:
                         }
                     )
                     continue
+                if executor == "doc.convert":
+                    dup_hint = _redundant_convert_hint(
+                        action_input, generated_formats, source_ids
+                    )
+                    if dup_hint is not None:
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "error": "doc.convert refused: report already generated",
+                                }
+                            )
+                            break
+                        scratchpad.append(dup_hint)
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "thought": thought_in,
+                                "executor": executor,
+                                "error": "doc.convert refused: redundant convert",
+                            }
+                        )
+                        continue
                 sig = _action_signature(executor, action_input)
                 if sig in failed_actions:
                     if guard.record_idle():
@@ -988,14 +1067,23 @@ class ReActEngine:
                         content_key = _doc_content_key(action_input)
                         if content_key is not None:
                             seen_doc_content.add(content_key)
+                        gen_target = str(
+                            action_input.get("target_format") or "md"
+                        ).strip().lower()
+                        if gen_target in ("md", "docx", "pdf"):
+                            generated_formats.add(gen_target)
                         scratchpad.append(
                             "document generated successfully — use it as the final "
-                            "answer, do not run doc.generate again."
+                            "answer, do not run doc.generate again. The "
+                            f"{gen_target} file already exists — never run "
+                            "doc.convert for it (doc.convert only re-renders "
+                            "ORIGINAL uploads); answer now with is_final=true."
                         )
                     if is_tool and executor == "doc.convert":
                         scratchpad.append(
                             "document converted successfully — use it as the final "
-                            "answer, do not run doc.convert again."
+                            "answer, do not run doc.convert again and do not "
+                            "rebuild the same content with doc.generate either."
                         )
                 else:
                     failed_actions[sig] = outcome.error or "unknown error"

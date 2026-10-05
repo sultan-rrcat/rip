@@ -430,6 +430,59 @@ def test_react_refuses_rag_query_on_empty_corpus() -> None:
     assert provider.structured_calls == 2
 
 
+def test_react_refuses_redundant_convert_after_generate() -> None:
+    # Trace 126a2e57: doc.generate delivered the table as PDF (target
+    # defaulted from the request text), then the next iteration
+    # "converted" the ORIGINAL 18-page upload to pdf — a full copy of
+    # the source alongside the report. Same-format converts of snapshot
+    # uploads after a generate are refused as idle turns.
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        {"thought": "make report", "executor": "doc.generate",
+         "input": {"title": "T",
+                   "sections": [{"heading": "H", "body": "tab"}]},
+         "is_final": False},
+        {"thought": "convert it", "executor": "doc.convert",
+         "input": {"file_id": "src-1", "target_format": "pdf"},
+         "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "table pdf ready"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "I want the above table in a PDF document", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="1 file(s): CD_lab_report.pdf [ready] id=src-1",
+    )
+    # r2 convert never executed: r1 generate + r3 final answer only.
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+    assert outcome.result.step_results[-1].output == "table pdf ready"
+    assert provider.structured_calls == 3
+
+
+def test_redundant_convert_hint_unit() -> None:
+    from app.orchestration.react import _redundant_convert_hint
+
+    gen = {"pdf"}
+    src = {"src-1", "*"}
+    assert _redundant_convert_hint(
+        {"file_id": "src-1", "target_format": "pdf"}, gen, src
+    ) is not None
+    # Different format is legitimate work — still executes.
+    assert _redundant_convert_hint(
+        {"file_id": "src-1", "target_format": "docx"}, gen, src
+    ) is None
+    # Non-source id still executes (fails honestly inside the tool).
+    assert _redundant_convert_hint(
+        {"file_id": "made-up", "target_format": "pdf"}, gen, src
+    ) is None
+    # Nothing generated yet — converts flow normally.
+    assert _redundant_convert_hint(
+        {"file_id": "src-1", "target_format": "pdf"}, set(), src
+    ) is None
+
+
 def test_react_prompt_allows_parametric_numbers_without_docs() -> None:
     from app.orchestration.react import run_react
 
