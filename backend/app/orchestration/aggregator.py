@@ -145,6 +145,28 @@ class Aggregator:
             return meta.executor_id == "notebook.inspect"
 
         shown = [r for r in ordered_successful if not _hidden(r.step_id)]
+        # ReAct runs build the answer incrementally (r1..rN, then r-final
+        # synthesis or early is_final). The final answer already incorporates
+        # prior observations; prior document/chart terminals travel via the
+        # SSE artifacts event and the collapsed Steps panel. Concatenating
+        # them into the main bubble duplicates large tables (trace d86f27e9:
+        # r1 table + r2 convert msg + r-final all rendered in chat).
+        # L2 builder plans use numeric step_ids ("1","2") and keep the
+        # existing multi-SHOW behavior so chart placeholders aren't dropped.
+        if step_meta and all(
+            re.fullmatch(r"r\d+|r-final|r0", sid or "") for sid in step_meta
+        ):
+            last = ordered_successful[-1] if ordered_successful else None
+            if last is not None:
+                last_meta = step_meta.get(last.step_id)
+                last_eot = (
+                    (last_meta.expected_output_type or "text").lower()
+                    if last_meta else "text"
+                )
+                if last_eot in ("answer", "summary", "text"):
+                    shown_ids = {r.step_id for r in shown}
+                    if last.step_id in shown_ids:
+                        shown = [last]
         # Ungrounded-leak guard: a terminal output still carrying {{id}}
         # means placeholder resolution failed upstream (validator bypass or
         # pre-validation plan). Showing it leaks internals ("paste {{1}}");
