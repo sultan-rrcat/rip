@@ -447,44 +447,6 @@ class OllamaProvider(ModelProvider):
             "RAG agent needs it — deliberately deferred)."
         )
 
-    def generate_image(self, prompt: str) -> tuple[str, bytes]:
-        """Image generation via the OpenAI-compatible surface (ADR-024).
-
-        Attempts POST /v1/images/generations with OLLAMA_IMAGE_MODEL — the
-        same compat surface every other method here speaks. An empty model id
-        or a server without the endpoint fails honestly (never fabricated).
-        """
-        import base64
-
-        model = settings.ollama_image_model.strip()
-        if not model:
-            raise NotImplementedError(
-                "Ollama has no image model configured (OLLAMA_IMAGE_MODEL is empty)"
-            )
-        payload: dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "response_format": "b64_json",
-        }
-        try:
-            response = self._client.post("/v1/images/generations", json=payload)
-        except httpx.RequestError as e:
-            raise RuntimeError(f"Ollama image request failed: {e}") from e
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Ollama image error [status {response.status_code}]: {response.text}"
-            )
-        try:
-            b64 = response.json()["data"][0]["b64_json"]
-        except (KeyError, IndexError, AttributeError, TypeError, ValueError) as e:
-            raise RuntimeError(f"Malformed Ollama image response: {e}") from e
-        if not isinstance(b64, str) or not b64:
-            raise RuntimeError("Malformed Ollama image response: empty b64_json")
-        try:
-            return "image/png", base64.b64decode(b64)
-        except Exception as e:
-            raise RuntimeError(f"Malformed Ollama image payload: {e}") from e
-
     def list_available_models(self) -> list[dict]:
         fallback = [
             {

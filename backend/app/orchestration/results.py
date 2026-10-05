@@ -20,7 +20,7 @@ class StepResult(BaseModel):
     error: str | None = None
     needs_clarification: bool = False
     # Tool step payload: the raw ToolResponse.data dict for successful tool
-    # steps (svg/image_b64/docx_b64/results/sources/...). Agent steps leave
+    # steps (svg/docx_b64/results/sources/...). Agent steps leave
     # this empty. Carried through so the run worker can build SSE `sources`
     # and `artifacts` events without re-executing anything.
     data: dict = Field(default_factory=dict)

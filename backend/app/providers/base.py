@@ -6,7 +6,7 @@ Ollama is the sole backend (ADR-003 superseded); future providers implement it
 behind this contract.
 
 Operations needed across the system:
-- generate:          plain text completion (Reasoning, Coding, Vision chat)
+- generate:          plain text completion (Reasoning chat)
 - generate_structured: JSON output matching a schema (Router intent, ReAct steps, rag query decomposition)
 - embed:             vector embedding (RAG / retrieval, added at PM-5)
 """
@@ -70,17 +70,6 @@ class ModelProvider(ABC):
     @abstractmethod
     def list_available_models(self) -> list[dict]:
         """Every provider must answer 'Which models can you generate with?'"""
-
-    def generate_image(self, prompt: str) -> tuple[str, bytes]:
-        """Generate one image for `prompt`; return (mime_type, image_bytes).
-
-        OPTIONAL capability (ADR-024): providers without an image model keep
-        this default, which fails honestly. The image.generate tool binds the
-        active provider and calls this — core code never names a provider.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} has no image-generation model configured"
-        )
 
     def served_model(self, requested_model: str) -> str:
         """The model that will actually serve this request.

@@ -254,10 +254,11 @@ def test_react_normalizes_nested_agent_input() -> None:
     assert _validate_react_input("rag.query", out) is None
 
     out = _normalize_react_input(
-        "code.sandbox", {"agent": {"message": "print(1)"}}
+        "rag.query", {"agent": {"message": "fire stats"}, "tool_id": "rag.query"}
     )
-    assert out["code"] == "print(1)"
-    assert _validate_react_input("code.sandbox", out) is None
+    assert out["query"] == "fire stats"
+    assert "agent" not in out
+    assert _validate_react_input("rag.query", out) is None
 
     # Stray tool_id key dropped (trace iter-3 shape).
     out = _normalize_react_input(
@@ -271,7 +272,7 @@ def test_react_validation_hints_without_executing() -> None:
     from app.orchestration.react import _validate_react_input, run_react
 
     assert "query" in (_validate_react_input("rag.query", {}) or "")
-    assert "code" in (_validate_react_input("code.sandbox", {}) or "")
+    assert _validate_react_input("notebook.inspect", {}) is None
     assert "target_format" in (_validate_react_input("doc.convert", {"file_id": "f"}) or "")
     assert "labels" in (
         _validate_react_input("plot.chart", {"chart_type": "bar"}) or ""
@@ -357,7 +358,7 @@ def test_react_prompt_carries_all_tool_schemas() -> None:
     system = provider.prompts[0][0]["content"]
     assert '"sections"' in system
     assert '"heading"' in system
-    assert '"message"' in system  # image.generate
+    assert '"message"' in system  # agent message shape
 
 
 def test_react_repeat_of_failed_executor_is_idle_turn() -> None:
@@ -429,8 +430,7 @@ def test_react_refuses_rag_query_on_empty_corpus() -> None:
     assert provider.structured_calls == 2
 
 
-def test_react_prompt_advertises_missing_docker(monkeypatch) -> None:
-    import app.orchestration.react_engine as react_mod
+def test_react_prompt_allows_parametric_numbers_without_docs() -> None:
     from app.orchestration.react import run_react
 
     seen: list = []
@@ -441,33 +441,6 @@ def test_react_prompt_advertises_missing_docker(monkeypatch) -> None:
             return {"thought": "done", "executor": "reasoning",
                     "input": {}, "is_final": True, "answer": "ok"}
 
-    monkeypatch.setattr(react_mod, "_sandbox_available", lambda: False)
-    agents, tools = _react_orchestrator(_ProbeProvider())
-    run_react("plot this", _ProbeProvider(), agents, tools,
-              trace_id="t", notebook_id="nb-1")
-    system = seen[0][0]["content"]
-    assert "code.sandbox is UNAVAILABLE" in system
-
-    seen.clear()
-    monkeypatch.setattr(react_mod, "_sandbox_available", lambda: True)
-    run_react("plot this", _ProbeProvider(), agents, tools,
-              trace_id="t", notebook_id="nb-1")
-    assert "UNAVAILABLE" not in seen[0][0]["content"]
-
-
-def test_react_prompt_allows_parametric_numbers_without_docs(monkeypatch) -> None:
-    import app.orchestration.react_engine as react_mod
-    from app.orchestration.react import run_react
-
-    seen: list = []
-
-    class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0):
-            seen.append(messages)
-            return {"thought": "done", "executor": "reasoning",
-                    "input": {}, "is_final": True, "answer": "ok"}
-
-    monkeypatch.setattr(react_mod, "_sandbox_available", lambda: True)
     agents, tools = _react_orchestrator(_ProbeProvider())
     run_react("plot gdp", _ProbeProvider(), agents, tools,
               trace_id="t", notebook_id="nb-1",
@@ -493,7 +466,7 @@ def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     system = seen[0][0]["content"]
     assert '{"query": "..."' in system
     assert "never nested under 'agent'" in system
-    assert "plot.chart" in system and "never code.sandbox for charting" in system
+    assert "plot.chart" in system and "target_format" in system
     assert "title" in system
 
 

@@ -75,9 +75,6 @@ class FakeProvider(ModelProvider):
     def list_available_models(self) -> list[dict]:
         return [{"id": "fake-model", "display_name": "fake-model"}]
 
-    def generate_image(self, prompt: str):
-        raise NotImplementedError("test fake")
-
 
 class FakeAgent(Agent):
     """Deterministic agent; optionally streams one delta chunk."""
@@ -565,12 +562,12 @@ class TestAggregator:
             Plan(plan_id="p", goal="g"),
             ExecutionResult(
                 trace_id="t",
-                step_results=[_ok("1", "aaa"), _ok("2", "bbb", executor="coding")],
+                step_results=[_ok("1", "aaa"), _ok("2", "bbb")],
             ),
         )
         assert agg.status == "success"
         assert agg.summary == (
-            "Step 1 (reasoning): aaa\n\nStep 2 (coding): bbb"
+            "Step 1 (reasoning): aaa\n\nStep 2 (reasoning): bbb"
         )
 
     def test_visibility_map_mcq_shape(self):

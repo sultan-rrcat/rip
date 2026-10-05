@@ -194,7 +194,7 @@ class TestLifespanRuntime:
             assert deps.get_orchestrator() is not None
             body = client.get("/v1/admin/health").json()
             assert body["status"] == "ok"
-            assert set(body["agents"]) == {"reasoning", "coding", "vision"}
+            assert set(body["agents"]) == {"reasoning"}
             assert "rag.query" in body["tools"]
 
     def test_runtime_reset_on_shutdown(self):

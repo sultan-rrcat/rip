@@ -10,7 +10,7 @@ shape: tool_id / name / description / input_schema, plus the effect class:
 
 - "read-only": free to run within budget (rag.query).
 - "sandboxed": bounded compute producing data/artifacts (plot.chart,
-  doc.generate, code.sandbox, image.generate).
+  doc.generate, doc.convert).
 - "side-effecting": outbound or mutating. RIP is local single-user, so
   tools execute directly with no approval gate (the executor runs every
   registered tool unconditionally); the class is kept for manifest honesty.

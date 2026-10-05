@@ -1,6 +1,6 @@
 """File-based artifacts (Q34 REWRITE — not Athena's inline base64).
 
-Tool steps that produce files/charts/images carry their raw
+Tool steps that produce files/charts carry their raw
 `ToolResponse.data` dict forward on `StepResult.data`. This module converts
 those payloads into FILES under:
 
@@ -13,7 +13,6 @@ kind, mime}`. The SSE `artifacts` event carries only
 
 Collection keys on DATA SHAPES, never on tool ids (same shapes as Athena):
 - {"svg": "<svg...>"} → chart (image/svg+xml)
-- {"image_b64": ..., "mime": ...} → image
 - {"docx_b64": ...} / {"pdf_b64": ...} → document
 - {"markdown": ...} (only when it rides with binaries) → document (.md)
 - {"rows": [...], "row_count": ...} → data (.json)
@@ -37,7 +36,6 @@ MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 MIME_PDF = "application/pdf"
 MIME_MARKDOWN = "text/markdown"
 MIME_JSON = "application/json"
-MIME_PNG_FALLBACK = "image/png"
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -159,16 +157,6 @@ def _collect_from_data(
                 add("chart", MIME_SVG, f"{step_id}.svg", svg.encode("utf-8"))
         else:
             add("chart", MIME_SVG, f"{step_id}.svg", svg.encode("utf-8"))
-
-    image_b64 = data.get("image_b64")
-    if isinstance(image_b64, str) and image_b64:
-        raw_mime = data.get("mime")
-        mime = raw_mime if isinstance(raw_mime, str) and raw_mime else MIME_PNG_FALLBACK
-        ext = "png" if "png" in mime else ("svg" if "svg" in mime else "bin")
-        try:
-            add("image", mime, f"{step_id}.{ext}", base64.b64decode(image_b64))
-        except ValueError:
-            logger.warning("artifact image_b64 undecodable run=%s step=%s", run_id, step_id)
 
     docx_b64 = data.get("docx_b64")
     if isinstance(docx_b64, str) and docx_b64:

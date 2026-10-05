@@ -1,18 +1,14 @@
-"""Phase 3.1 — tools: registry/executor + all 7 tools.
+"""Phase 3.1 — tools: registry/executor + all 5 tools.
 
-Live where possible (plot = stdlib, doc = installed libs, sandbox = docker
-daemon, guarded by skip); fakes where live deps are unavailable (rag.query
-uses an injected fake — real VectorRAG needs the torch env repair from
-Phase 6; image.generate uses a mock provider — Ollama has no image model).
+Live where possible (plot = stdlib, doc = installed libs); fakes where
+live deps are unavailable (rag.query uses an injected fake — real
+VectorRAG needs the torch env repair from Phase 6).
 Run with ``pytest backend/tests/test_tools.py -q --noconftest`` until the
 torch env is repaired — the shared conftest imports app.main, which needs
 sentence_transformers.
 """
 
 from __future__ import annotations
-
-import shutil
-import subprocess
 
 import pytest
 from app.tools.base import Tool, ToolRequest, ToolResponse
@@ -21,30 +17,12 @@ from app.tools.rag_query import RagQueryTool, bind_rag_singleton, rag_query
 from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 EXPECTED_IDS = [
-    "code.sandbox",
     "doc.convert",
     "doc.generate",
-    "image.generate",
     "notebook.inspect",
     "plot.chart",
     "rag.query",
 ]
-
-
-def _docker_up() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    try:
-        proc = subprocess.run(
-            ["docker", "info"], capture_output=True, text=True, timeout=10.0,
-            check=False,  # returncode is the probe result
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
-
-
-needs_docker = pytest.mark.skipif(not _docker_up(), reason="docker daemon down")
 
 
 class FakeRAG:
@@ -110,10 +88,10 @@ class SpyProvider:
 
 
 class TestRegistry:
-    def test_all_seven_registered(self):
+    def test_all_five_registered(self):
         reg = get_default_tool_registry(rag=FakeRAG())
         assert sorted(t["tool_id"] for t in reg.manifest()) == EXPECTED_IDS
-        assert len(reg) == 7
+        assert len(reg) == 5
 
     def test_all_inherit_tool(self):
         reg = get_default_tool_registry(rag=FakeRAG())
@@ -525,60 +503,3 @@ class TestDocGenerate:
         reg = get_default_tool_registry()
         resp = execute_tool(reg, "doc.generate", {"sections": []})
         assert not resp.ok
-
-
-# --- code.sandbox (live docker) ---
-
-
-@needs_docker
-class TestCodeSandbox:
-    def test_print_round_trip(self):
-        reg = get_default_tool_registry()
-        resp = execute_tool(reg, "code.sandbox", {"code": "print(6*7)"})
-        assert resp.ok and (resp.output or "").strip() == "42"
-
-    def test_nonzero_exit_is_failure(self):
-        reg = get_default_tool_registry()
-        resp = execute_tool(reg, "code.sandbox", {"code": "raise SystemExit(3)"})
-        assert not resp.ok and "exit code 3" in (resp.error or "")
-
-    def test_missing_code_rejected(self):
-        reg = get_default_tool_registry()
-        resp = execute_tool(reg, "code.sandbox", {})
-        assert not resp.ok
-
-
-# --- image.generate ---
-
-
-class TestImageGenerate:
-    def test_unbound_fails_honest(self):
-        reg = get_default_tool_registry()
-        resp = execute_tool(reg, "image.generate", {"message": "a cat"})
-        assert not resp.ok and "no provider bound" in (resp.error or "")
-
-    def test_provider_without_capability_fails_honest(self):
-        from unittest.mock import MagicMock
-
-        from app.tools.image_generate import ImageGenerateTool
-
-        provider = MagicMock()
-        provider.generate_image.side_effect = NotImplementedError("no image model")
-        tool = ImageGenerateTool(provider=provider)
-        resp = tool.execute(
-            ToolRequest(tool_id="image.generate", input={"message": "a cat"})
-        )
-        assert not resp.ok and "no image model" in (resp.error or "")
-
-    def test_success_path_returns_b64(self):
-        from app.tools.image_generate import ImageGenerateTool
-
-        class FakeProvider:
-            def generate_image(self, prompt: str):
-                return "image/png", b"\x89PNG" + prompt.encode()
-
-        tool = ImageGenerateTool(provider=FakeProvider())  # type: ignore[arg-type]
-        resp = tool.execute(
-            ToolRequest(tool_id="image.generate", input={"message": "a cat"})
-        )
-        assert resp.ok and resp.data["byte_count"] == 9

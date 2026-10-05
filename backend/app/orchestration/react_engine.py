@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
 import threading
 import uuid
 from collections.abc import Callable
@@ -66,29 +65,26 @@ _TOOL_OUTPUT_TYPES = {
     "plot.chart": "chart",
     "doc.generate": "document",
     "doc.convert": "document",
-    "image.generate": "document",
 }
 
 #: Correct-shape hints surfaced when the ReAct model emits a malformed
 #: tool input (observed live trace c9e59039: {"agent": {"message": ...}}
-#: for rag.query/code.sandbox, {"tool_id": ...} without target_format
+#: for rag.query, {"tool_id": ...} without target_format
 #: for doc.convert — each burned a full iteration). Pre-flight validation
 #: appends these to the scratchpad WITHOUT executing, so the 6-step
 #: budget is preserved for real work.
 _TOOL_INPUT_HINTS = {
     "rag.query": 'rag.query needs {"query": "..."} flat '
     '(not {"agent": {...}}); add "file_id" to scope to one file',
-    "code.sandbox": 'code.sandbox needs {"code": "..."} flat (not {"agent": {...}})',
     "plot.chart": 'plot.chart needs {"chart_type": "bar|line", '
     '"labels": [...], "values": [...] or "series": [{label, values}], '
     'plus a short "title" naming the metric and comparison '
     '(e.g. {"title": "mAP@50-95: FASDD_CV vs AgniNetra"}) '
-    "with literal numbers from observations — never code.sandbox for charting",
+    "with literal numbers from observations",
     "doc.convert": 'doc.convert needs {"file_id": "...", '
     '"target_format": "md|docx|pdf"}',
     "doc.generate": 'doc.generate needs {"title": "...", '
     '"sections": [{"heading": ..., "body": ...}]}',
-    "image.generate": 'image.generate needs {"message": "..."}',
     "notebook.inspect": "notebook.inspect needs {} (notebook_id is injected)",
 }
 
@@ -97,11 +93,10 @@ def _normalize_react_input(executor: str, action_input: dict) -> dict:
     """Unwrap common ReAct model slips into flat tool/agent inputs.
 
     - {"agent": {"message": ...}} → top-level "message" (observed live
-      for rag.query AND code.sandbox in the same run).
+      for rag.query).
     - stray {"tool_id": ...} inside input → dropped (executor already
       selects the tool; the key only confuses required-field checks).
-    - rag.query message→query alias (mirrors RagQueryTool.execute);
-      code.sandbox message→code alias (same recovery philosophy).
+    - rag.query message→query alias (mirrors RagQueryTool.execute).
     Pure function — safe to unit test without Ollama/DB.
     """
     normalized = dict(action_input)
@@ -117,12 +112,6 @@ def _normalize_react_input(executor: str, action_input: dict) -> dict:
         and str(normalized.get("message", "")).strip()
     ):
         normalized["query"] = str(normalized["message"]).strip()
-    elif (
-        executor == "code.sandbox"
-        and not str(normalized.get("code", "")).strip()
-        and str(normalized.get("message", "")).strip()
-    ):
-        normalized["code"] = str(normalized["message"]).strip()
     return normalized
 
 
@@ -131,16 +120,12 @@ def _validate_react_input(executor: str, action_input: dict) -> str | None:
 
     Agents need input.message; tools need their flat schema fields.
     """
-    if executor in ("reasoning", "coding", "vision"):
+    if executor == "reasoning":
         return None  # agent message check lives at the call site
     if executor == "rag.query":
         if str(action_input.get("query", "")).strip():
             return None
         return _TOOL_INPUT_HINTS["rag.query"]
-    if executor == "code.sandbox":
-        if str(action_input.get("code", "")).strip():
-            return None
-        return _TOOL_INPUT_HINTS["code.sandbox"]
     if executor == "plot.chart":
         labels = action_input.get("labels")
         values = action_input.get("values")
@@ -223,10 +208,6 @@ def _validate_react_input(executor: str, action_input: dict) -> str | None:
         ):
             return None
         return _TOOL_INPUT_HINTS["doc.generate"]
-    if executor == "image.generate":
-        if str(action_input.get("message", "")).strip():
-            return None
-        return _TOOL_INPUT_HINTS["image.generate"]
     return None  # notebook.inspect + unknown tools: execution is the check
 
 
@@ -250,16 +231,6 @@ def _fallback_answer_text(action_input: dict) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
-
-
-def _sandbox_available() -> bool:
-    """Whether code.sandbox can execute on this host (docker CLI present).
-
-    Split out for prompt advertisement + tests: on docker-less hosts the
-    loop must never pick code.sandbox (trace 27dcf635 burned 2 of 6
-    iterations on a deterministically-broken tool).
-    """
-    return shutil.which("docker") is not None
 
 
 def _action_signature(executor: str, action_input: dict) -> str:
@@ -524,7 +495,6 @@ class ReActEngine:
         # files (same argument as the L2 empty-corpus short-circuit) — refuse
         # it once instead of burning iterations on "(no chunks retrieved)".
         corpus_empty = get_corpus_state(notebook_context) in ("empty", "processing")
-        sandbox_available = _sandbox_available()
         # Consecutive turns that produced no observation (provider errors,
         # unknown executors, empty answers). Caps garbage-loops against a
         # degraded model; any executed step or final answer resets it.
@@ -575,11 +545,10 @@ class ReActEngine:
                     '{"query": "...", "file_id": "..."}, plot.chart '
                     '{"chart_type": "bar", "labels": [...], "values": [...], '
                     '"title": "<metric>: A vs B"}, '
-                    'code.sandbox {"code": "..."}, doc.convert '
-                    '{"file_id": "...", "target_format": "md|docx|pdf"}, '
+                    'doc.convert {"file_id": "...", '
+                    '"target_format": "md|docx|pdf"}, '
                     'doc.generate {"title": "...", "sections": [{"heading": '
                     '...,"body": ...}], "target_format": "md|docx|pdf"}, '
-                    'image.generate {"message": "..."}, '
                     "notebook.inspect {}.\n"
                     'WRONG: {"agent": {"message": "..."}} for a tool — '
                     "the tool reads top-level fields, so this fails with "
@@ -592,20 +561,14 @@ class ReActEngine:
                     "holds numbers, recall approximate figures with a reasoning "
                     "step first (state they are approximate), then plot.chart. "
                     "Bar/line charts MUST use plot.chart with literal numbers "
-                    "from observations (or a prior reasoning step) — never "
-                    "code.sandbox for charting. Every plot.chart MUST include "
+                    "from observations (or a prior reasoning step). "
+                    "Every plot.chart MUST include "
                     "a short 'title' naming the metric and comparison "
                     "(e.g. 'mAP@50-95: FASDD_CV vs AgniNetra'). "
                     "Each plot.chart must cover a "
                     "DIFFERENT metric — never re-plot numbers already charted; "
                     "grouped comparisons use series:[{label, values}] with "
                     "shared labels, never nested values arrays. "
-                    + (
-                        ""
-                        if sandbox_available
-                        else "code.sandbox is UNAVAILABLE on this host (no "
-                        "docker) — never pick it; use reasoning/plot.chart instead. "
-                    )
                     + f"Notebook documents:\n{notebook_context or '(no documents)'}"
                 )
                 messages = [

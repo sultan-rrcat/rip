@@ -48,16 +48,12 @@ class AgentRegistry:
 def get_default_agent_registry(provider: ModelProvider) -> AgentRegistry:
     """Build the fixed RIP agent set (no plugin system — static composition).
 
-    Registers reasoning, coding, and vision agents sharing `provider`.
+    Registers the reasoning agent sharing `provider`.
     """
     # Local imports: keeps `app.agents.registry` importable without pulling
     # agent modules (and their provider/config deps) until the factory runs.
-    from app.agents.coding import CodingAgent
     from app.agents.reasoning import ReasoningAgent
-    from app.agents.vision import VisionAgent
 
     registry = AgentRegistry()
     registry.register(ReasoningAgent(provider))
-    registry.register(CodingAgent(provider))
-    registry.register(VisionAgent(provider))
     return registry

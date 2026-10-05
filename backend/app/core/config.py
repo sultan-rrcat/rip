@@ -60,7 +60,6 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://host.docker.internal:11434"  # localhost outside docker
     ollama_default_model: str = "qwen2.5:14b"
     ollama_timeout_ms: int = 120000  # Q28: Athena used 180000; locked 120000. httpx trust_env=False (proxy trap).
-    ollama_image_model: str = ""  # empty = image.generate fails honest (Athena ADR-024)
 
     # Embedding models (local paths)
     bge_m3_model_path: str = Field(
@@ -119,13 +118,6 @@ class Settings(BaseSettings):
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
     default_timeout_ms: int = 120000
-
-    # Code sandbox
-    sandbox_image: str = "python:3.11-slim"
-    sandbox_memory: str = "256m"
-    sandbox_pids_limit: int = 64
-    sandbox_timeout_ms: int = 30000
-    sandbox_output_max_bytes: int = 1048576
 
     # Orchestration
     default_max_plan_steps: int = 10
