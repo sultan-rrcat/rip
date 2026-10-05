@@ -309,6 +309,30 @@ def _plot_data_key(action_input: dict) -> tuple | None:
         return None
 
 
+def _doc_content_key(action_input: dict) -> tuple | None:
+    """Content-based dedupe key for doc.generate.
+
+    Hashes title + section headings/bodies so that near-duplicate
+    doc.generate calls (same report, slightly tweaked wording) are
+    caught — exact-JSON dedupe misses them (trace d86f27e9: r1-r4
+    all generated the same labs report with minor text variations).
+    """
+    try:
+        title = str(action_input.get("title", "")).strip()
+        sections = action_input.get("sections")
+        if not isinstance(sections, list) or not sections:
+            return None
+        parts = [title]
+        for s in sections:
+            if not isinstance(s, dict):
+                return None
+            parts.append(str(s.get("heading", "")))
+            parts.append(str(s.get("body", "")))
+        return tuple(parts)
+    except (TypeError, ValueError):
+        return None
+
+
 def _chart_observation(action_input: dict) -> str:
     """Short scratchpad line for a successful chart — never raw SVG.
 
@@ -376,6 +400,25 @@ _OVERVIEW_HINTS = (
     "main topics",
     "key points",
 )
+
+
+def _default_doc_format(request_text: str, action_input: dict) -> dict:
+    """Inject target_format into doc.generate when the user specifies one.
+
+    The model often omits target_format even when the user explicitly asks
+    for PDF/DOCX (trace d86f27e9: 'generate the response in PDF format'
+    produced md-only output). Extract the format from the request text
+    and inject it when the model left it unset.
+    """
+    if str(action_input.get("target_format", "")).strip():
+        return action_input
+    lowered = (request_text or "").lower()
+    for fmt in ("pdf", "docx", "md"):
+        if fmt in lowered:
+            updated = dict(action_input)
+            updated["target_format"] = fmt
+            return updated
+    return action_input
 
 
 def _default_react_mode(request_text: str, action_input: dict) -> dict:
@@ -474,6 +517,9 @@ class ReActEngine:
         # what each chart actually showed (prevents hallucinated diversity
         # when multiple charts carry the same data).
         chart_fingerprints: dict[str, str] = {}
+        # Content-based dedupe for doc.generate — catches near-duplicate
+        # reports (same title + sections, slightly tweaked wording).
+        seen_doc_content: set[tuple] = set()
         # rag.query is provably useless when the snapshot holds zero ready
         # files (same argument as the L2 empty-corpus short-circuit) — refuse
         # it once instead of burning iterations on "(no chunks retrieved)".
@@ -699,6 +745,8 @@ class ReActEngine:
                 )
                 if executor == "rag.query":
                     action_input = _default_react_mode(request_text, action_input)
+                if executor == "doc.generate":
+                    action_input = _default_doc_format(request_text, action_input)
                 if executor in known_tools:
                     hint = _validate_react_input(executor, action_input)
                     if hint is not None:
@@ -842,6 +890,31 @@ class ReActEngine:
                             }
                         )
                         continue
+                if executor == "doc.generate":
+                    content_key = _doc_content_key(action_input)
+                    if content_key is not None and content_key in seen_doc_content:
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "error": "doc.generate with this content already succeeded",
+                                }
+                            )
+                            break
+                        scratchpad.append(
+                            "doc.generate with this exact content already succeeded; "
+                            "use the existing document as the final answer or set "
+                            "is_final=true with a summary of it."
+                        )
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "thought": thought_in,
+                                "executor": executor,
+                                "error": "repeat of successful doc.generate (content match)",
+                            }
+                        )
+                        continue
                 guard.record_progress()
                 step_id = f"r{iteration}"
                 is_tool = executor in known_tools
@@ -942,10 +1015,18 @@ class ReActEngine:
                                 "answer from what you have, do not plot more charts."
                             )
                             break
-                    if is_tool and executor in ("doc.generate", "doc.convert"):
+                    if is_tool and executor == "doc.generate":
+                        content_key = _doc_content_key(action_input)
+                        if content_key is not None:
+                            seen_doc_content.add(content_key)
                         scratchpad.append(
-                            f"document generated successfully — use it as the final "
-                            f"answer, do not run {executor} again."
+                            "document generated successfully — use it as the final "
+                            "answer, do not run doc.generate again."
+                        )
+                    if is_tool and executor == "doc.convert":
+                        scratchpad.append(
+                            "document converted successfully — use it as the final "
+                            "answer, do not run doc.convert again."
                         )
                 else:
                     failed_actions[sig] = outcome.error or "unknown error"
@@ -1049,7 +1130,9 @@ class ReActEngine:
                     f"ask the user to upload or paste anything. Charts are "
                     f"already rendered in Artifacts — describe each chart's "
                     f"takeaway and give a summary table, but NEVER redraw "
-                    f"charts as ASCII/text blocks. "
+                    f"charts as ASCII/text blocks. Do NOT generate code — "
+                    f"the document/chart is already produced; just describe "
+                    f"it and summarize. "
                     f"Request: {request_text}\n\nObservations:\n{evidence}"
                 )
                 try:
