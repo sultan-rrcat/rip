@@ -569,6 +569,12 @@ class ReActEngine:
                     "DIFFERENT metric — never re-plot numbers already charted; "
                     "grouped comparisons use series:[{label, values}] with "
                     "shared labels, never nested values arrays. "
+                    "When is_final is true, write answer as a polished, "
+                    "user-facing Markdown response like a world-class "
+                    "assistant: lead with the direct answer, then supporting "
+                    "detail with short headings, bullets, or a table when "
+                    "helpful; never expose thought, executor names, or step "
+                    "numbers. "
                     + f"Notebook documents:\n{notebook_context or '(no documents)'}"
                 )
                 messages = [
@@ -1095,7 +1101,11 @@ class ReActEngine:
                     f"takeaway and give a summary table, but NEVER redraw "
                     f"charts as ASCII/text blocks. Do NOT generate code — "
                     f"the document/chart is already produced; just describe "
-                    f"it and summarize. "
+                    f"it and summarize. Write like a world-class assistant: "
+                    f"lead with the direct answer, then supporting detail in "
+                    f"clear Markdown (short headings, bullets, numbered "
+                    f"steps, or a table when it helps); never expose step "
+                    f"ids or internal machinery. "
                     f"Request: {request_text}\n\nObservations:\n{evidence}"
                 )
                 try:

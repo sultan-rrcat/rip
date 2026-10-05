@@ -27,6 +27,17 @@ from app.orchestration.router import RouterResult
 
 _PER_FILE_TOP_K = 4
 
+#: Presentation tail for every grounded writer step (qa_single, compare,
+#: summarize, quiz). Grounding invariants ("ONLY chunks", "not in the
+#: documents", no placeholder leaks) come first; this only styles HOW the
+#: honest answer reads in chat. Kept short — the reasoning system prompt
+#: carries the full voice.
+_PRESENTATION_SUFFIX = (
+    " Present like a world-class assistant: lead with the direct answer, "
+    "then supporting detail in clear Markdown (short headings, bullets, "
+    "numbered steps, or a table when it helps)."
+)
+
 
 def _corpus_state(notebook_context: str | None) -> str:
     """Backwards-compat wrapper over `corpus.get_corpus_state`.
@@ -130,7 +141,7 @@ def build_qa_single(query: str, request_text: str) -> Plan:
                         f"chunks {{{{1}}}}. Say 'not in the documents' when the "
                         f"chunks are empty or read '(no chunks retrieved)'. "
                         f"Never mention chunk ids or placeholders. "
-                        f"Request: {request_text}"
+                        f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                     )
                 },
                 depends_on=["1"],
@@ -201,7 +212,7 @@ def build_compare_multi(
                     f"request. Say 'not in the documents' for anything the "
                     f"chunks do not cover, including when they read "
                     f"'(no chunks retrieved)'. Never mention chunk ids or "
-                    f"placeholders. Request: {request_text}"
+                    f"placeholders. Request: {request_text}{_PRESENTATION_SUFFIX}"
                 )
             },
             depends_on=dep_ids,
@@ -260,7 +271,7 @@ def build_summarize(request_text: str, notebook_context: str | None = None) -> P
                     f"requested summary. Say 'not in the documents' when the "
                     f"chunks are empty or read '(no chunks retrieved)'. "
                     f"Never mention chunk ids or placeholders. "
-                    f"Request: {request_text}"
+                    f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                 )
             },
             depends_on=dep_ids,
@@ -311,7 +322,7 @@ def build_quiz(
                         f"the documents' when the chunks are empty or read "
                         f"'(no chunks retrieved)'. Never mention chunk ids "
                         f"or placeholders. "
-                        f"Request: {request_text}"
+                        f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                     )
                 },
                 depends_on=dep_ids,
@@ -343,7 +354,7 @@ def build_quiz(
                         f"the documents' when the chunks are empty or read "
                         f"'(no chunks retrieved)'. Never mention chunk ids "
                         f"or placeholders. "
-                        f"Request: {request_text}"
+                        f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                     )
                 },
                 depends_on=["1"],

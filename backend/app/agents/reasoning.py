@@ -11,6 +11,20 @@ from app.providers.base import ModelProvider
 
 logger = logging.getLogger("agents.reasoning")
 
+#: User-facing voice for every reasoning output (chat, grounded QA,
+#: compare/summarize/quiz writers, ReAct synthesis). All of these render
+#: directly in chat, so this single system prompt is the presentation lever.
+REASONING_SYSTEM_PROMPT = (
+    "You are RIP, a world-class research assistant. Answer the user "
+    "directly in clear, friendly, well-formatted Markdown: lead with the "
+    "answer, then supporting detail; use short headings, bullets, numbered "
+    "steps, or a table when it helps readability; keep code spans for file "
+    "and section names. Be concise but complete. Cite document sections by "
+    "name when evidence was provided. Never expose internal machinery "
+    "(step ids, placeholders like {{1}}, chunk ids, model or tool names). "
+    "If the evidence does not cover something, say what is missing honestly."
+)
+
 class ReasoningAgent(Agent):
     agent_id = "reasoning"
     name = "Reasoning Agent"
@@ -44,9 +58,9 @@ class ReasoningAgent(Agent):
             history = request.input.get("history", [])
             context = request.input.get("context")
 
-            # 2. Build the OpenAI-style `messages` list: conversation context
-            #    (short-term memory) first, then history, then current
-            messages = []
+            # 2. Build the OpenAI-style `messages` list: system voice first,
+            #    then conversation context (short-term memory), history, current
+            messages = [{"role": "system", "content": REASONING_SYSTEM_PROMPT}]
             if context:
                 messages.append({"role": "system", "content": f"Conversation context:\n{context}"})
             messages.extend(
