@@ -13,12 +13,7 @@ from __future__ import annotations
 import pytest
 from app.tools.base import Tool, ToolRequest, ToolResponse
 from app.tools.executor import execute_tool
-from app.tools.rag_query import (
-    RagQueryTool,
-    bind_rag_singleton,
-    clear_plan_cache,
-    rag_query,
-)
+from app.tools.rag_query import RagQueryTool, bind_rag_singleton, rag_query
 from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 EXPECTED_IDS = [
@@ -233,7 +228,6 @@ class TestRagQuery:
 
     def test_whole_file_shortcut_skips_ranked_retrieval(self):
         """Whole-file hit returns every chunk and never calls the planner."""
-        clear_plan_cache()
         rag = WholeFileRAG()
         provider = SpyProvider()
         tool = RagQueryTool(rag=rag, provider=provider)
@@ -274,7 +268,6 @@ class TestRagQuery:
 
     def test_shortcut_disabled_falls_back_to_ranked(self):
         """None (over budget) keeps today's path exactly."""
-        clear_plan_cache()
         rag = WholeFileRAG(whole=None)
         provider = SpyProvider()
         tool = RagQueryTool(rag=rag, provider=provider)
@@ -321,136 +314,6 @@ class TestRagQuery:
 
 
 # --- plot.chart ---
-
-
-class TestRagQueryPlanMemo:
-    """Sub-query planning happens once per request, not once per shard.
-
-    Trace 246fdaf3: `build_summarize` fanned out one overview shard per
-    ready file, every shard passed the SAME request text, and each one ran
-    its own planner call — 3 shards produced byte-identical query lists
-    while contending for the single Ollama server the reduce step needed.
-    """
-
-    def test_identical_query_plans_once_across_shards(self):
-        clear_plan_cache()
-        provider = SpyProvider()
-        # Different file_ids, identical request text: the fan-out shape.
-        for fid in ("f1", "f2", "f3"):
-            tool = RagQueryTool(rag=FakeRAG(), provider=provider)
-            resp = tool.execute(
-                ToolRequest(
-                    tool_id="rag.query",
-                    input={
-                        "notebook_id": "nb-1",
-                        "query": "list the projects",
-                        "file_id": fid,
-                        "mode": "overview",
-                    },
-                )
-            )
-            assert resp.ok
-            assert resp.data["generated_queries"] == ["sub one"]
-        assert provider.calls == 1
-
-    def test_distinct_queries_still_plan_separately(self):
-        clear_plan_cache()
-        provider = SpyProvider()
-        for q in ("first question", "second question"):
-            RagQueryTool(rag=FakeRAG(), provider=provider).execute(
-                ToolRequest(
-                    tool_id="rag.query",
-                    input={"notebook_id": "nb-1", "query": q},
-                )
-            )
-        assert provider.calls == 2
-
-    def test_cache_is_bounded(self):
-        """The process outlives any request, so the memo cannot grow forever."""
-        from app.tools.rag_query import _PLAN_CACHE_MAX, _plan_cache
-
-        clear_plan_cache()
-        provider = SpyProvider()
-        for i in range(_PLAN_CACHE_MAX + 5):
-            RagQueryTool(rag=FakeRAG(), provider=provider).execute(
-                ToolRequest(
-                    tool_id="rag.query",
-                    input={"notebook_id": "nb-1", "query": f"q{i}"},
-                )
-            )
-        assert len(_plan_cache) == _PLAN_CACHE_MAX
-
-    def test_planner_failure_is_not_cached(self):
-        """A transient outage must not poison the key for the process lifetime."""
-        clear_plan_cache()
-
-        class BoomProvider:
-            def __init__(self):
-                self.calls = 0
-
-            def generate_structured(self, model, messages, schema, temperature=0):
-                self.calls += 1
-                raise RuntimeError("ollama down")
-
-        boom = BoomProvider()
-        resp = RagQueryTool(rag=FakeRAG(), provider=boom).execute(
-            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "x"})
-        )
-        assert resp.ok  # falls back to the original query, retrieval still runs
-        assert resp.data["generated_queries"] == ["x"]
-
-        # A later, healthy call must re-plan rather than read a cached failure.
-        good = SpyProvider()
-        resp2 = RagQueryTool(rag=FakeRAG(), provider=good).execute(
-            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "x"})
-        )
-        assert resp2.data["generated_queries"] == ["sub one"]
-        assert good.calls == 1
-
-    def test_concurrent_shards_plan_once(self):
-        """Single-flight: shards arriving together must not all miss the cache."""
-        import threading
-
-        clear_plan_cache()
-        started = threading.Event()
-        release = threading.Event()
-
-        class BlockingProvider:
-            def __init__(self):
-                self.calls = 0
-                self._lock = threading.Lock()
-
-            def generate_structured(self, model, messages, schema, temperature=0):
-                with self._lock:
-                    self.calls += 1
-                started.set()
-                release.wait(timeout=5)
-                return {"queries": ["sub one"]}
-
-        provider = BlockingProvider()
-        errors: list[BaseException] = []
-
-        def run() -> None:
-            try:
-                RagQueryTool(rag=FakeRAG(), provider=provider).execute(
-                    ToolRequest(
-                        tool_id="rag.query",
-                        input={"notebook_id": "nb-1", "query": "shared question"},
-                    )
-                )
-            except BaseException as e:  # noqa: BLE001 - surfaced in the assert
-                errors.append(e)
-
-        threads = [threading.Thread(target=run) for _ in range(4)]
-        for t in threads:
-            t.start()
-        started.wait(timeout=5)
-        release.set()
-        for t in threads:
-            t.join(timeout=10)
-
-        assert not errors
-        assert provider.calls == 1
 
 
 class TestPlotChart:

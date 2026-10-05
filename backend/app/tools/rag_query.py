@@ -18,9 +18,6 @@ Effect class: read-only.
 from __future__ import annotations
 
 import logging
-import threading
-from collections import OrderedDict
-from collections.abc import Callable
 from typing import Any, ClassVar
 
 from app.core.config import settings
@@ -32,56 +29,6 @@ logger = logging.getLogger("tools.rag_query")
 _DEFAULT_TOP_K = 4
 
 _VALID_MODES = frozenset({"specific", "overview"})
-
-#: Sub-query decomposition memo, keyed by ``(query, model)``.
-#:
-#: The planner is a pure function of its input — temperature 0, one system
-#: prompt, no notebook or file context — so re-deriving it for an identical
-#: request returns an identical list. A plan fans out one `rag.query` shard
-#: per ready file and every shard passes the SAME request text as `query`
-#: (`builders.py:241`), so an N-file summarize paid N planner calls for one
-#: answer. Observed live 2026-10-05: 3 shards produced byte-identical query
-#: lists while contending for the single Ollama server that the reduce step
-#: then needed.
-#:
-#: Bounded LRU (not unbounded) because the process outlives any one request.
-#: Cross-run reuse is safe precisely because the mapping is pure: a cache hit
-#: is indistinguishable from a fresh call. Keyed by model as well as text so a
-#: retuned model never reads another model's decomposition.
-_PLAN_CACHE_MAX = 32
-_plan_cache: OrderedDict[tuple[str, str], list[str]] = OrderedDict()
-
-#: Single-flight guard for the planner. Concurrent shards of one plan arrive
-#: within milliseconds of each other; without this they would all miss the
-#: cache and all call Ollama, so the memo would never take effect under
-#: exactly the fan-out it exists for. Held across the LLM call on purpose —
-#: there is one local Ollama server, so these calls queue there anyway, and
-#: serializing here turns N queued calls into 1 call plus N-1 cache hits.
-_plan_lock = threading.Lock()
-
-
-def clear_plan_cache() -> None:
-    """Drop the sub-query memo. Test seam: the cache is process-global and
-    outlives any single request, so tests that assert planner call counts
-    must not inherit an entry from an earlier test."""
-    with _plan_lock:
-        _plan_cache.clear()
-
-
-def _plan_queries_cached(query: str, model: str, generate: Callable[[], list[str]]) -> list[str]:
-    """Memoized sub-query decomposition. `generate` runs at most once per key."""
-    key = (query, model)
-    with _plan_lock:
-        cached = _plan_cache.get(key)
-        if cached is not None:
-            _plan_cache.move_to_end(key)
-            return list(cached)
-        generated = generate()
-        _plan_cache[key] = list(generated)
-        _plan_cache.move_to_end(key)
-        while len(_plan_cache) > _PLAN_CACHE_MAX:
-            _plan_cache.popitem(last=False)
-        return list(generated)
 
 # Module-global singleton slot. Bound at lifespan (Phase 4.2 main.py calls
 # bind_rag_singleton(app.state.rag)) or directly in tests via RagQueryTool(rag=...).
@@ -302,15 +249,9 @@ class RagQueryTool(Tool):
                 },
             )
         # Generate sub-queries via LLM, always.
-        original_query = str(query)
-        generated_queries: list[str] = [original_query]
+        generated_queries: list[str] = [str(query)]
         if self._provider:
-
-            def _generate() -> list[str]:
-                """One decomposition call. Failures propagate to the caller's
-                existing fallback (original query), and are NOT cached — a
-                transient Ollama outage must not poison the key for the
-                process lifetime."""
+            try:
                 schema = {
                     "type": "object",
                     "properties": {
@@ -331,26 +272,20 @@ class RagQueryTool(Tool):
                     "Return ONLY the list of rewritten search queries, with no explanation, answer, labels, JSON, "
                     "markdown, or reasoning."
                 )
+
                 raw_q = self._provider.generate_structured(
                     model=getattr(settings, "ollama_default_model", "qwen2.5:14b"),
                     messages=[
                         {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": original_query},
+                        {"role": "user", "content": str(query)},
                     ],
                     schema=schema,
                     temperature=0,
                 )
                 qs = raw_q.get("queries", []) if isinstance(raw_q, dict) else []
-                return [q.strip() for q in qs if isinstance(q, str) and q.strip()][:3]
-
-            try:
-                planned = _plan_queries_cached(
-                    original_query,
-                    str(getattr(settings, "ollama_default_model", "qwen2.5:14b")),
-                    _generate,
-                )
-                if planned:
-                    generated_queries = planned
+                qs = [q.strip() for q in qs if isinstance(q, str) and q.strip()][:3]
+                if qs:
+                    generated_queries = qs
             except Exception as e:  # noqa: BLE001 - decomposition fallback keeps original query
                 logger.warning(
                     "rag query generation failed, falling back to original query: %s", e

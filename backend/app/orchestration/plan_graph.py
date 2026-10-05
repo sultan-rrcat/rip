@@ -29,11 +29,8 @@ Semantics:
     the node thread so a late background finish can no longer flip the
     span or emit late events, and the orphan aborts between attempts)
   - per-executor deadlines: agent (LLM) steps get the provider budget
-    (`ollama_timeout_ms`), deterministic tool steps stay on
-    `settings.default_timeout_ms`, and `rag.query` overview shards get 2x
-    it because a shard's clock starts with the whole fan-out and the
-    shared BGE models serialize them behind each other (see
-    `_step_timeout_ms`)
+    (`ollama_timeout_ms`), deterministic tool steps stay on the tight
+    default — one global 30s starves multi-paragraph writes on a 14B model
   - no approval gate (local single-user: tools execute directly)
 
 RIP port: approvals and correlation helpers removed; step lifecycle is
@@ -355,27 +352,12 @@ def _step_timeout_ms(step: PlanStep, default_ms: int) -> int:
 
     Agent steps stream long text out of a single local Ollama server
     (observed 25–77s for a 5-MCQ write on qwen2.5:14b); they get the
-    provider budget (`ollama_timeout_ms`). Deterministic tool steps
-    (rag.query, plot.chart, …) stay on `settings.default_timeout_ms`
-    (DEFAULT_TIMEOUT_MS; 60s in `.env`, 120s as the code default) —
-    except `rag.query` in `overview` mode, which reranks a `top_k*3`
-    candidate pool for stratification and gets double that.
-
-    Overview's 2x exists because a shard's wall clock is measured from
-    when the whole fan-out STARTS, not from when the shard reaches its
-    own work: `build_summarize` emits one overview shard per ready file
-    and they all enter together. The shared BGE models are serialized by
-    `RagPipeline._model_lock` (they are one pair of weights on one
-    device), so a late shard spends part of its budget QUEUED behind its
-    siblings and only the remainder doing its own retrieval. Trace
-    246fdaf3: 3 shards against a 120s deadline finished in 85s /
-    timeout / 0.003s.
-
-    The budget still has to cover the queue, so 2x is a floor, not a
-    ceiling — N files means N shards of queued work inside one deadline.
-    Widening it is the wrong lever if latency is the complaint: reduce
-    the work per shard instead (whole-file returns, per-shard sub-query
-    count). See ADR-036.
+    provider budget (`ollama_timeout_ms`, 120s). Deterministic tool steps
+    (rag.query, plot.chart, …) stay on the tight default (30s) — except
+    `rag.query` in `overview` mode, which reranks a 3x candidate pool for
+    stratification (trace cfbaa9c3: two parallel overviews both hit 30s).
+    Overview shards get double the default so summarize/quiz fan-outs
+    survive BGE rerank on CPU.
     """
     if step.tool_id:
         if step.tool_id == "rag.query":

@@ -1,23 +1,19 @@
-"""Retrieval diversity: per-file round-robin interleave + model serialization.
+"""Retrieval diversity: per-file round-robin interleave (pure unit tests).
 
-No DB, no torch — the interleave/stratify helpers and the shared-model lock
-are exercised against fakes. Live replay of the trace-2 queries (2 ready
-files, one-doc collapse) was verified manually against the office backend
-before wiring it in.
+No DB, no models — covers the helper only. Live replay of the trace-2
+queries (2 ready files, one-doc collapse) was verified manually against
+the office backend before wiring it in.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import threading
-import time
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
-from app.rag.pipeline import RagPipeline
 from app.rag.vector_rag import (
     _interleave_by_source,
     _matches_overview_section,
@@ -144,95 +140,3 @@ def test_select_top_truncates_to_top_k() -> None:
     items = [_scored(f"t{i}", 0.9 - i * 0.1) for i in range(6)]
     out = _select_top(items, 4, 0.05)
     assert [c["text"] for c in out] == ["t0", "t1", "t2", "t3"]
-
-
-# --- shared-model serialization -------------------------------------------
-
-
-class _ConcurrentProbe:
-    """Fake torch model that records overlap in its "kernel"."""
-
-    def __init__(self, hold_s: float = 0.05):
-        self._hold = hold_s
-        self._lock = threading.Lock()
-        self._active = 0
-        self.max_concurrent = 0
-
-    def _enter(self):
-        with self._lock:
-            self._active += 1
-            self.max_concurrent = max(self.max_concurrent, self._active)
-        time.sleep(self._hold)
-        with self._lock:
-            self._active -= 1
-
-    def embed_query(self, text):
-        self._enter()
-        return [0.0]
-
-    def embed_documents(self, texts):
-        self._enter()
-        return [[0.0] for _ in texts]
-
-    def predict(self, pairs):
-        self._enter()
-        return [0.5 for _ in pairs]
-
-
-def _probe_pipeline() -> RagPipeline:
-    """A RagPipeline with fake weights.
-
-    Bypasses `__init__` (which requires the real BGE weights on disk) and
-    installs its OWN lock: `_model_lock` is a class attribute, so sharing
-    it across tests would serialize unrelated assertions against each
-    other's timing.
-    """
-    p = RagPipeline.__new__(RagPipeline)
-    probe = _ConcurrentProbe()
-    p.embedding_model = probe
-    p.reranker_model = probe
-    p._model_lock = threading.Lock()
-    return p
-
-
-def test_model_calls_do_not_overlap() -> None:
-    """Parallel shards must not enter the shared models simultaneously.
-
-    Trace 246fdaf3: 3 concurrent overview shards against one pair of BGE
-    weights on one device finished in 85s / timeout / 0.003s. The
-    contention, not the work, is what exhausted the step's wall clock.
-    """
-    p = _probe_pipeline()
-    threads = [
-        threading.Thread(target=p.rerank, args=([("q", "d")] * 12,))
-        for _ in range(4)
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=10)
-    assert p.reranker_model.max_concurrent == 1
-
-
-def test_embed_and_rerank_share_one_lock() -> None:
-    """A shard embedding while another reranks is still one at a time."""
-    p = _probe_pipeline()
-    threads = [
-        threading.Thread(target=p.embed_query, args=("q",)),
-        threading.Thread(target=p.rerank, args=([("q", "d")] * 12,)),
-        threading.Thread(target=p.embed_documents, args=(["a", "b"],)),
-        threading.Thread(target=p.rerank, args=([("q", "d")] * 12,)),
-    ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=10)
-    assert p.embedding_model.max_concurrent == 1
-
-
-def test_lock_returns_results_unchanged() -> None:
-    """Serialization must not alter what the models return."""
-    p = _probe_pipeline()
-    assert p.embed_query("q") == [0.0]
-    assert p.embed_documents(["a", "b"]) == [[0.0], [0.0]]
-    assert p.rerank([("q", "d"), ("q", "e")]) == [0.5, 0.5]

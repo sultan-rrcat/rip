@@ -3,7 +3,6 @@
 
 
 import json
-import threading
 
 from docling.document_converter import DocumentConverter
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -21,26 +20,6 @@ logger = setup_logging()
 
 
 class RagPipeline:
-    #: Serializes every call into the shared torch models.
-    #:
-    #: The embedder and the CrossEncoder are ONE pair of weights on ONE
-    #: device, shared by every request (built once at lifespan). A plan
-    #: fans out one `rag.query` shard per file and LangGraph runs them
-    #: concurrently, so N shards entered `predict`/`embed_query`
-    #: simultaneously and fought over the same CUDA context and torch
-    #: thread pool. Observed live 2026-10-05: 3 parallel overview
-    #: shards, each burning 3 sub-queries, took 85s / 120s(timeout) /
-    #: 0.003s against a 120s deadline — the contention, not the work,
-    #: is what blew the budget.
-    #:
-    #: Serializing costs nothing on the critical path (a single shard
-    #: already used the device exclusively) and it makes latency
-    #: predictable instead of superlinear in shard count. torch releases
-    #: the GIL inside the kernels, so an UNguarded call is real parallel
-    #: work contending for one device; one lock keeps the device busy
-    #: without the thrash.
-    _model_lock = threading.Lock()
-
     def __init__(self):
         from pathlib import Path
 
@@ -57,25 +36,6 @@ class RagPipeline:
             model_name=settings.bge_m3_model_path
         )
         self.reranker_model = CrossEncoder(settings.bge_reranker_v2_m3)
-
-    def embed_query(self, text: str):
-        """Embed one query string under the shared-model lock."""
-        with self._model_lock:
-            return self.embedding_model.embed_query(text)
-
-    def embed_documents(self, texts: list[str]):
-        """Embed a batch of texts under the shared-model lock.
-
-        Ingest (`generate_embeddings`) runs as a background task against
-        the same weights as live retrieval, so it takes the same lock.
-        """
-        with self._model_lock:
-            return self.embedding_model.embed_documents(texts)
-
-    def rerank(self, pairs: list[tuple[str, str]]):
-        """Score (query, passage) pairs under the shared-model lock."""
-        with self._model_lock:
-            return self.reranker_model.predict(pairs)
 
     # =========================
     # 📄 DOCUMENT LOADER
@@ -199,7 +159,7 @@ class RagPipeline:
     def generate_embeddings(self, chunks):
         try:
             texts = [doc.page_content for doc in chunks]
-            embeddings = self.embed_documents(texts)
+            embeddings = self.embedding_model.embed_documents(texts)
             return embeddings
 
         except Exception:

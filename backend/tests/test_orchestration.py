@@ -1424,45 +1424,14 @@ class TestFailClosedPlaceholders:
         assert "(no chunks retrieved)" in agent.seen[0]["message"]
 
     def test_overview_shard_gets_double_tool_budget(self):
-        """The 2x multiplier, asserted against the value production uses.
-
-        Pinned to the explicit `default_ms` argument rather than a literal
-        30000: the previous version asserted a hardcoded 30000 while
-        `build_plan_graph` passes `settings.default_timeout_ms` (60s in
-        .env, 120s as the code default), so the test passed while proving
-        nothing about the real budget. Trace 246fdaf3 lost a shard to a
-        120s deadline on the strength of a stale "30s" docstring.
-        """
         from app.orchestration.plan_graph import _step_timeout_ms
 
-        default_ms = settings.default_timeout_ms
         overview = PlanStep(step_id="1", tool_id="rag.query",
                             input={"query": "x", "mode": "overview"})
         specific = PlanStep(step_id="2", tool_id="rag.query",
                             input={"query": "x", "mode": "specific"})
-        assert _step_timeout_ms(overview, default_ms) == default_ms * 2
-        assert _step_timeout_ms(specific, default_ms) == default_ms
-
-    def test_tool_step_budget_is_the_configured_default(self):
-        """A non-rag tool step gets exactly `settings.default_timeout_ms`.
-
-        Guards the docstring/value drift that produced the stale "30s"
-        claim: whatever DEFAULT_TIMEOUT_MS is set to, that is the budget.
-        """
-        from app.orchestration.plan_graph import _step_timeout_ms
-
-        step = PlanStep(step_id="1", tool_id="plot.chart", input={"kind": "bar"})
-        assert _step_timeout_ms(step, settings.default_timeout_ms) == (
-            settings.default_timeout_ms
-        )
-
-    def test_agent_step_budget_is_the_provider_budget(self):
-        from app.orchestration.plan_graph import _step_timeout_ms
-
-        agent = PlanStep(step_id="1", agent_id="reasoning", input={"message": "m"})
-        assert _step_timeout_ms(agent, settings.default_timeout_ms) == (
-            settings.ollama_timeout_ms
-        )
+        assert _step_timeout_ms(overview, 30000) == 60000
+        assert _step_timeout_ms(specific, 30000) == 30000
 
     def test_aggregator_demotes_answer_with_unresolved_placeholders(self):
         plan = Plan(

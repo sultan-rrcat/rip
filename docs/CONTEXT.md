@@ -39,7 +39,7 @@ The retrieval shortcut (ADR-033): when every chunk in a `rag.query` scope fits t
 _Avoid_: Full-text mode, load-everything, bypass mode
 
 **rag.query**:
-The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=4)` reusing the lifespan `VectorRAG` singleton. On completion, the run worker emits an SSE `sources` event (Q32). Never used for verbatim file conversion. Its sub-query decomposition is planned once per request and memoized (ADR-036), so a per-file fan-out pays one planner call, not one per shard.
+The tool that searches documents. Called as `rag.query(notebook_id, query, top_k=4)` reusing the lifespan `VectorRAG` singleton. On completion, the run worker emits an SSE `sources` event (Q32). Never used for verbatim file conversion.
 _Avoid_: Search, retrieve, lookup
 
 **notebook.inspect**:
@@ -133,7 +133,7 @@ The sole LLM provider. Fully offline; no cloud dependencies. Default model: `qwe
 _Avoid_: LLM provider, model backend
 
 **VectorRAG embedding**:
-Local models that turn document chunks into searchable vectors: BGE-M3 at `./backend/models/bge-m3`, reranker at `./backend/models/reranker/bge_reranker_v2_m3`. One shared pair of weights for the whole process, so every call goes through `RagPipeline`'s model lock (ADR-036) — retrieval and ingest queue rather than contend.
+Local models that turn document chunks into searchable vectors: BGE-M3 at `./backend/models/bge-m3`, reranker at `./backend/models/reranker/bge_reranker_v2_m3`.
 _Avoid_: Embedding model, vector model
 
 **Docling**:
