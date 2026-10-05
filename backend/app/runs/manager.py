@@ -332,6 +332,10 @@ class RunManager:
 
             # Q32: one `sources` event per completed rag.query step, in plan
             # order, via extract_sources() over the step's retrieved chunks.
+            # Deduplicate across steps — repeated rag.query calls returning
+            # the same chunks (trace 04efd86c: r1-r4 all returned cover+TOC)
+            # would otherwise flood the frontend with identical source entries.
+            seen_sources: set[tuple] = set()
             for step in result.step_results or []:
                 if (
                     getattr(step.agent_id, "value", step.agent_id) == "rag.query"
@@ -340,10 +344,16 @@ class RunManager:
                     and isinstance(step.data.get("results"), list)
                 ):
                     sources = extract_sources({"results": step.data["results"]})
-                    if sources:
+                    new_sources = [
+                        s for s in sources
+                        if (s.get("source"), s.get("section")) not in seen_sources
+                    ]
+                    if new_sources:
+                        for s in new_sources:
+                            seen_sources.add((s.get("source"), s.get("section")))
                         self._publish(
                             record, "sources",
-                            {"step_id": step.step_id, "sources": sources},
+                            {"step_id": step.step_id, "sources": new_sources},
                         )
 
             # Q34: tool outputs to disk; SSE carries download URLs only.
