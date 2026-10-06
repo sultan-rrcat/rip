@@ -507,6 +507,7 @@ class RunManager:
             fid, name, status = str(r[0]), r[1] or "?", r[2] or "?"
             # Code files bypass vector ingest: mark ready:code so builders
             # route them to the coding agent instead of rag.query.
+            # Language-agnostic: any file with a code_extensions match.
             import os as _os
 
             if status == "ready" and _os.path.splitext(name or "")[1].lower() in code_exts:

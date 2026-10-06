@@ -75,7 +75,7 @@ class Router:
             "Convert intents only: file_hint is the named file (or \"*\" when "
             "the request says all/every documents, else \"\"), target_format "
             "is md|docx|pdf when stated (else \"\").\n"
-            "Code intent: file_hint is the named .py file when the request "
+            "Code intent: file_hint is the named code file when the request "
             "names one (else \"\" for all code files).\n"
             "Return intent as the exact value string and confidence as 0.0-1.0."
         )

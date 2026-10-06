@@ -28,6 +28,7 @@ async def run_rag_pipeline(file_id: str, rag: Any):
         ext = os.path.splitext(file_name or "")[1] or ".pdf"
         # Code files never enter vector ingest (defense in depth: upload +
         # process routes already skip them; a stale queued task must not embed).
+        # Language-agnostic: matches any extension in code_extensions.
         if ext.lower() in set(settings.code_extensions or []):
             logger.info(f"Code file, skipping ingest: {file_name}")
             with pg_connection() as conn, conn.cursor() as cur:

@@ -13,7 +13,7 @@ import re
 
 #: Snapshot lines look like "report.pdf [ready] id=abc123" (see
 #: runs/manager._load_file_snapshot). Code files are marked
-#: "app.py [ready:code] id=..." — stored on disk, never embedded.
+#: "script.py [ready:code] id=..." — stored on disk, never embedded.
 _SNAPSHOT_FILE = re.compile(
     r"(.+?)\s*\[(ready(?::code)?|processing|uploading|error)\]\s*id=(\S+)"
 )

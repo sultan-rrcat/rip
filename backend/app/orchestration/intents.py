@@ -46,7 +46,7 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
     Intent.CONVERT_ALL: "convert all/plural documents to md/docx/pdf",
     Intent.CONVERT_AMBIGUOUS: "convert it/the document without naming file or format",
     Intent.QUIZ: "generate questions, quiz, or MCQs from documents",
-    Intent.CODE: "write, explain, review, or debug code; write a test script for an uploaded .py file",
+    Intent.CODE: "write, explain, review, or debug code in any language; write a test script for an uploaded code file",
     Intent.IMAGE: "generate or draw an image",
     Intent.VISION: "analyze an image, diagram, or visual content",
     Intent.UNKNOWN: "anything else or unclear",

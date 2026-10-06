@@ -213,8 +213,8 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 ## ADR-037: Coding agent returns as generate-only (no sandbox)
 
 - **Status:** Accepted
-- **Context:** ADR-035 removed `coding` with the sandbox because execution had no daemon to run on. The follow-up need is narrower: users upload `.py` and ask for test scripts — generation with the file inlined, presented in chat, no internal execution.
-- **Decision:** Restore `agents/coding.py` as a prompt-only sibling of `reasoning` (code-specialized system prompt, same provider, generous `coding_max_tokens` budget). `CODE` is a deterministic builder intent: single `coding` step, file content read from disk and inlined — no tools, no placeholders, no execution. Code files (`.py`) bypass vector ingest entirely: stored on disk + marked `ready:code`, read as text on demand. No sandbox, no new tools; execution stays deferred.
+- **Context:** ADR-035 removed `coding` with the sandbox because execution had no daemon to run on. The follow-up need is narrower: users upload code files and ask for test scripts — generation with the file inlined, presented in chat, no internal execution.
+- **Decision:** Restore `agents/coding.py` as a prompt-only sibling of `reasoning` (code-specialized system prompt, same provider, generous `coding_max_tokens` budget). `CODE` is a deterministic builder intent: single `coding` step, file content read from disk and inlined — no tools, no placeholders, no execution. Code files (any language in `code_extensions`) bypass vector ingest entirely: stored on disk + marked `ready:code`, read as text on demand. No sandbox, no new tools; execution stays deferred.
 - **Consequences:** 2 agents, 5 tools. Doc builders ignore code files (`_ready_files` is docs-only); code-only notebooks report empty corpus for retrieval. Saved runs predate the agent and are unaffected (replay is display-only).
 
 ---

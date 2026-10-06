@@ -46,6 +46,43 @@ _UUID_RE = re.compile(
 )
 _SAFE_NOTEBOOK_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
+#: Map file extensions to Markdown code-fence language identifiers.
+_EXT_TO_LANG: dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript",
+    ".ts": "typescript",
+    ".jsx": "jsx",
+    ".tsx": "tsx",
+    ".java": "java",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".go": "go",
+    ".rs": "rust",
+    ".rb": "ruby",
+    ".php": "php",
+    ".swift": "swift",
+    ".kt": "kotlin",
+    ".scala": "scala",
+    ".r": "r",
+    ".m": "objectivec",
+    ".sh": "bash",
+    ".ps1": "powershell",
+    ".sql": "sql",
+    ".html": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".less": "less",
+    ".json": "json",
+    ".xml": "xml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".ini": "ini",
+}
+
 #: Presentation tail for every grounded writer step (qa_single, compare,
 #: summarize, quiz). Grounding invariants ("ONLY chunks", "not in the
 #: documents", no placeholder leaks) come first; this only styles HOW the
@@ -469,8 +506,8 @@ def build_code(
     targets = _resolve_code_targets(file_hint, notebook_context)
     if not targets:
         detail = (
-            "There are no ready code (.py) files in this notebook. Ask the user "
-            "to upload a Python file or clarify how to proceed without one"
+            "There are no ready code files in this notebook. Ask the user "
+            "to upload a code file or clarify how to proceed without one"
         )
         return Plan(
             plan_id=str(uuid.uuid4()),
@@ -500,7 +537,8 @@ def build_code(
             truncated = True
         total += len(content)
         marker = "\n…[truncated — file continues beyond what is shown]" if truncated else ""
-        sections.append(f"File {name}:\n```python\n{content}\n```{marker}")
+        lang = _EXT_TO_LANG.get(os.path.splitext(name)[1].lower(), "text")
+        sections.append(f"File {name}:\n```{lang}\n{content}\n```{marker}")
         if total >= _CODE_MAX_BYTES_TOTAL:
             break
     files_block = "\n\n".join(sections)

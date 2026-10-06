@@ -112,10 +112,21 @@ class Settings(BaseSettings):
     # Upload
     upload_dir: str = "./backend/uploads"
     max_upload_size_mb: int = 50
-    allowed_extensions: list[str] = [".pdf", ".docx", ".txt", ".md", ".py"]
+    allowed_extensions: list[str] = [
+        ".pdf", ".docx", ".txt", ".md",
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
+        ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".r",
+        ".m", ".sh", ".ps1", ".sql", ".html", ".css", ".scss", ".less",
+        ".json", ".xml", ".yaml", ".yml", ".toml", ".ini",
+    ]
     #: Code files bypass vector ingest: stored on disk + marked ready, read
     #: as text on demand for the coding agent (never embedded).
-    code_extensions: list[str] = [".py"]
+    code_extensions: list[str] = [
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
+        ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".r",
+        ".m", ".sh", ".ps1", ".sql", ".html", ".css", ".scss", ".less",
+        ".json", ".xml", ".yaml", ".yml", ".toml", ".ini",
+    ]
 
     # Model defaults
     default_temperature: float = 0.2

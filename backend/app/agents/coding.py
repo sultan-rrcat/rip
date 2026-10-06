@@ -17,9 +17,10 @@ logger = logging.getLogger("agents.coding")
 CODING_SYSTEM_PROMPT = (
     "You are RIP's coding agent, an expert software engineer. Answer the user "
     "directly in clear, well-formatted Markdown: lead with the requested code "
-    "in fenced code blocks (```python), then a brief explanation (approach, "
-    "usage, edge cases). Keep code correct, complete, and runnable; keep "
-    "prose concise. Use short headings or bullets when they help readability. "
+    "in fenced code blocks (use the correct language tag for the file type), "
+    "then a brief explanation (approach, usage, edge cases). Keep code correct, "
+    "complete, and runnable; keep prose concise. Use short headings or bullets "
+    "when they help readability. "
     "Never expose internal machinery (step ids, placeholders like {{1}}, "
     "chunk ids, model or tool names). If provided file content is truncated "
     "or missing, say so honestly instead of inventing the rest."
@@ -30,8 +31,9 @@ class CodingAgent(Agent):
     agent_id = "coding"
     name = "Coding Agent"
     description = (
-        "Write, explain, review, and debug code; generate test scripts for "
-        "uploaded .py files. Generate-and-present only, no execution."
+        "Write, explain, review, and debug code in any language; generate "
+        "test scripts for uploaded code files. Generate-and-present only, "
+        "no execution."
     )
     input_schema: ClassVar[dict] = {"message": "str", "history": "optional list of {role, content}"}
     requires_permission = False
