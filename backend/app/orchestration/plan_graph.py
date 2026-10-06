@@ -258,6 +258,11 @@ def _run_step_body(
     is_tool = bool(step.tool_id)
     executor_id = step.tool_id or step.agent_id
     agent = None if is_tool else registry.get(step.agent_id)
+    # Per-step budget: builders tune max_tokens per intent in step input
+    # (chat cheap, code generous). Popped so it never leaks into
+    # prompts/logs as input data — it rides the typed field. Non-int
+    # values (LLM-invented) are dropped in favor of the agent default.
+    _step_max_tokens = resolved_input.pop("max_tokens", None) if not is_tool else None
     agent_request = (
         None
         if is_tool
@@ -266,6 +271,7 @@ def _run_step_body(
             trace_id=trace_id,
             input=resolved_input,
             timeout_ms=timeout_ms,
+            max_tokens=_step_max_tokens if isinstance(_step_max_tokens, int) else None,
             on_delta=on_delta,
         )
     )

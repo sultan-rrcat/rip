@@ -70,6 +70,10 @@ class ReasoningAgent(Agent):
             )
             messages.append({"role": "user", "content": message})
 
+            # Per-step budget when the plan sets one (chat steps are capped
+            # low by the builder); otherwise the shared default.
+            budget = request.max_tokens or settings.default_max_tokens
+
             # 3. Call the provider (streaming when the caller wants deltas)
             if request.on_delta is not None:
                 parts: list[str] = []
@@ -77,7 +81,7 @@ class ReasoningAgent(Agent):
                     model=settings.ollama_default_model,
                     messages=messages,
                     temperature=settings.default_temperature,
-                    max_tokens=settings.default_max_tokens,
+                    max_tokens=budget,
                 ):
                     parts.append(chunk)
                     request.on_delta(chunk)
@@ -87,16 +91,29 @@ class ReasoningAgent(Agent):
                     model=settings.ollama_default_model,
                     messages=messages,
                     temperature=settings.default_temperature,
-                    max_tokens=settings.default_max_tokens,
+                    max_tokens=budget,
                 )
 
-            # 4. Return success + output + confidence
-            result = DelegationResponse(
-                step_id=request.step_id,
-                status=StepStatus.SUCCESS,
-                output=output_text,
-                confidence=constants.CONFIDENCE_SUCCESS,
-            )
+            # 4. Return success + output + confidence. Empty output is a
+            # failure, not a blank answer: SUCCESS with "" renders as an
+            # empty chat bubble (and skips the retry loop), while FAILURE
+            # retries honestly and surfaces the error to the user.
+            if not (output_text or "").strip():
+                logger.warning("reasoning empty output step=%s", request.step_id)
+                result = DelegationResponse(
+                    step_id=request.step_id,
+                    status=StepStatus.FAILURE,
+                    output=None,
+                    confidence=constants.CONFIDENCE_LOW,
+                    error="Execution failed: model returned no text",
+                )
+            else:
+                result = DelegationResponse(
+                    step_id=request.step_id,
+                    status=StepStatus.SUCCESS,
+                    output=output_text,
+                    confidence=constants.CONFIDENCE_SUCCESS,
+                )
         except Exception as e:
             # 5. Wrap the provider call so ANY exception becomes a failure response.
             logger.exception("reasoning failed step=%s", request.step_id)

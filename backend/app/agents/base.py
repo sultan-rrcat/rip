@@ -22,6 +22,10 @@ class DelegationRequest(BaseModel):
     input: dict[str, Any]
     context_ref: str | None = None
     timeout_ms: int = 30000
+    # Per-step output budget (None = agent default). Set by plan_graph from
+    # step input `max_tokens`, which builders tune per intent (chat cheap,
+    # code generous). Always explicit at the provider call — never omitted.
+    max_tokens: int | None = None
     # Streaming sink for partial output (Phase 2): when set, agents whose
     # provider can stream forward text chunks here as they arrive and join
     # them into the final output. Excluded from dumps — a callable is not

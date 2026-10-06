@@ -208,6 +208,8 @@ async def upload(
     os.makedirs(notebook_path, exist_ok=True)
     file_path = os.path.join(notebook_path, f"{file_id}{ext}")
 
+    is_code = ext in set(settings.code_extensions or [])
+
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     file_size = 0
 
@@ -236,10 +238,12 @@ async def upload(
             cur.execute(
                 """
                 INSERT INTO files (file_id, notebook_id, file_name, file_size, file_status)
-                VALUES (%s, %s, %s, %s, 'processing')
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING file_id, file_name, file_size, file_status
             """,
-                (file_id, notebook_id, file.filename, file_size),
+                # Code files skip vector ingest: stored on disk + ready,
+                # read as text on demand (never embedded).
+                (file_id, notebook_id, file.filename, file_size, "ready" if is_code else "processing"),
             )
             result = cur.fetchone()
     except Exception:
@@ -267,14 +271,18 @@ def process_file(
     with pg_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT 1 FROM files f
+            SELECT f.file_name FROM files f
             JOIN notebooks n ON n.notebook_id = f.notebook_id
             WHERE f.file_id = %s AND n.owner_id = %s
         """,
             (file_id, user.user_id),
         )
-        if not cur.fetchone():
+        row = cur.fetchone()
+        if not row:
             raise HTTPException(status_code=404, detail="File not found")
+        ext = os.path.splitext(row[0] or "")[1].lower()
+        if ext in set(settings.code_extensions or []):
+            return {"message": "ready (code file, not ingested)"}
 
     background_tasks.add_task(run_rag_pipeline, file_id, rag)
     return {"message": "processing started"}

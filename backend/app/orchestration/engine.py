@@ -152,6 +152,7 @@ def _make_plan_node(
                     state["request_text"],
                     route,
                     state.get("notebook_context"),
+                    state.get("notebook_id"),
                 )
                 if candidate is None:
                     logger.info(

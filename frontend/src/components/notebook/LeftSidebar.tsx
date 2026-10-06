@@ -90,7 +90,7 @@ const LeftSidebar = memo(function LeftSidebar({
             <input
               id="file-upload"
               type="file"
-              accept=".pdf,.doc,.docx,.md,.txt"
+              accept=".pdf,.doc,.docx,.md,.txt,.py"
               multiple
               className="hidden"
               onChange={onUpload}

@@ -67,6 +67,19 @@ class TestCorpusState:
         ]
         assert _ready_files("report.pdf [processing] id=abc123") == []
 
+    def test_snapshot_strips_count_prefix(self) -> None:
+        # Manager format "N file(s): ...": the first filename must not
+        # carry the count prefix (observed live: "File 1 file(s): memory.py").
+        ctx = (
+            "2 file(s): app.py [ready:code] "
+            "id=11111111-1111-1111-1111-111111111111; "
+            "doc.pdf [ready] id=22222222-2222-2222-2222-222222222222"
+        )
+        assert _snapshot_files(ctx) == [
+            ("app.py", "ready:code", "11111111-1111-1111-1111-111111111111"),
+            ("doc.pdf", "ready", "22222222-2222-2222-2222-222222222222"),
+        ]
+
 
 class TestDefaultReactModePurity:
     def test_does_not_mutate_input(self) -> None:

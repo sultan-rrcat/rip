@@ -37,6 +37,9 @@ Keys ( authoritative defaults in `backend/app/core/config.py`):
 | `OLLAMA_CONTEXT_WINDOW` | `32768` (memory budget = `*SUMMARY_THRESHOLD_PCT` ≈ 22900 tokens, `len//4` estimator). **Must equal the Ollama server's `OLLAMA_CONTEXT_LENGTH`** — the backend posts to `/v1/chat/completions`, where `num_ctx` is silently ignored (verified 2026-10-01; only native `/api/chat` enforces it), so this value does not size the server window. Mismatching it silently mis-sizes both the memory fold and the whole-file RAG gate (ADR-033) |
 | `RAG_WHOLE_FILE_PCT` | `0.15` — share of the window one whole-file `rag.query` dump may fill before falling back to ranked retrieval (ADR-033). Per-shard, since up to 5 shards share one reduce prompt; `0` disables the shortcut |
 | `OLLAMA_TIMEOUT_MS` | `120000` (Ollama HTTP timeout) |
+| `DEFAULT_MAX_TOKENS` | `2048` (default per-step output cap; QA/summarize/compare/quiz ride this) |
+| `CODING_MAX_TOKENS` | `4096` (coding-agent output cap — test scripts + file echoes are long; set per step by the CODE builder, overridable via step input `max_tokens`) |
+| `CHAT_MAX_TOKENS` | `1024` (chat builder cap — greetings/small-talk stay cheap) |
 | `MAX_UPLOAD_SIZE_MB` | `50` (must match nginx `client_max_body_size 50M`) |
 | `LANGFUSE_ENABLED/HOST/PUBLIC_KEY/SECRET_KEY/ENVIRONMENT/RELEASE` | Opt-in tracing (`false` + `http://localhost:3002` defaults; see §4) |
 | `PORT` | `8000`, pinned in compose (`docker-compose.yml` sets `PORT: 8000` — do not override; `EXPOSE`, port mapping, and health probes all assume it). Honored as `$PORT` only for bare `docker run` |
