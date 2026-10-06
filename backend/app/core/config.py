@@ -1,14 +1,15 @@
-"""Merged Pydantic Settings (MERGE_PLAN.md §Config TARGET, Phase 1.3).
+"""Single source of truth for all non-secret configuration.
 
-Deltas vs the TARGET block (all forced by pre-1.4 environment, see log):
+Contract:
+- Every default lives here. `.env` carries ONLY secrets and host-local
+  deploy keys (ports, DB connection, Ollama endpoint, model paths,
+  Langfuse keys) — see `.env.example` for the minimal shape.
+- `extra = "ignore"` is required: docker-compose injects HOST_* and
+  BACKEND_* vars via `env_file` that have no Settings field; `forbid`
+  would crash container boot.
 - `bge_m3_model_path` / `bge_reranker_v2_m3` accept the legacy
-  `BGE_MODEL_DIR` / `RERANKER_MODEL_DIR` aliases via AliasChoices (Q5:
-  local boot breaks without them; current .env only sets the aliases).
-- `extra = "ignore"` until Phase 1.4 rewrites `.env`/`.env.example`
-  (current `.env` still carries forbidden `LLM_URL`; pydantic-settings
-  defaults to forbid, which would crash boot).
-- Module-level `settings` singleton for call sites (TARGET defines the
-  class only).
+  `BGE_MODEL_DIR` / `RERANKER_MODEL_DIR` aliases via AliasChoices.
+- Module-level `settings` singleton for call sites.
 """
 
 from pathlib import Path
@@ -58,8 +59,8 @@ class Settings(BaseSettings):
     # Ollama (replaces LLM_URL=http://10.10.30.77:21434)
     model_provider: str = "ollama"
     ollama_base_url: str = "http://host.docker.internal:11434"  # localhost outside docker
-    ollama_default_model: str = "qwen2.5:14b"
-    ollama_timeout_ms: int = 120000  # Q28: Athena used 180000; locked 120000. httpx trust_env=False (proxy trap).
+    ollama_default_model: str = "ornith-1.5:9b"
+    ollama_timeout_ms: int = 300000  # httpx trust_env=False (proxy trap).
 
     # Embedding models (local paths)
     bge_m3_model_path: str = Field(
@@ -104,7 +105,7 @@ class Settings(BaseSettings):
         return v
 
     # Server (keep 8000 to avoid nginx/frontend churn; was 8010 in draft)
-    port: int = 8000
+    port: int = 8005
     cors_origins: str = "*"  # Q5 locked: plain str, split on ","; NOT list[str]
     log_level: str = "INFO"
     env: Literal["development", "production"] = "development"
@@ -129,7 +130,7 @@ class Settings(BaseSettings):
     ]
 
     # Model defaults
-    default_temperature: float = 0.2
+    default_temperature: float = 0.1
     default_max_tokens: int = 2048
     default_timeout_ms: int = 120000
     # Per-task output budgets (both ride the same Ollama window — they cap
@@ -164,7 +165,7 @@ class Settings(BaseSettings):
     # summarize via ollama_default_model (never gemini_model_*); trim newest-first to budget.
 
     # Observability (optional)
-    langfuse_enabled: bool = False
+    langfuse_enabled: bool = True
     langfuse_host: str = "http://localhost:3002"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""

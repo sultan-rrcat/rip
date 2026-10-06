@@ -27,26 +27,37 @@ Model paths (Pydantic `backend/app/core/config.py`):
 copy .env.example .env
 ```
 
-Keys ( authoritative defaults in `backend/app/core/config.py`):
+**Config contract:** `backend/app/core/config.py` is the single source of truth for all non-secret defaults. `.env` carries **only secrets and host-local deploy keys** (ports, DB connection, Ollama endpoint, model paths, Langfuse keys) — see `.env.example` for the minimal shape.
+
+### `.env` keys (secrets + deploy)
 
 | Key | Value |
 |---|---|
+| `HOST_BACKEND_PORT` / `HOST_FRONTEND_PORT` / `HOST_PG_PORT` | Host port mappings for compose (defaults: `8005` / `5173` / `5436`) |
 | `DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD` | `postgres/5432/rip/rip/rippass` in compose; **host-local runs use `127.0.0.1` + `DB_PORT=<HOST_PG_PORT>`** (see CAVEATS — bare `localhost` can hang; sync `DB_PORT` to the mapped host port). Split-brain warning: the backend reads `.env` via `env_file`, but `POSTGRES_*` interpolate from the *shell* — stale shell `DB_*` exports shadow `.env` (see CAVEATS) |
-| `OLLAMA_BASE_URL` | Interpolated: `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}` — your `.env` value flows into the container, gateway is the fallback. Host-local default `http://localhost:11434` (`config.py` default is the gateway form for compose) |
-| `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` (config default; a local `.env` may override, e.g. a smaller router model) |
+| `OLLAMA_BASE_URL` | Interpolated: `${OLLAMA_BASE_URL:-http://host.docker.internal:11434}` — your `.env` value flows into the container, gateway is the fallback. Host-local default `http://localhost:11434` |
+| `OLLAMA_DEFAULT_MODEL` | Override the code default (`ornith-1.5:9b`) if needed |
+| `BGE_M3_MODEL_PATH` / `BGE_RERANKER_V2_M3` | Absolute host-local paths to embedding models (compose overrides to `/app/backend/models/...`) |
+| `LANGFUSE_SECRET_KEY` / `LANGFUSE_PUBLIC_KEY` | Opt-in tracing keys (get from Langfuse UI — org settings → API keys; see §4) |
+
+### Code defaults (`config.py` — not in `.env`)
+
+| Key | Default |
+|---|---|
+| `PORT` | `8005` (compose hard-pins `PORT=8000` in-container; see `docker-compose.yml`) |
+| `OLLAMA_TIMEOUT_MS` | `300000` (Ollama HTTP timeout) |
 | `OLLAMA_CONTEXT_WINDOW` | `32768` (memory budget = `*SUMMARY_THRESHOLD_PCT` ≈ 22900 tokens, `len//4` estimator). **Must equal the Ollama server's `OLLAMA_CONTEXT_LENGTH`** — the backend posts to `/v1/chat/completions`, where `num_ctx` is silently ignored (verified 2026-10-01; only native `/api/chat` enforces it), so this value does not size the server window. Mismatching it silently mis-sizes both the memory fold and the whole-file RAG gate (ADR-033) |
-| `RAG_WHOLE_FILE_PCT` | `0.15` — share of the window one whole-file `rag.query` dump may fill before falling back to ranked retrieval (ADR-033). Per-shard, since up to 5 shards share one reduce prompt; `0` disables the shortcut |
-| `OLLAMA_TIMEOUT_MS` | `120000` (Ollama HTTP timeout) |
+| `DEFAULT_TEMPERATURE` | `0.1` |
 | `DEFAULT_MAX_TOKENS` | `2048` (default per-step output cap; QA/summarize/compare/quiz ride this) |
 | `CODING_MAX_TOKENS` | `32768` (coding-agent output cap — test scripts + file echoes are long; set per step by the CODE builder, overridable via step input `max_tokens`) |
 | `CHAT_MAX_TOKENS` | `1024` (chat builder cap — greetings/small-talk stay cheap) |
 | `MAX_UPLOAD_SIZE_MB` | `50` (must match nginx `client_max_body_size 50M`) |
-| `LANGFUSE_ENABLED/HOST/PUBLIC_KEY/SECRET_KEY/ENVIRONMENT/RELEASE` | Opt-in tracing (`false` + `http://localhost:3002` defaults; see §4) |
-| `PORT` | `8000`, pinned in compose (`docker-compose.yml` sets `PORT: 8000` — do not override; `EXPOSE`, port mapping, and health probes all assume it). Honored as `$PORT` only for bare `docker run` |
-| `BACKEND_CPUS` | Backend CPU quota (compose `cpus:` time quota, not core pinning). Dynamic default via `scripts/rip.*`: host cores − 1 (min 2); explicit shell/`.env` wins; raw compose falls back to `2.0`. Raise on big hosts for faster Docling/BGE ingestion |
+| `RAG_WHOLE_FILE_PCT` | `0.15` — share of the window one whole-file `rag.query` dump may fill before falling back to ranked retrieval (ADR-033). Per-shard, since up to 5 shards share one reduce prompt; `0` disables the shortcut |
+| `RAG_PDF_LOADER` | `docling` (default) or `opendataloader` — the selected PDF→Markdown loader runs first, the other is the fallback |
 | `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
 | `UPLOAD_DIR` | `./backend/uploads` host-local; `/app/uploads` in compose (overridden in `docker-compose.yml`, image `ENV` fallback matches) |
-| `RAG_PDF_LOADER` | `docling` (default) or `opendataloader` — the selected PDF→Markdown loader runs first, the other is the fallback |
+| `LANGFUSE_ENABLED` | `true` (opt-in tracing; keys from `.env`) |
+| `BACKEND_CPUS` | Backend CPU quota (compose `cpus:` time quota, not core pinning). Dynamic default via `scripts/rip.*`: host cores − 1 (min 2); explicit shell/`.env` wins; raw compose falls back to `2.0`. Raise on big hosts for faster Docling/BGE ingestion |
 
 No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 

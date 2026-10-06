@@ -1,7 +1,8 @@
 # Compose TARGET: service `postgres` + DB rip/rip + volumes pgdata/uploads.
 # Fresh bootstrap: `docker compose down`, `copy .env.example .env`
-# (set OLLAMA_BASE_URL + BGE paths + HOST_PG_PORT), then
-# `docker compose up --build`. `schema.sql` init runs only on empty pgdata.
+# (fill in secrets + host-local paths), then `docker compose up --build`.
+# All tuning defaults live in backend/app/core/config.py — .env carries only
+# secrets + deploy keys. `schema.sql` init runs only on empty pgdata.
 services:
   backend:
     build:
