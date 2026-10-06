@@ -217,6 +217,13 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Decision:** Restore `agents/coding.py` as a prompt-only sibling of `reasoning` (code-specialized system prompt, same provider, generous `coding_max_tokens` budget). `CODE` is a deterministic builder intent: single `coding` step, file content read from disk and inlined — no tools, no placeholders, no execution. Code files (any language in `code_extensions`) bypass vector ingest entirely: stored on disk + marked `ready:code`, read as text on demand. No sandbox, no new tools; execution stays deferred.
 - **Consequences:** 2 agents, 5 tools. Doc builders ignore code files (`_ready_files` is docs-only); code-only notebooks report empty corpus for retrieval. Saved runs predate the agent and are unaffected (replay is display-only).
 
+## ADR-038: CODE becomes the generalist software intent; IMAGE/VISION removed
+
+- **Status:** Accepted
+- **Context:** `IMAGE`/`VISION` had no tools, no builders, and no executors — every such route ended in `plan_error → L3 ReAct`, where the model then had to render large outputs through `generate_structured` JSON (observed: a landing-page ask misrouted to `image` at 0.9, then failed JSON parsing on the 7KB page). Worse, `CODE` was framed as uploaded-file work only, so greenfield asks ("generate a landing page", no files) matched no intent well and `build_code` answered them with an "upload a file" clarification.
+- **Decision:** Delete the `IMAGE`/`VISION` intents (router prompt is generated from `INTENT_DESCRIPTIONS`, so they leave the prompt automatically; stale `image`/`vision` values parse to `UNKNOWN` → ReAct). Generalize `CODE` to any software task in any language — greenfield generation (HTML/CSS/JS pages, apps, scripts) or uploaded-file work — with a router precedence rule (web/HTML/CSS/JS/UI → `code`). `build_code` splits the no-targets case: named-but-unresolvable file → clarification; no hint → greenfield `coding` step carrying the request alone.
+- **Consequences:** Picture/photo/illustration asks now route to `UNKNOWN` → ReAct, which answers honestly in text (no image model exists). Greenfield code asks get a deterministic single `coding` step with the generous `coding_max_tokens` budget. Supersedes the ADR-035 "keep `IMAGE`/`VISION` intents" line.
+
 ---
 
 ## Historical (superseded, one line each)

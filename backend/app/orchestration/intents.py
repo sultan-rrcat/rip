@@ -25,8 +25,6 @@ class Intent(str, Enum):
     CONVERT_AMBIGUOUS = "convert_ambiguous"
     QUIZ = "quiz"
     CODE = "code"
-    IMAGE = "image"
-    VISION = "vision"
     UNKNOWN = "unknown"
 
 
@@ -46,9 +44,7 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
     Intent.CONVERT_ALL: "convert all/plural documents to md/docx/pdf",
     Intent.CONVERT_AMBIGUOUS: "convert it/the document without naming file or format",
     Intent.QUIZ: "generate questions, quiz, or MCQs from documents",
-    Intent.CODE: "write, explain, review, or debug code in any language; write a test script for an uploaded code file",
-    Intent.IMAGE: "generate or draw an image",
-    Intent.VISION: "analyze an image, diagram, or visual content",
+    Intent.CODE: "any software task: write new code from scratch in any language (including HTML/CSS/JS web pages, sites, apps, scripts), or explain, review, debug, test, or modify uploaded code files",
     Intent.UNKNOWN: "anything else or unclear",
 }
 

@@ -58,11 +58,21 @@ def test_chat_builder_caps_budget_low() -> None:
 
 
 def test_code_builder_budget_generous(tmp_path, monkeypatch) -> None:
-    # No code files -> clarification step, no explicit budget (agent default).
+    # No code files and no hint -> greenfield generation step with
+    # the generous budget (ADR-038), not a clarification.
     route = RouterResult(intent=Intent.CODE, confidence=0.9, file_hint="")
     plan = build("write a test", route, "(no documents)", None)
     assert plan is not None and len(plan.steps) == 1
     assert plan.steps[0].agent_id == "coding"
+    assert (plan.steps[0].expected_output_type or "").lower() == "answer"
+    assert plan.steps[0].input["max_tokens"] == settings.coding_max_tokens
+    _validator(_RecordingProvider()).validate(plan)
+
+    # Named-but-missing file -> clarification step, no explicit budget.
+    missing = RouterResult(intent=Intent.CODE, confidence=0.9, file_hint="nosuchfile")
+    plan = build("review nosuchfile", missing, "(no documents)", None)
+    assert plan is not None and len(plan.steps) == 1
+    assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
     assert "max_tokens" not in plan.steps[0].input
     _validator(_RecordingProvider()).validate(plan)
 

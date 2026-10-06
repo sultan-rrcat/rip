@@ -497,18 +497,38 @@ def build_code(
     notebook_context: str | None = None,
     notebook_id: str | None = None,
 ) -> Plan:
-    """Single coding-agent step with code file(s) inlined as text.
+    """Single coding-agent step, file-backed or greenfield.
 
     Generate-and-present only: no tools, no execution, no placeholders.
     Code files bypass vector ingest, so there are no chunks to ground —
-    the file content rides in the message itself.
+    the file content rides in the message itself. When no code files
+    resolve and the request names none, this is greenfield generation
+    (write new code from scratch) — not a missing-file situation.
     """
     targets = _resolve_code_targets(file_hint, notebook_context)
     if not targets:
-        detail = (
-            "There are no ready code files in this notebook. Ask the user "
-            "to upload a code file or clarify how to proceed without one"
-        )
+        if (file_hint or "").strip():
+            # User named a file that resolves to nothing: honest
+            # clarification, never an invented file.
+            detail = (
+                f"No uploaded code file matches '{file_hint.strip()}'. Ask the user "
+                "to check the file name or upload the file, or clarify how "
+                "to proceed without it"
+            )
+            return Plan(
+                plan_id=str(uuid.uuid4()),
+                goal=request_text,
+                steps=[
+                    PlanStep(
+                        step_id="1",
+                        agent_id="coding",
+                        input={"message": f"{detail}. Request: {request_text}"},
+                        expected_output_type="clarification",
+                    )
+                ],
+            )
+        # Greenfield: no files attached, none named — generate from the
+        # request alone (e.g. "generate a landing page" → HTML/CSS/JS).
         return Plan(
             plan_id=str(uuid.uuid4()),
             goal=request_text,
@@ -516,8 +536,11 @@ def build_code(
                 PlanStep(
                     step_id="1",
                     agent_id="coding",
-                    input={"message": f"{detail}. Request: {request_text}"},
-                    expected_output_type="clarification",
+                    input={
+                        "message": f"Request: {request_text}",
+                        "max_tokens": settings.coding_max_tokens,
+                    },
+                    expected_output_type="answer",
                 )
             ],
         )

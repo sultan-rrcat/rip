@@ -45,8 +45,9 @@ class RouterResult(BaseModel):
     # Convert slots: file_hint names one file (or "*" for all) and
     # target_format is md|docx|pdf. Empty = unstated → caller falls
     # through to L3 ReAct (which asks the counter-question) instead of
-    # guessing a conversion. For CODE, file_hint names one .py file
-    # (or "" for all code files).
+    # guessing a conversion. For CODE, file_hint names one uploaded
+    # code file only when the request names one (else "" — which also
+    # covers greenfield generation with no files attached).
     file_hint: str = ""
     target_format: str = ""
 
@@ -75,8 +76,14 @@ class Router:
             "Convert intents only: file_hint is the named file (or \"*\" when "
             "the request says all/every documents, else \"\"), target_format "
             "is md|docx|pdf when stated (else \"\").\n"
-            "Code intent: file_hint is the named code file when the request "
-            "names one (else \"\" for all code files).\n"
+            "Code intent covers ALL software asks, with or without uploaded "
+            "files: web page/website/landing page/HTML/CSS/JS/UI/app/script, "
+            "and write/explain/review/debug/test/refactor code in any "
+            "language. Requests to generate or draw pictures, photos, or "
+            "illustrations are NOT code — they are unknown. "
+            "Code file_hint is the named uploaded code file only when the "
+            "request names one (else \"\" for all code files or for "
+            "greenfield generation with no files).\n"
             "Return intent as the exact value string and confidence as 0.0-1.0."
         )
         messages = [
