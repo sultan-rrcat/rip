@@ -38,7 +38,7 @@ Keys ( authoritative defaults in `backend/app/core/config.py`):
 | `RAG_WHOLE_FILE_PCT` | `0.15` — share of the window one whole-file `rag.query` dump may fill before falling back to ranked retrieval (ADR-033). Per-shard, since up to 5 shards share one reduce prompt; `0` disables the shortcut |
 | `OLLAMA_TIMEOUT_MS` | `120000` (Ollama HTTP timeout) |
 | `DEFAULT_MAX_TOKENS` | `2048` (default per-step output cap; QA/summarize/compare/quiz ride this) |
-| `CODING_MAX_TOKENS` | `4096` (coding-agent output cap — test scripts + file echoes are long; set per step by the CODE builder, overridable via step input `max_tokens`) |
+| `CODING_MAX_TOKENS` | `32768` (coding-agent output cap — test scripts + file echoes are long; set per step by the CODE builder, overridable via step input `max_tokens`) |
 | `CHAT_MAX_TOKENS` | `1024` (chat builder cap — greetings/small-talk stay cheap) |
 | `MAX_UPLOAD_SIZE_MB` | `50` (must match nginx `client_max_body_size 50M`) |
 | `LANGFUSE_ENABLED/HOST/PUBLIC_KEY/SECRET_KEY/ENVIRONMENT/RELEASE` | Opt-in tracing (`false` + `http://localhost:3002` defaults; see §4) |

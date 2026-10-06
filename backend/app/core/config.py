@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     # Coding steps inline whole files + emit test scripts, so they get headroom;
     # chat is greetings/small-talk and stays cheap. Builders set these as
     # per-step max_tokens; any step may override via input max_tokens.
-    coding_max_tokens: int = 4096
+    coding_max_tokens: int = 32768
     chat_max_tokens: int = 1024
 
     # Orchestration
