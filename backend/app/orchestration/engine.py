@@ -48,6 +48,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.registry import AgentRegistry
+from app.core.config import settings
 from app.observability.langfuse import get_trace_context, manual_span, truncate
 from app.orchestration.aggregator import AggregationResult, Aggregator
 from app.orchestration.builders import build as build_layered_plan
@@ -111,6 +112,16 @@ def _make_plan_node(
         # on planning; the error terminal unwinds the graph.
         if _cancelled(config):
             return {"plan": None, "plan_error": "run cancelled"}
+        # Forced ReAct: skip L1 Router + L2 builders entirely (no LLM call,
+        # no router span). plan_error routes the run to the orchestrator's
+        # existing L3 ReAct fallback.
+        if settings.force_react:
+            logger.info("force_react enabled, skipping router+builders → L3 ReAct")
+            return {
+                "plan": None,
+                "plan_error": "force_react enabled — L3 ReAct required",
+                "plan_span_ctx": None,
+            }
         run_ctx = _configurable(config).get(_TRACE_CTX)
         # L1 (sole dispatcher) → L2 (deterministic builders). Any miss
         # (unknown intent, non-deterministic shape, unresolvable convert,

@@ -140,6 +140,49 @@ class TestCodeReadValidation:
         hint = _validate_react_input("code.read", {}, has_files=True)
         assert hint is not None and "file_id" in hint
 
+    def test_named_file_on_empty_notebook_refused(self) -> None:
+        # Live "hii" trace: the model named README.md on a file-less
+        # notebook, validation passed on presence alone, execution failed
+        # and burned a step. Presence must not bypass the empty guard.
+        hint = _validate_react_input(
+            "code.read", {"file_name": "README.md"}, has_files=False
+        )
+        assert hint is not None and "NO files" in hint
+
+    def test_named_file_on_populated_notebook_passes(self) -> None:
+        assert (
+            _validate_react_input(
+                "code.read", {"file_name": "README.md"}, has_files=True
+            )
+            is None
+        )
+
+
+class TestEmptyNotebookToolGuards:
+    """File-dependent tools are dead ends with no files — refuse pre-flight."""
+
+    def test_doc_convert_on_empty_notebook_refused(self) -> None:
+        hint = _validate_react_input(
+            "doc.convert",
+            {"file_id": "abc123", "target_format": "pdf"},
+            has_files=False,
+        )
+        assert hint is not None and "NO files" in hint
+
+    def test_doc_convert_with_files_validates_shape(self) -> None:
+        assert (
+            _validate_react_input(
+                "doc.convert",
+                {"file_id": "abc123", "target_format": "pdf"},
+                has_files=True,
+            )
+            is None
+        )
+        hint = _validate_react_input(
+            "doc.convert", {"file_id": "abc123"}, has_files=True
+        )
+        assert hint is not None and "target_format" in hint
+
 
 class TestRemapMisnamedCoding:
     """A coding call filed under code.read must still execute (trace c1bbae95)."""

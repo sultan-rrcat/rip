@@ -228,6 +228,12 @@ def _validate_react_input(
             )
         return None
     if executor == "doc.convert":
+        if not has_files:
+            return (
+                "this notebook has NO files, so doc.convert cannot work "
+                "— do not call it. Answer directly with is_final=true "
+                "(e.g. greetings/small-talk) or ask what to produce."
+            )
         if str(action_input.get("file_id", "")).strip() and str(
             action_input.get("target_format", "")
         ).strip().lower() in ("md", "docx", "pdf"):
@@ -240,6 +246,11 @@ def _validate_react_input(
             return None
         return _TOOL_INPUT_HINTS["doc.generate"]
     if executor == "code.read":
+        if not has_files:
+            # Empty notebook: even a named file cannot exist — refuse
+            # before execution so the turn stays an idle hint instead
+            # of a failed step (trace: "hii" burned r1 on README.md).
+            return _code_read_hint(False)
         fid = str(action_input.get("file_id", "") or "").strip()
         fname = str(action_input.get("file_name", "") or "").strip()
         if fid or fname:
@@ -724,6 +735,13 @@ class ReActEngine:
                     "the tool reads top-level fields, so this fails with "
                     "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
                     "Prefer rag.query first when documents are available. "
+                    "If the request is a greeting, thanks, or small talk "
+                    "with no task or question, do NOT call any tool — set "
+                    "is_final=true and answer directly (greet back, ask "
+                    "what they need). When the notebook snapshot shows no "
+                    "documents or no files, tools cannot return anything — "
+                    "prefer the reasoning agent or a direct final answer "
+                    "over rag.query/code.read/doc.*. "
                     "For summarize/compare/quiz or 'overall content' asks use "
                     "rag.query mode='overview' (stratified one-per-section "
                     "sample); single-fact QA keeps the specific default. "
@@ -957,8 +975,9 @@ class ReActEngine:
                         break
                     scratchpad.append(
                         "notebook has no ready documents — rag.query cannot "
-                        "return chunks; recall numbers with reasoning or answer "
-                        "directly."
+                        "return chunks; answer directly with is_final=true "
+                        "(e.g. greetings/small-talk) or recall numbers with "
+                        "reasoning."
                     )
                     iter_obs.update(
                         output={

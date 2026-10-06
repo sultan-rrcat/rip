@@ -963,6 +963,22 @@ class TestReactFallback:
         assert result.status == "success" and result.summary == "react rescued"
         assert len(provider.models) == 3  # router + 2 react turns
 
+    def test_force_react_skips_router(self, monkeypatch):
+        # force_react=True: no router LLM call — the queued payloads are
+        # ReAct turns only, and the model-call count proves the router
+        # was skipped (builder-miss path above spends router + 2 turns).
+        from app.core.config import settings as _settings
+
+        monkeypatch.setattr(_settings, "force_react", True)
+        provider, orch = _recall_orchestrator([
+            {"thought": "need docs", "executor": "rag.query",
+             "input": {"query": "x"}, "is_final": False},
+            _react_final("forced react"),
+        ])
+        result = orch.run("a vague request with no clear shape", "nb-1")
+        assert result.status == "success" and result.summary == "forced react"
+        assert len(provider.models) == 2  # 2 react turns, zero router calls
+
     def test_react_failure_surfaces_honest(self):
         provider, orch = _recall_orchestrator([
             _router_miss(),
@@ -971,7 +987,9 @@ class TestReactFallback:
             {"thought": "bad pick again", "executor": "ghost",
              "input": {}, "is_final": False},
         ])
-        with pytest.raises(OrchestrationError, match="L3 ReAct required"):
+        # The surfaced error is the ReAct aggregation summary (the failed
+        # step), not the routing label that sent it there.
+        with pytest.raises(OrchestrationError, match="no usable action"):
             orch.run("a vague request with no clear shape", "nb-1")
         assert len(provider.models) == 3  # router + 2 idle react turns, no retry
 
@@ -1082,7 +1100,8 @@ class TestOrchestrator:
 
     def test_failed_react_surfaces_honest_without_retry(self):
         # No planner recall: builder miss → L3 ReAct → honest error.
-        # Router + 2 idle react turns, then the original error surfaces.
+        # Router + 2 idle react turns, then the ReAct summary surfaces
+        # (not the routing label).
         provider, orch = self._orchestrator([
             {"intent": "unknown", "queries": [], "confidence": 0.0},
             {"thought": "bad pick", "executor": "ghost",
@@ -1090,7 +1109,7 @@ class TestOrchestrator:
             {"thought": "bad pick again", "executor": "ghost",
              "input": {}, "is_final": False},
         ])
-        with pytest.raises(OrchestrationError, match="L3 ReAct required"):
+        with pytest.raises(OrchestrationError, match="no usable action"):
             orch.run("a vague request with no clear shape here", "nb-1")
         assert len(provider.models) == 3
 

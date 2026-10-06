@@ -142,6 +142,10 @@ class Orchestrator:
             if cancel_event is not None and cancel_event.is_set():
                 logger.warning("orchestration aborted: %s", final["plan_error"])
                 raise OrchestrationError(final["plan_error"])
+            # When ReAct runs but still fails, the actionable message is
+            # its aggregation summary (e.g. "Step r1 (code.read) failed: …"),
+            # not the routing label that sent it there.
+            react_summary: str | None = None
             try:
                 from app.observability.langfuse import (
                     get_trace_context as _get_tc,
@@ -207,12 +211,14 @@ class Orchestrator:
                             hidden=list(aggregation.hidden),
                             visibility=dict(aggregation.visibility),
                         )
+                    react_summary = aggregation.summary
             except OrchestrationError:
                 raise
             except Exception as e:  # noqa: BLE001 - react miss → original honest error
                 logger.warning("react fallback failed: %s", e)
-            logger.warning("orchestration aborted: %s", final["plan_error"])
-            raise OrchestrationError(final["plan_error"])
+            honest_error = react_summary or final["plan_error"]
+            logger.warning("orchestration aborted: %s", honest_error)
+            raise OrchestrationError(honest_error)
 
         plan: Plan | None = final["plan"]
         aggregation = final["aggregation"]

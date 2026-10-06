@@ -152,6 +152,9 @@ class Settings(BaseSettings):
 
     # Orchestration
     default_max_plan_steps: int = 10
+    # Force L3 ReAct: when True, every request skips L1 Router + L2 builders
+    # entirely and runs the ReAct loop. Env: FORCE_REACT (false by default).
+    force_react: bool = False
 
     # Chat memory (context-window-based, Q28 locked — port of athena memory.py)
     # estimator: len(text)//4 (no tiktoken); budget = int(ollama_context_window * summary_threshold_pct)
