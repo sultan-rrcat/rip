@@ -14,9 +14,13 @@ snapshot; anything unresolvable returns None → L3 ReAct.
 
 from __future__ import annotations
 
+import os
+import re
 import uuid
 
+from app.core.config import settings
 from app.orchestration.corpus import (
+    _ready_code,
     _ready_files,
     _snapshot_files,
     get_corpus_state,
@@ -26,6 +30,21 @@ from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.router import RouterResult
 
 _PER_FILE_TOP_K = 4
+
+#: CODE builder bounds: code files are inlined verbatim into the single
+#: coding step (no chunking, no retrieval). Caps keep one prompt inside
+#: the Ollama window alongside memory + system prompt.
+_CODE_MAX_FILES = 3
+_CODE_MAX_BYTES_PER_FILE = 32 * 1024
+_CODE_MAX_BYTES_TOTAL = 64 * 1024
+
+#: Snapshot file_ids are DB UUIDs; the builder never trusts anything else
+#: for a disk path (no path separators reach open()).
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_SAFE_NOTEBOOK_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 #: Presentation tail for every grounded writer step (qa_single, compare,
 #: summarize, quiz). Grounding invariants ("ONLY chunks", "not in the
@@ -110,7 +129,9 @@ def build_chat(request_text: str) -> Plan:
             PlanStep(
                 step_id="1",
                 agent_id="reasoning",
-                input={"message": request_text},
+                # Greetings/small-talk need no headroom: capped low so a
+                # chatty model cannot burn the shared default per greeting.
+                input={"message": request_text, "max_tokens": settings.chat_max_tokens},
                 expected_output_type="text",
             )
         ],
@@ -394,6 +415,116 @@ def build_convert_one(file_id: str, target_format: str, request_text: str) -> Pl
     )
 
 
+def _resolve_code_targets(
+    file_hint: str, notebook_context: str | None
+) -> list[tuple[str, str]]:
+    """Resolve CODE file_hint to [(name, file_id)] code targets.
+
+    Named hint → substring match (case-insensitive) over ready code files;
+    empty hint → all ready code files (capped). Never invents an id.
+    """
+    ready = _ready_code(notebook_context)
+    if not ready:
+        return []
+    hint = (file_hint or "").strip()
+    if hint and hint != "*":
+        matched = [(n, f) for n, f in ready if hint.lower() in n.lower()]
+        return matched[:_CODE_MAX_FILES]
+    return ready[:_CODE_MAX_FILES]
+
+
+def _read_code_file(notebook_id: str, name: str, file_id: str) -> str | None:
+    """Read one code file from disk; None when unreadable/untrusted."""
+    if not _UUID_RE.match(file_id or ""):
+        return None
+    if not _SAFE_NOTEBOOK_RE.match(notebook_id or ""):
+        return None
+    ext = os.path.splitext(name or "")[1].lower()
+    if not ext:
+        return None
+    from app.core.config import settings
+
+    if ext not in set(settings.code_extensions or []):
+        return None
+    path = os.path.join(settings.upload_dir, notebook_id, f"{file_id}{ext}")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read(_CODE_MAX_BYTES_PER_FILE + 1)
+    except OSError:
+        return None
+
+
+def build_code(
+    request_text: str,
+    file_hint: str = "",
+    notebook_context: str | None = None,
+    notebook_id: str | None = None,
+) -> Plan:
+    """Single coding-agent step with code file(s) inlined as text.
+
+    Generate-and-present only: no tools, no execution, no placeholders.
+    Code files bypass vector ingest, so there are no chunks to ground —
+    the file content rides in the message itself.
+    """
+    targets = _resolve_code_targets(file_hint, notebook_context)
+    if not targets:
+        detail = (
+            "There are no ready code (.py) files in this notebook. Ask the user "
+            "to upload a Python file or clarify how to proceed without one"
+        )
+        return Plan(
+            plan_id=str(uuid.uuid4()),
+            goal=request_text,
+            steps=[
+                PlanStep(
+                    step_id="1",
+                    agent_id="coding",
+                    input={"message": f"{detail}. Request: {request_text}"},
+                    expected_output_type="clarification",
+                )
+            ],
+        )
+    sections: list[str] = []
+    total = 0
+    for name, fid in targets:
+        content = _read_code_file(notebook_id or "", name, fid) if notebook_id else None
+        if content is None:
+            sections.append(f"File {name}: (could not be read — describe it or re-upload it)")
+            continue
+        truncated = len(content) > _CODE_MAX_BYTES_PER_FILE
+        if truncated:
+            content = content[:_CODE_MAX_BYTES_PER_FILE]
+        if total + len(content) > _CODE_MAX_BYTES_TOTAL:
+            room = _CODE_MAX_BYTES_TOTAL - total
+            content = content[: max(room, 0)]
+            truncated = True
+        total += len(content)
+        marker = "\n…[truncated — file continues beyond what is shown]" if truncated else ""
+        sections.append(f"File {name}:\n```python\n{content}\n```{marker}")
+        if total >= _CODE_MAX_BYTES_TOTAL:
+            break
+    files_block = "\n\n".join(sections)
+    return Plan(
+        plan_id=str(uuid.uuid4()),
+        goal=request_text,
+        steps=[
+            PlanStep(
+                step_id="1",
+                agent_id="coding",
+                input={
+                    # Test scripts + file echoes are long: generous budget so
+                    # output is cut by content, never by the token cap.
+                    "message": (
+                        f"Request: {request_text}\n\n{files_block}"
+                    ),
+                    "max_tokens": settings.coding_max_tokens,
+                },
+                expected_output_type="answer",
+            )
+        ],
+    )
+
+
 def _resolve_convert_file_id(
     file_hint: str, notebook_context: str | None
 ) -> str | None:
@@ -420,6 +551,7 @@ def build(
     request_text: str,
     route: RouterResult,
     notebook_context: str | None = None,
+    notebook_id: str | None = None,
 ) -> Plan | None:
     """Dispatch router result to a deterministic builder.
 
@@ -476,4 +608,6 @@ def build(
         if file_id is None:
             return None
         return build_convert_one(file_id, route.target_format, request_text)
+    if route.intent is Intent.CODE:
+        return build_code(request_text, route.file_hint, notebook_context, notebook_id)
     return None

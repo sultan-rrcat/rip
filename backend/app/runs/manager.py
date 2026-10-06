@@ -499,9 +499,18 @@ class RunManager:
             return None
         if not rows:
             return "(no documents)"
+        from app.core.config import settings as _settings
+
+        code_exts = set(_settings.code_extensions or [])
         parts = []
         for r in rows:
             fid, name, status = str(r[0]), r[1] or "?", r[2] or "?"
+            # Code files bypass vector ingest: mark ready:code so builders
+            # route them to the coding agent instead of rag.query.
+            import os as _os
+
+            if status == "ready" and _os.path.splitext(name or "")[1].lower() in code_exts:
+                status = "ready:code"
             parts.append(f"{name} [{status}] id={fid}")
         return f"{len(parts)} file(s): " + "; ".join(parts)
 

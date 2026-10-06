@@ -26,6 +26,16 @@ async def run_rag_pipeline(file_id: str, rag: Any):
         notebook_id = str(result[0])
         file_name = result[1]
         ext = os.path.splitext(file_name or "")[1] or ".pdf"
+        # Code files never enter vector ingest (defense in depth: upload +
+        # process routes already skip them; a stale queued task must not embed).
+        if ext.lower() in set(settings.code_extensions or []):
+            logger.info(f"Code file, skipping ingest: {file_name}")
+            with pg_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE files SET file_status = 'ready' WHERE file_id = %s",
+                    (file_id,),
+                )
+            return
         file_path = os.path.join(settings.upload_dir, notebook_id, f"{file_id}{ext}")
 
         logger.info(f"Starting pipeline: {file_name}")

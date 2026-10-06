@@ -203,6 +203,20 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Decision:** Delete `agents/coding.py`, `agents/vision.py`, `tools/code_sandbox.py`, `tools/image_generate.py`; unregister from both registries (1 agent + 5 tools remain). Remove `ModelProvider.generate_image` (+ `Ollama` override), `ollama_image_model` + `sandbox_*` settings, the artifacts `image_b64` branch, and all ReAct prompt/validation/normalization branches. Keep `CODE`/`IMAGE`/`VISION` router intents — they fall through to L3 ReAct, where the `reasoning` agent answers in text honestly. `CODE`-intent code questions still get code as text; image draws get an honest can't-do.
 - **Consequences:** Smaller prompt, no dead branches, no inert env keys (`SANDBOX_*`, `OLLAMA_IMAGE_MODEL` removed from `.env.example`). Saved runs referencing removed executors replay with unknown-executor labels (display-only).
 
+## ADR-036: Per-step token budgets (chat cheap, code generous)
+
+- **Status:** Accepted
+- **Context:** `DEFAULT_MAX_TOKENS=2048` was a single global output cap: every agent step paid the same ceiling. Coding steps inline whole files and emit test scripts (truncated at 2048), while chat steps are greetings that should never spend 2048.
+- **Decision:** Builders tune output per intent via step input `max_tokens` (`chat` → `CHAT_MAX_TOKENS=1024`, `CODE` → `CODING_MAX_TOKENS=4096`); everything else rides `DEFAULT_MAX_TOKENS`. `plan_graph` forwards it onto `DelegationRequest.max_tokens` (non-int values dropped to the agent default); `reasoning` defaults to `default_max_tokens`, `coding` to `coding_max_tokens`. Budgets cap generated tokens only — they do not extend `OLLAMA_CONTEXT_WINDOW` (ADR-033 still governs the prompt side).
+- **Consequences:** One cheap knob per task shape, tunable via `.env` without code changes. ReAct turns carry no explicit budget and fall back to agent defaults (coding stays generous there too).
+
+## ADR-037: Coding agent returns as generate-only (no sandbox)
+
+- **Status:** Accepted
+- **Context:** ADR-035 removed `coding` with the sandbox because execution had no daemon to run on. The follow-up need is narrower: users upload `.py` and ask for test scripts — generation with the file inlined, presented in chat, no internal execution.
+- **Decision:** Restore `agents/coding.py` as a prompt-only sibling of `reasoning` (code-specialized system prompt, same provider, generous `coding_max_tokens` budget). `CODE` is a deterministic builder intent: single `coding` step, file content read from disk and inlined — no tools, no placeholders, no execution. Code files (`.py`) bypass vector ingest entirely: stored on disk + marked `ready:code`, read as text on demand. No sandbox, no new tools; execution stays deferred.
+- **Consequences:** 2 agents, 5 tools. Doc builders ignore code files (`_ready_files` is docs-only); code-only notebooks report empty corpus for retrieval. Saved runs predate the agent and are unaffected (replay is display-only).
+
 ---
 
 ## Historical (superseded, one line each)

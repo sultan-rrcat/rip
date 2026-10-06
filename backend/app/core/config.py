@@ -112,12 +112,22 @@ class Settings(BaseSettings):
     # Upload
     upload_dir: str = "./backend/uploads"
     max_upload_size_mb: int = 50
-    allowed_extensions: list[str] = [".pdf", ".docx", ".txt", ".md"]
+    allowed_extensions: list[str] = [".pdf", ".docx", ".txt", ".md", ".py"]
+    #: Code files bypass vector ingest: stored on disk + marked ready, read
+    #: as text on demand for the coding agent (never embedded).
+    code_extensions: list[str] = [".py"]
 
     # Model defaults
     default_temperature: float = 0.2
     default_max_tokens: int = 2048
     default_timeout_ms: int = 120000
+    # Per-task output budgets (both ride the same Ollama window — they cap
+    # generated tokens only, they do not extend ollama_context_window).
+    # Coding steps inline whole files + emit test scripts, so they get headroom;
+    # chat is greetings/small-talk and stays cheap. Builders set these as
+    # per-step max_tokens; any step may override via input max_tokens.
+    coding_max_tokens: int = 4096
+    chat_max_tokens: int = 1024
 
     # Orchestration
     default_max_plan_steps: int = 10
