@@ -34,7 +34,7 @@ class _RecordingProvider(ModelProvider):
         self.calls.append({"max_tokens": max_tokens})
         yield "ok"
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
         return {}
 
     def embed(self, model: str, text: str) -> list[float]:

@@ -58,7 +58,7 @@ class FakeLayeredProvider(ModelProvider):
         self.models.append(model)
         yield self.text
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
         self.models.append(model)
         self.prompts.append(messages)
         self.structured_calls += 1
@@ -338,9 +338,12 @@ def test_react_empty_final_answer_retries_with_actionable_hint() -> None:
         trace_id="t", notebook_id="nb-1",
     )
     assert outcome.result.step_results[-1].status.value == "failure"
-    assert "react loop produced no steps" in (
-        outcome.result.step_results[-1].error or ""
-    )
+    # Trace c1bbae95 replaced the internal "react loop produced no steps"
+    # with an actionable message naming the real cause.
+    error = outcome.result.step_results[-1].error or ""
+    assert "react loop produced no steps" not in error
+    assert "without producing an answer" in error
+    assert "Try naming the file explicitly" in error
     assert provider.structured_calls == 2
 
 
@@ -483,13 +486,75 @@ def test_redundant_convert_hint_unit() -> None:
     ) is None
 
 
+HTML_CHART_REQUEST = (
+    "Create a single self-contained HTML page that visualizes YOLO model "
+    "comparison data as a chart. Use only HTML, CSS and JavaScript. Do not "
+    "use external libraries or CDN links. Return only the complete HTML code."
+)
+
+
+def test_router_prompt_is_deliverable_first_for_code_output() -> None:
+    # Trace c1bbae95: "self-contained HTML page ... as a chart ... no CDN ...
+    # return only the HTML" was routed to plot_standalone at 0.99 confidence,
+    # had no builder, and the run died asking for a re-upload. The router
+    # prompt must classify by DELIVERABLE (source code) over chart wording.
+    from app.orchestration.router import Router
+
+    seen: list = []
+
+    class _ProbeProvider(FakeLayeredProvider):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+            seen.append(messages)
+            return {"intent": "code", "confidence": 0.9}
+
+    Router(_ProbeProvider()).route(HTML_CHART_REQUEST)
+    system = seen[0][0]["content"]
+    assert "DELIVERABLE-FIRST" in system
+    assert "SOURCE CODE" in system
+    assert "no CDN" in system
+
+
+def test_misnamed_code_read_still_reaches_coding_agent() -> None:
+    """End-to-end: the c1bbae95 loop shape must produce a real answer.
+
+    The model filed its coding call under code.read (no input at all, then a
+    full message with file_name=null) on a notebook with no files. That burned
+    both idle turns and the run failed with zero steps. The remap must route
+    it to the coding agent and answer.
+    """
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(queued=[
+        # iter 1: code.read with NO input at all (the original trace shape).
+        {"thought": "I'll write the full HTML directly",
+         "executor": "code.read", "is_final": False},
+        # iter 2: code.read carrying the coding prompt (also original).
+        {"thought": "still writing it",
+         "executor": "code.read", "is_final": False,
+         "input": {"message": HTML_CHART_REQUEST, "file_name": None}},
+    ])
+    provider.text = "<!DOCTYPE html><html><body>chart</body></html>"
+    agents, tools = _react_orchestrator(provider)
+    result = run_react(
+        HTML_CHART_REQUEST, provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="(no documents)",
+    )
+    statuses = [r.status.value for r in result.result.step_results]
+    assert "success" in statuses, statuses
+    outputs = " ".join(r.output or "" for r in result.result.step_results)
+    assert "DOCTYPE html" in outputs
+    # No step may be the dead-end no-steps placeholder.
+    assert not any("no usable action" in (r.error or "") for r in result.result.step_results)
+
+
 def test_react_prompt_allows_parametric_numbers_without_docs() -> None:
     from app.orchestration.react import run_react
 
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
             seen.append(messages)
             return {"thought": "done", "executor": "reasoning",
                     "input": {}, "is_final": True, "answer": "ok"}
@@ -508,7 +573,7 @@ def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
             seen.append(messages)
             return {"thought": "done", "executor": "reasoning",
                     "input": {}, "is_final": True, "answer": "ok"}

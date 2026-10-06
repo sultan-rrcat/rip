@@ -200,11 +200,16 @@ class Plan(BaseModel):
                 )
         raw_ids = {r.get("step_id") or "step" for r in raw_steps}
         _PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
+        _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 
         def _refs_in(value: object) -> set[str]:
             found: set[str] = set()
             if isinstance(value, str):
-                found.update(_PLACEHOLDER_RE.findall(value))
+                # Fenced code carries literal source text (L2 CODE builder
+                # inlines whole files) — never auto-wire from it.
+                found.update(
+                    _PLACEHOLDER_RE.findall(_FENCED_CODE_RE.sub("", value))
+                )
             elif isinstance(value, dict):
                 for v in value.values():
                     found.update(_refs_in(v))

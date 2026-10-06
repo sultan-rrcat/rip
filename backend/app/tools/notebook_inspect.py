@@ -23,10 +23,14 @@ def _format_files(files: list[dict]) -> str:
     if not files:
         return "(no files in this notebook)"
     parts = [
-        f"{f.get('file_name', '?')} ({f.get('file_status', '?')})"
+        # File ids are load-bearing for the ReAct fallback: code.read and
+        # doc.convert need literal snapshot ids, and the scratchpad only
+        # carries this text (not the structured `data` payload). Trace
+        # 987e6ceb burned 6 iterations because the listing hid the ids.
+        f"{f.get('file_name', '?')} [{f.get('file_status', '?')}] id={f.get('file_id', '?')}"
         for f in files
     ]
-    return f"{len(files)} file(s): " + ", ".join(parts)
+    return f"{len(files)} file(s): " + "; ".join(parts)
 
 
 class NotebookInspectTool(Tool):

@@ -87,7 +87,8 @@ class TestNotebookInspect:
         reg = get_default_tool_registry(rag=object())
         assert "notebook.inspect" in reg
         assert "doc.convert" in reg
-        assert len(reg) == 7
+        assert "code.read" in reg
+        assert len(reg) == 6
 
 
 class TestDocConvert:
@@ -379,7 +380,7 @@ class _FakeProvider:
         self._payload = payload
         self.seen_messages = None
 
-    def generate_structured(self, model, messages, schema, temperature=0):
+    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None):
         self.seen_messages = messages
         return dict(self._payload)
 
@@ -409,7 +410,7 @@ class TestRouterDocAwareness:
             def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
                 return "ok"
 
-            def generate_structured(self, model, messages, schema, *, temperature=0.0):
+            def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
                 seen.append(messages)
                 return {"thought": "done", "executor": "reasoning",
                         "input": {}, "is_final": True, "answer": "ok"}
@@ -443,7 +444,7 @@ class TestRouterDocAwareness:
             def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
                 return "ok"
 
-            def generate_structured(self, model, messages, schema, *, temperature=0.0):
+            def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
                 seen.append(messages)
                 return {"thought": "done", "executor": "reasoning",
                         "input": {}, "is_final": True, "answer": "ok"}

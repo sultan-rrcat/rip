@@ -375,7 +375,13 @@ class OllamaProvider(ModelProvider):
             yield tail
 
     def generate_structured(
-        self, model, messages, schema, *, temperature: float = 0.0
+        self,
+        model,
+        messages,
+        schema,
+        *,
+        temperature: float = 0.0,
+        timeout_ms: int | None = None,
     ) -> dict[str, Any]:
         # Native /api/chat with the RAW schema as `format` — NOT the /v1
         # OpenAI wrapper. The compat layer's response_format mapping proved
@@ -395,8 +401,16 @@ class OllamaProvider(ModelProvider):
             },
             "think": False,
         }
+        # Per-call deadline: control-plane callers (router, ReAct planner) pass a
+        # tight budget so a saturated server fails them open fast instead of
+        # blocking for the full client timeout. None keeps the client default.
+        request_timeout = (
+            timeout_ms / 1000.0 if timeout_ms is not None else None
+        )
         try:
-            response = self._client.post("/api/chat", json=payload)
+            response = self._client.post(
+                "/api/chat", json=payload, timeout=request_timeout
+            )
         except httpx.RequestError as e:
             logger.error("Ollama request failed: %s", e)
             raise RuntimeError(f"Ollama connection failure: {e}") from e

@@ -42,7 +42,7 @@ class _FakeProvider(ModelProvider):
         yield "hel"
         yield "lo"
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
         self.calls.append(("generate_structured", model))
         return {"goal": "g", "steps": []}
 

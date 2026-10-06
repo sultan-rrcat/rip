@@ -11,7 +11,11 @@ The full loop is covered through the `run_react` wrapper in
 
 from app.orchestration.corpus import _ready_files, _snapshot_files, get_corpus_state
 from app.orchestration.idle_guard import MAX_IDLE_TURNS, IdleGuard
-from app.orchestration.react_engine import _default_react_mode
+from app.orchestration.react_engine import (
+    _default_react_mode,
+    _is_empty_file_claim,
+    _validate_react_input,
+)
 
 
 class TestIdleGuard:
@@ -96,3 +100,89 @@ class TestDefaultReactModePurity:
     def test_respects_explicit_mode(self) -> None:
         action_input: dict = {"query": "x", "mode": "specific"}
         assert _default_react_mode("summarize everything", action_input) == action_input
+
+
+class TestCodeReadValidation:
+    """code.read is the ReAct fallback file reader (trace 987e6ceb)."""
+
+    def test_missing_identifiers_rejected(self) -> None:
+        hint = _validate_react_input("code.read", {})
+        assert hint is not None and "file_id" in hint
+
+    def test_file_id_accepted(self) -> None:
+        assert (
+            _validate_react_input(
+                "code.read",
+                {"file_id": "b38684db-3ff3-4f05-8b8d-bab7c5545b9d"},
+            )
+            is None
+        )
+
+    def test_file_name_accepted(self) -> None:
+        assert (
+            _validate_react_input("code.read", {"file_name": "plan_graph.py"})
+            is None
+        )
+
+    def test_placeholder_file_id_rejected(self) -> None:
+        hint = _validate_react_input("code.read", {"file_id": "{{1}}"})
+        assert hint is not None and "placeholder" in hint
+
+    def test_empty_notebook_points_at_coding_not_file_id(self) -> None:
+        # Trace c1bbae95: with no files, demanding a file_id is a dead end —
+        # it burned both idle turns and killed the run. Point at coding.
+        hint = _validate_react_input("code.read", {}, has_files=False)
+        assert hint is not None
+        assert "NO files" in hint and "coding" in hint
+        assert "file_id" not in hint
+
+    def test_populated_notebook_keeps_file_id_hint(self) -> None:
+        hint = _validate_react_input("code.read", {}, has_files=True)
+        assert hint is not None and "file_id" in hint
+
+
+class TestRemapMisnamedCoding:
+    """A coding call filed under code.read must still execute (trace c1bbae95)."""
+
+    def test_code_read_with_message_becomes_coding(self) -> None:
+        from app.orchestration.react import _remap_executor
+
+        action_input = {"message": "Create a self-contained HTML page..."}
+        assert _remap_executor("code.read", action_input) == "coding"
+
+    def test_code_read_with_null_file_name_becomes_coding(self) -> None:
+        # The exact shape trace c1bbae95 emitted: file_name=null + message.
+        from app.orchestration.react import _remap_executor
+
+        action_input = {"message": "build the page", "file_name": None}
+        assert _remap_executor("code.read", action_input) == "coding"
+
+    def test_real_code_read_is_untouched(self) -> None:
+        from app.orchestration.react import _remap_executor
+
+        action_input = {
+            "file_id": "b38684db-3ff3-4f05-8b8d-bab7c5545b9d",
+            "message": "explain this",
+        }
+        assert _remap_executor("code.read", action_input) == "code.read"
+
+    def test_other_executors_untouched(self) -> None:
+        from app.orchestration.react import _remap_executor
+
+        assert _remap_executor("coding", {"message": "x"}) == "coding"
+        assert _remap_executor("plot.chart", {"values": [1]}) == "plot.chart"
+
+
+class TestEmptyFileClaim:
+    """Agent 'I can't inspect the file' successes are futile (trace 987e6ceb)."""
+
+    def test_detects_missing_content_claims(self) -> None:
+        assert _is_empty_file_claim(
+            "I can't inspect that file because no content was attached "
+            "to your message"
+        )
+        assert _is_empty_file_claim("There's no file content available for me to read")
+
+    def test_real_answers_are_not_claims(self) -> None:
+        assert not _is_empty_file_claim("Here is the test script for plan_graph.py")
+        assert not _is_empty_file_claim("")

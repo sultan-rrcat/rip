@@ -65,6 +65,8 @@ _TOOL_OUTPUT_TYPES = {
     "plot.chart": "chart",
     "doc.generate": "document",
     "doc.convert": "document",
+    "code.read": "text",
+    "notebook.inspect": "text",
 }
 
 #: Correct-shape hints surfaced when the ReAct model emits a malformed
@@ -87,6 +89,31 @@ _TOOL_INPUT_HINTS = {
     '"sections": [{"heading": ..., "body": ...}]}',
     "notebook.inspect": "notebook.inspect needs {} (notebook_id is injected)",
 }
+
+
+def _code_read_hint(has_files: bool) -> str:
+    """Correct-shape hint for code.read, aware of an empty notebook.
+
+    With no files uploaded, code.read is impossible and asking for it is a
+    dead end. Trace c1bbae95 ("build a self-contained HTML page" on an empty
+    notebook): the model proposed code.read twice, got the file-id hint twice,
+    and the idle guard failed the run with zero steps — while its own thought
+    said it would "write the full HTML directly in the coding step". On an
+    empty notebook the hint must point at the coding agent instead.
+    """
+    if has_files:
+        return (
+            'code.read needs {"file_id": "..."} (literal id from '
+            "notebook.inspect, never a placeholder) or {\"file_name\": "
+            '"..."}; call it FIRST for code tasks, then pass its content into '
+            "coding"
+        )
+    return (
+        "this notebook has NO files, so code.read cannot work — do not call "
+        "it. Write the code directly with the coding agent: executor "
+        '"coding" with {"message": "<the full task, data included>"}. For a '
+        "chart from numbers in the message, use plot.chart instead."
+    )
 
 
 def _normalize_react_input(executor: str, action_input: dict) -> dict:
@@ -115,10 +142,14 @@ def _normalize_react_input(executor: str, action_input: dict) -> dict:
     return normalized
 
 
-def _validate_react_input(executor: str, action_input: dict) -> str | None:
+def _validate_react_input(
+    executor: str, action_input: dict, *, has_files: bool = True
+) -> str | None:
     """Return None when valid, else a correct-shape hint string.
 
     Agents need input.message; tools need their flat schema fields.
+    `has_files` lets code.read tell an empty notebook apart from a populated
+    one (a dead-end tool call there deserves a "just write the code" hint).
     """
     if executor == "reasoning":
         return None  # agent message check lives at the call site
@@ -208,6 +239,17 @@ def _validate_react_input(executor: str, action_input: dict) -> str | None:
         ):
             return None
         return _TOOL_INPUT_HINTS["doc.generate"]
+    if executor == "code.read":
+        fid = str(action_input.get("file_id", "") or "").strip()
+        fname = str(action_input.get("file_name", "") or "").strip()
+        if fid or fname:
+            if fid and ("{{" in fid or "}}" in fid):
+                return (
+                    "'file_id' must be a literal snapshot id from "
+                    "notebook.inspect, never a {{id}} placeholder"
+                )
+            return None
+        return _code_read_hint(has_files)
     return None  # notebook.inspect + unknown tools: execution is the check
 
 
@@ -231,6 +273,62 @@ def _fallback_answer_text(action_input: dict) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+#: Phrases an agent emits when it was asked to work on a file it never
+#: received (trace 987e6ceb: the coding agent answered "I can't inspect
+#: that file because no content was attached" three times, each counted as
+#: successful progress). Such outputs are futile successes — the loop must
+#: steer toward code.read instead of burning iterations.
+_EMPTY_FILE_CLAIM_HINTS = (
+    "can't inspect",
+    "cannot inspect",
+    "no content was attached",
+    "no file content available",
+    "haven't actually attached",
+    "havenot actually attached",
+    "won't guess at what's inside",
+    "not have access to files referenced by id",
+)
+
+
+def _is_empty_file_claim(output: str | None) -> bool:
+    """True when an agent success actually reports missing file content."""
+    lowered = (output or "").lower()
+    return any(h in lowered for h in _EMPTY_FILE_CLAIM_HINTS)
+
+
+#: Scratchpad budget for code.read observations: file content must survive
+#: into the next coding step (which inlines observations verbatim), so it
+#: keeps far more than the default 1500-char truncation. Still bounded so
+#: one large file cannot flood the ReAct prompt window.
+_CODE_READ_SCRATCHPAD_LIMIT = 8000
+
+
+def _remap_executor(executor: str, action_input: dict) -> str:
+    """Recover a misnamed `coding` call the model filed under `code.read`.
+
+    Trace c1bbae95: on an empty notebook the model kept emitting
+    `executor="code.read"` while carrying a complete coding prompt in
+    `input.message` (its own thought read "I'll write the full HTML directly
+    in the coding step"). Both attempts burned an idle turn and the run died
+    with zero steps. When code.read is named but carries NO file identifier
+    and DOES carry an agent message, the intent is unambiguous — route it to
+    the coding agent instead of rejecting the shape. Conservative by
+    construction: a real code.read always names a file_id or file_name.
+    """
+    if executor != "code.read":
+        return executor
+    has_file_ref = any(
+        str(action_input.get(k, "") or "").strip() for k in ("file_id", "file_name")
+    )
+    has_message = bool(str(action_input.get("message", "") or "").strip())
+    if has_file_ref or not has_message:
+        return executor
+    logger.info(
+        "react: remapping misnamed code.read (no file id, message present) -> coding"
+    )
+    return "coding"
 
 
 def _action_signature(executor: str, action_input: dict) -> str:
@@ -529,6 +627,11 @@ class ReActEngine:
         # files (same argument as the L2 empty-corpus short-circuit) — refuse
         # it once instead of burning iterations on "(no chunks retrieved)".
         corpus_empty = get_corpus_state(notebook_context) in ("empty", "processing")
+        # Whether ANY files exist (code files included). Distinct from
+        # corpus_empty, which reports code-only notebooks as "empty" because
+        # they hold no embeddings — code.read still works there. Only a truly
+        # file-less notebook makes code.read a dead end (trace c1bbae95).
+        has_files = bool(_snapshot_files(notebook_context))
         # Source-upload ids from the snapshot: doc.convert only ever targets
         # these (or "*" for all). A convert of anything else is either a
         # literal the tool will reject or a generated file, both of which
@@ -555,6 +658,10 @@ class ReActEngine:
             parent_span_ctx if parent_span_ctx is not None else _get_trace_context()
         )
         final_answered = False
+        # Why the loop ended with ZERO steps, for an honest terminal message
+        # (the generic fallback cannot tell "kept saying it was done" from
+        # "never proposed a valid action").
+        no_step_reason = ""
         for iteration in range(1, max_iterations + 1):
             with _manual_span(
                 f"react:iter-{iteration}",
@@ -595,7 +702,14 @@ class ReActEngine:
                     '"target_format": "md|docx|pdf"}, '
                     'doc.generate {"title": "...", "sections": [{"heading": '
                     '...,"body": ...}], "target_format": "md|docx|pdf"}, '
-                    "notebook.inspect {}.\n"
+                    "notebook.inspect {}, "
+                    'code.read {"file_id": "..."} or {"file_name": "..."}.\n'
+                    "For CODE tasks (write/test/explain/review/debug code): call "
+                    "notebook.inspect once, then code.read for each needed file, "
+                    "then ONE coding step with the file content inlined verbatim "
+                    "in {\"message\": \"...\"}. Never call coding without file "
+                    "content already in an observation — a coding step cannot "
+                    "fetch files by itself.\n"
                     "doc.generate sections must carry the COMPLETE "
                     "user-visible answer (full table/text verbatim, never a "
                     "stub) — the file renders ONLY sections, so a stub "
@@ -654,6 +768,12 @@ class ReActEngine:
                         messages=messages,
                         schema=REACT_SCHEMA,
                         temperature=0,
+                        # Tight deadline: one small JSON step, not a long
+                        # generation. Under saturation the inherited budget
+                        # consumed the whole run timeout before any step ran
+                        # (trace 5f98fe9c) — idle turns must arrive fast so
+                        # the guard fails the run early instead.
+                        timeout_ms=settings.planner_timeout_ms,
                     )
                 except Exception as e:  # noqa: BLE001 - failed iteration is an observation
                     if guard.record_idle():
@@ -703,6 +823,10 @@ class ReActEngine:
                                     "status": "failed",
                                     "error": "is_final with empty answer",
                                 }
+                            )
+                            no_step_reason = (
+                                "the assistant kept marking itself finished "
+                                "without producing an answer"
                             )
                             break
                         scratchpad.append(
@@ -768,12 +892,18 @@ class ReActEngine:
                 action_input = _normalize_react_input(
                     executor, dict(raw_input) if isinstance(raw_input, dict) else {}
                 )
+                # Recover a coding call misfiled under code.read BEFORE the
+                # shape check, so it executes instead of burning an idle turn
+                # (trace c1bbae95).
+                executor = _remap_executor(executor, action_input)
                 if executor == "rag.query":
                     action_input = _default_react_mode(request_text, action_input)
                 if executor == "doc.generate":
                     action_input = _default_doc_format(request_text, action_input)
                 if executor in known_tools:
-                    hint = _validate_react_input(executor, action_input)
+                    hint = _validate_react_input(
+                        executor, action_input, has_files=has_files
+                    )
                     if hint is not None:
                         if guard.record_idle():
                             iter_obs.update(
@@ -1038,8 +1168,43 @@ class ReActEngine:
                             plotted_data.add(data_key)
                         observation = _chart_observation(action_input)
                         chart_fingerprints[step_id] = observation
+                    elif is_tool and executor == "code.read":
+                        observation = (outcome.output or "")[
+                            :_CODE_READ_SCRATCHPAD_LIMIT
+                        ]
                     else:
                         observation = (outcome.output or "")[:1500]
+                    # Futile-success guard (trace 987e6ceb): an agent step
+                    # that "succeeds" by reporting it never received file
+                    # content is not progress — steer to code.read and
+                    # count it idle so the loop fails fast instead of
+                    # repeating the same ask.
+                    if not is_tool and _is_empty_file_claim(outcome.output):
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "thought": thought_in,
+                                    "executor": executor,
+                                    "error": "agent reported missing file content",
+                                }
+                            )
+                            break
+                        scratchpad.append(
+                            f"step {step_id} ({executor}) reported it has no file "
+                            "content — that step fetched nothing. Call code.read "
+                            "with a literal file_id from notebook.inspect FIRST, "
+                            "then pass its content into the coding message."
+                        )
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "thought": thought_in,
+                                "executor": executor,
+                                "error": "agent reported missing file content",
+                            }
+                        )
+                        continue
                     scratchpad.append(
                         f"step {step_id} ({executor}) thought: {thought} "
                         f"observation: {observation}"
@@ -1128,12 +1293,21 @@ class ReActEngine:
             ],
         )
         if not step_results:
+            # The loop broke before any step ran (idle guard, cancellation, or
+            # a planner that never proposed anything usable). Trace c1bbae95
+            # surfaced the bare "react loop produced no steps", which tells the
+            # user nothing — name what happened and what to try instead.
             step_results = [
                 StepResult(
                     step_id="r0",
                     agent_id="react",
                     status=StepStatus.FAILURE,
-                    error="react loop produced no steps",
+                    error=(
+                        f"{no_step_reason or 'no usable action was found'}. "
+                        "Try naming the file explicitly, or restating what to "
+                        "produce (for example: 'write an HTML page that charts "
+                        "these numbers' or 'summarize the documents')."
+                    ),
                 )
             ]
         return ReactResult(
@@ -1181,21 +1355,55 @@ class ReActEngine:
                         seen_evidence.add(line)
                         evidence_lines.append(line)
                 evidence = "\n\n".join(evidence_lines)
-                synth_message = (
-                    f"Synthesize the final answer to the request using ONLY "
-                    f"these observations. Cover every document below; do not "
-                    f"ask the user to upload or paste anything. Charts are "
-                    f"already rendered in Artifacts — describe each chart's "
-                    f"takeaway and give a summary table, but NEVER redraw "
-                    f"charts as ASCII/text blocks. Do NOT generate code — "
-                    f"the document/chart is already produced; just describe "
-                    f"it and summarize. Write like a world-class assistant: "
-                    f"lead with the direct answer, then supporting detail in "
-                    f"clear Markdown (short headings, bullets, numbered "
-                    f"steps, or a table when it helps); never expose step "
-                    f"ids or internal machinery. "
-                    f"Request: {request_text}\n\nObservations:\n{evidence}"
+                # Task-aware synthesis (trace 987e6ceb): the old prompt
+                # banned uploads AND code generation unconditionally — right
+                # for doc/chart runs (evidence already produced the file),
+                # wrong for code runs where file content IS the evidence to
+                # build from. Code evidence routes to a code-writing prompt;
+                # everything else keeps the describe-don't-regenerate shape.
+                has_code_evidence = any(
+                    (r.agent_id or "").lower() in ("code.read", "coding")
+                    for r in successes
                 )
+                lowered_request = (request_text or "").lower()
+                wants_code = has_code_evidence or any(
+                    k in lowered_request
+                    for k in ("test script", "test file", "unit test",
+                              "write code", "code", "script", ".py")
+                )
+                if wants_code:
+                    synth_message = (
+                        f"Synthesize the final answer to the request using ONLY "
+                        f"these observations. When file content is present "
+                        f"below, write the requested code/test script FROM that "
+                        f"content (complete and runnable, fenced code blocks "
+                        f"with the right language tag, then a brief usage "
+                        f"note). Cover every file below. If no file content "
+                        f"is present, say honestly which file could not be "
+                        f"read and name it so the user can retry with the "
+                        f"file name — never invent file content. Write like "
+                        f"a world-class assistant in clear Markdown; never "
+                        f"expose step ids or internal machinery. "
+                        f"Request: {request_text}\n\nObservations:\n{evidence}"
+                    )
+                else:
+                    synth_message = (
+                        f"Synthesize the final answer to the request using ONLY "
+                        f"these observations. Cover every document below. "
+                        f"Charts are already rendered in Artifacts — describe "
+                        f"each chart's takeaway and give a summary table, but "
+                        f"NEVER redraw charts as ASCII/text blocks. The "
+                        f"document/chart is already produced; just describe "
+                        f"it and summarize, do not rebuild it. If the "
+                        f"observations show no usable content, say honestly "
+                        f"what was tried and which file is needed — never "
+                        f"invent content. Write like a world-class assistant: "
+                        f"lead with the direct answer, then supporting detail in "
+                        f"clear Markdown (short headings, bullets, numbered "
+                        f"steps, or a table when it helps); never expose step "
+                        f"ids or internal machinery. "
+                        f"Request: {request_text}\n\nObservations:\n{evidence}"
+                    )
                 try:
                     synth_plan = Plan(
                         plan_id=f"react-final-{uuid.uuid4().hex[:8]}",

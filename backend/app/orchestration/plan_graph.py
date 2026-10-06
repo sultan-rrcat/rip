@@ -69,6 +69,13 @@ logger = logging.getLogger("orchestration.plan_graph")
 # Matches {{step_id}} placeholders inside a step's input values.
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
 
+#: Fenced code spans (```...```) carry literal file content inlined by the
+#: L2 CODE builder — placeholder resolution must not rewrite source text
+#: inside them (trace 987e6ceb: plan_graph.py's own {{id}} patterns would
+#: otherwise resolve to "(no chunks retrieved)" before the coding agent
+#: ever sees the file).
+_FENCED_CODE_SPLIT = re.compile(r"(```.*?```)", re.DOTALL)
+
 #: Machine outputs that never need conversation context even when terminal
 #: (a lone numbers/chunks step is shown via the aggregator's anti-blank
 #: fallback, but the step itself runs on task + upstream data alone).
@@ -151,20 +158,22 @@ _EMPTY_CHUNKS_MARKER = "(no chunks retrieved)"
 
 def _resolve_value(value: object, outputs: dict[str, str]) -> object:
     if isinstance(value, str):
-        # Check if the entire string is a single placeholder (e.g. "{{1}}").
-        # If so, resolve and try numeric conversion — enables tool steps to
-        # receive numeric values from upstream step outputs.
-        m = _PLACEHOLDER.fullmatch(value.strip())
-        if m:
-            resolved = outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER)
-            return _try_numeric(resolved)
-        # Embedded placeholder (e.g. "Result is {{1}}") — string substitution
-        # only; unknown/failed refs become the empty-chunks marker so the
-        # downstream LLM never sees raw "{{id}}" internals.
-        return _PLACEHOLDER.sub(
-            lambda m: outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER),
-            value,
-        )
+        # Resolve placeholders ONLY outside fenced code blocks: even-indexed
+        # split parts are prose, odd-indexed parts are literal source text.
+        parts = _FENCED_CODE_SPLIT.split(value)
+        for i in range(0, len(parts), 2):
+            chunk = parts[i]
+            # Check if the entire outside-code chunk is a single placeholder
+            # (e.g. "{{1}}") — resolve with numeric conversion for tool steps.
+            m = _PLACEHOLDER.fullmatch(chunk.strip())
+            if m and len(parts) == 1:
+                resolved = outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER)
+                return _try_numeric(resolved)
+            parts[i] = _PLACEHOLDER.sub(
+                lambda m: outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER),
+                chunk,
+            )
+        return "".join(parts)
     if isinstance(value, dict):
         return {k: _resolve_value(v, outputs) for k, v in value.items()}
     if isinstance(value, list):
@@ -404,7 +413,8 @@ def _make_step_node(
     _eot = (step.expected_output_type or "text").lower()
     _visibility = (
         "hide"
-        if _eot in ("chunks", "numbers") or step.executor_id == "notebook.inspect"
+        if _eot in ("chunks", "numbers")
+        or step.executor_id in ("notebook.inspect", "code.read")
         else "show"
     )
 
@@ -432,7 +442,9 @@ def _make_step_node(
         # (the validator rejects this shape, but log here as backstop for
         # plans predating validation or bypassing it in tests).
         if step.depends_on:
-            _refs = _PLACEHOLDER.findall(str(step.input))
+            _refs = _PLACEHOLDER.findall(
+                _FENCED_CODE_SPLIT.sub("", str(step.input))
+            )
             if not _refs:
                 logger.warning(
                     "step %s depends on %s but input carries no {{id}} "

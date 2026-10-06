@@ -17,6 +17,7 @@ from app.tools.rag_query import RagQueryTool, bind_rag_singleton, rag_query
 from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 EXPECTED_IDS = [
+    "code.read",
     "doc.convert",
     "doc.generate",
     "notebook.inspect",
@@ -79,7 +80,7 @@ class SpyProvider:
     def __init__(self):
         self.calls = 0
 
-    def generate_structured(self, model, messages, schema, temperature=0):
+    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None):
         self.calls += 1
         return {"queries": ["sub one"]}
 
@@ -91,7 +92,7 @@ class TestRegistry:
     def test_all_five_registered(self):
         reg = get_default_tool_registry(rag=FakeRAG())
         assert sorted(t["tool_id"] for t in reg.manifest()) == EXPECTED_IDS
-        assert len(reg) == 5
+        assert len(reg) == 6
 
     def test_all_inherit_tool(self):
         reg = get_default_tool_registry(rag=FakeRAG())
@@ -503,3 +504,63 @@ class TestDocGenerate:
         reg = get_default_tool_registry()
         resp = execute_tool(reg, "doc.generate", {"sections": []})
         assert not resp.ok
+
+
+# --- code.read (ReAct fallback file reader, trace 987e6ceb) ---
+
+
+class TestCodeRead:
+    def test_registered_with_five(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        assert "code.read" in reg
+        assert reg.get("code.read").effect_class == "read-only"
+
+    def test_missing_notebook_id_fails_honest(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        resp = execute_tool(
+            reg, "code.read", {"file_id": "b38684db-3ff3-4f05-8b8d-bab7c5545b9d"}
+        )
+        assert not resp.ok and "notebook_id" in (resp.error or "")
+
+    def test_missing_identifier_fails_honest(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        resp = execute_tool(reg, "code.read", {"notebook_id": "nb-1"})
+        assert not resp.ok and "file_id" in (resp.error or "")
+
+    def test_placeholder_file_id_rejected(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        resp = execute_tool(
+            reg, "code.read", {"notebook_id": "nb-1", "file_id": "{{1}}"}
+        )
+        assert not resp.ok and "placeholder" in (resp.error or "")
+
+    def test_malformed_file_id_rejected_without_db(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        resp = execute_tool(
+            reg, "code.read", {"notebook_id": "nb-1", "file_id": "not-a-uuid"}
+        )
+        assert not resp.ok and "unknown file_id" in (resp.error or "")
+
+    def test_invalid_notebook_id_rejected_without_db(self):
+        reg = get_default_tool_registry(rag=FakeRAG())
+        resp = execute_tool(
+            reg,
+            "code.read",
+            {"notebook_id": "../evil", "file_name": "plan_graph.py"},
+        )
+        assert not resp.ok
+
+
+# --- notebook.inspect (fallback ids must ride the text, trace 987e6ceb) ---
+
+
+class TestNotebookInspectFormat:
+    def test_listing_carries_literal_ids(self):
+        from app.tools.notebook_inspect import _format_files
+
+        out = _format_files([
+            {"file_name": "plan_graph.py", "file_status": "ready:code",
+             "file_id": "fid-1"},
+        ])
+        assert "plan_graph.py" in out
+        assert "id=fid-1" in out

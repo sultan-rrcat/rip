@@ -145,6 +145,7 @@ class TracingProvider(ModelProvider):
         schema: dict[str, Any],
         *,
         temperature: float = 0.0,
+        timeout_ms: int | None = None,
     ) -> dict[str, Any]:
         update_generation(
             input=messages,
@@ -154,7 +155,11 @@ class TracingProvider(ModelProvider):
         )
         try:
             result = self._inner.generate_structured(
-                model=model, messages=messages, schema=schema, temperature=temperature
+                model=model,
+                messages=messages,
+                schema=schema,
+                temperature=temperature,
+                timeout_ms=timeout_ms,
             )
             update_generation(
                 output=result,

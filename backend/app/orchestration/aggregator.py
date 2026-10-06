@@ -38,7 +38,16 @@ logger = logging.getLogger("orchestration.aggregator")
 #: Unresolved {{id}} placeholders must never reach the user (trace cfbaa9c3:
 #: a reasoning step answered "I don't have access to {{1}} and {{2}}...").
 #: Outputs carrying them are treated as ungrounded failures, not answers.
+#: Fenced code spans are exempt: the coding agent legitimately emits
+#: {{...}} source text (Jinja, f-string docs) that is not DAG wiring.
 _UNRESOLVED_PLACEHOLDER = re.compile(r"\{\{\s*[A-Za-z0-9_-]+\s*\}\}")
+_FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
+
+
+def _has_unresolved_placeholder(output: str | None) -> bool:
+    return bool(
+        _UNRESOLVED_PLACEHOLDER.search(_FENCED_CODE.sub("", output or ""))
+    )
 
 #: Placeholder replacing raw chart SVG in the user-visible summary. The SVG
 #: bytes stay on StepResult.output (placeholder resolution, traces) and are
@@ -142,7 +151,7 @@ class Aggregator:
             eot = (meta.expected_output_type or "text").lower()
             if eot in ("chunks", "numbers"):
                 return True
-            return meta.executor_id == "notebook.inspect"
+            return meta.executor_id in ("notebook.inspect", "code.read")
 
         shown = [r for r in ordered_successful if not _hidden(r.step_id)]
         # ReAct runs build the answer incrementally (r1..rN, then r-final
@@ -171,7 +180,7 @@ class Aggregator:
         # means placeholder resolution failed upstream (validator bypass or
         # pre-validation plan). Showing it leaks internals ("paste {{1}}");
         # demote to a failure line so the run retries honestly instead.
-        leaked = [r for r in shown if _UNRESOLVED_PLACEHOLDER.search(r.output or "")]
+        leaked = [r for r in shown if _has_unresolved_placeholder(r.output)]
         if leaked:
             shown = [r for r in shown if r not in leaked]
             for r in leaked:

@@ -62,7 +62,7 @@ class FakeProvider(ModelProvider):
         self.models.append(model)
         yield self.text
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
         self.models.append(model)
         self.prompts.append(messages)
         if self.queued:
@@ -1475,3 +1475,82 @@ class TestFailClosedPlaceholders:
         assert agg.shown == ["1"]
         assert agg.hidden == ["2"]
         assert agg.summary.count("Chart generated") == 1
+
+
+# --- Fenced-code placeholder exemption (trace 987e6ceb) ---
+
+
+class TestFencedCodePlaceholders:
+    """`{{...}}` inside ``` fences is literal source text, never DAG wiring.
+
+    The L2 CODE builder inlines whole files into the step message; the
+    file's own source (e.g. plan_graph.py's placeholder regex and step_id
+    handling) tripped every placeholder scan and rejected the plan.
+    """
+
+    def _validator(self) -> PlanValidator:
+        agents = AgentRegistry()
+        agents.register(FakeAgent())
+        return PlanValidator(agents, get_default_tool_registry(rag=FakeRAG()))
+
+    def test_validator_accepts_code_with_fenced_placeholders(self) -> None:
+        plan = Plan(
+            plan_id="p", goal="write a test script",
+            steps=[
+                PlanStep(
+                    step_id="1", agent_id="fake",
+                    input={"message": (
+                        "Request: write a test script\n\n"
+                        "File plan_graph.py:\n```python\n"
+                        '_PLACEHOLDER = re.compile(r"{{x}}")\n'
+                        'step_id = "{{step_id}}"\n'
+                        'ref = "{{2}}" + "{{id}}"\n'
+                        "```"
+                    )},
+                    expected_output_type="answer",
+                ),
+            ],
+        )
+        assert self._validator().validate(plan) is plan
+
+    def test_validator_still_rejects_outside_fences(self) -> None:
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="rag.query", input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": (
+                             "use {{1}} and {{99}} plus "
+                             "```python\nx = '{{98}}'\n```"
+                         )},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        with pytest.raises(PlanValidationError, match="99"):
+            self._validator().validate(plan)
+
+    def test_from_model_ignores_fenced_refs_for_autowire(self) -> None:
+        plan = Plan.from_model(
+            "p", "write tests",
+            [
+                {"step_id": "1", "agent_id": "fake",
+                 "input": {"message": "```python\nx = '{{2}}'\n```"},
+                 "depends_on": [], "expected_output_type": "answer"},
+            ],
+        )
+        assert plan.steps[0].depends_on == []
+
+    def test_resolve_value_preserves_fenced_placeholders(self) -> None:
+        from app.orchestration.plan_graph import _resolve_value
+
+        out = _resolve_value(
+            "Result is {{1}} and ```python\nx = '{{1}}'\n```", {"1": "hello"}
+        )
+        assert out == "Result is hello and ```python\nx = '{{1}}'\n```"
+
+    def test_aggregator_keeps_code_output_with_fenced_placeholders(self) -> None:
+        from app.orchestration.aggregator import _has_unresolved_placeholder
+
+        assert not _has_unresolved_placeholder("```jinja\n{{ variable }}\n```")
+        assert _has_unresolved_placeholder("see {{1}} now")

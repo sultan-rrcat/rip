@@ -82,6 +82,9 @@ class RunRecord:
         # by the run's single worker thread — no lock needed.
         self._last_seq = 0
         self._delta_n = 0
+        # Set once the `runs` row disappears (notebook deleted mid-run):
+        # persistence is skipped from then on, live streaming continues.
+        self.orphaned = False
 
     @property
     def done(self) -> bool:
@@ -240,6 +243,15 @@ class RunManager:
 
         The returned dict is `{"seq", "type", "data"}` — routes format the
         SSE frame from it, and replay rows are reshaped to the same form.
+
+        NEVER raises. Event persistence is a bookkeeping side-channel reached
+        from inside orchestration (the engine's `plan` event fires mid-graph),
+        so a storage failure must not abort the run. Trace eb2d8fd3: the user
+        deleted the notebook (ON DELETE CASCADE removes the `runs` row) while
+        the LLM call was in flight; the next append_event raised
+        KeyError("Unknown run"), which unwound the plan node and surfaced as
+        a bogus run failure. Now the row-gone case degrades to live-only
+        streaming and the run keeps working.
         """
         if type == "delta" or not persist:
             # Live-only: fractional seq provably outside the persisted
@@ -252,10 +264,37 @@ class RunManager:
             }
             record.fan_out(event)
             return event
-        stored = run_store.append_event(record.run_id, type, data)
-        record._last_seq = stored.seq
-        record._delta_n = 0
-        event = {"seq": stored.seq, "type": type, "data": data}
+        if not record.orphaned:
+            try:
+                stored = run_store.append_event(record.run_id, type, data)
+            except KeyError:
+                # Notebook deleted (or run row removed) mid-flight: the run is
+                # unrecoverable but its in-memory handle still streams live.
+                record.orphaned = True
+                logger.warning(
+                    "run %s: events no longer persist (run row is gone — "
+                    "notebook likely deleted); continuing live-only",
+                    record.run_id,
+                )
+            except Exception:
+                logger.exception(
+                    "run %s: failed to persist %s event; continuing live-only",
+                    record.run_id, type,
+                )
+                record.orphaned = True
+            else:
+                record._last_seq = stored.seq
+                record._delta_n = 0
+                event = {"seq": stored.seq, "type": type, "data": data}
+                record.fan_out(event)
+                return event
+        # Orphaned: keep seqs unique off the last known persisted value.
+        record._delta_n += 1
+        event = {
+            "seq": f"{record._last_seq}.{record._delta_n}",
+            "type": type,
+            "data": data,
+        }
         record.fan_out(event)
         return event
 

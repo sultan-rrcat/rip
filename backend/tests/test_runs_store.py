@@ -177,3 +177,68 @@ class TestRunEvents:
         assert store.get_run(run.id).status == "pending"
         replayed = store.list_events(run.id)
         assert len(replayed) == 1 and replayed[0].payload["content"] == "answer"
+
+
+class TestPublishNeverRaises:
+    """Event persistence is bookkeeping; it must never abort a run.
+
+    Trace eb2d8fd3: the user deleted the notebook while the LLM call was in
+    flight, and ON DELETE CASCADE removed the `runs` row. The next
+    append_event raised KeyError, which unwound the engine's `plan` node and
+    surfaced as a bogus run failure ("Unknown run"). Publishing must degrade
+    to live-only streaming instead.
+    """
+
+    def _manager_and_record(self):
+        from app.runs.manager import RunManager, RunRecord
+
+        manager = RunManager(provider=None, orchestrator=None)
+        record = RunRecord(
+            run_id="11111111-1111-1111-1111-111111111111",
+            notebook_id="nb-1",
+            message="hi",
+        )
+        return manager, record
+
+    def test_vanished_run_row_degrades_to_live_only(self, monkeypatch):
+        from app.runs import manager as manager_mod
+
+        calls = {"n": 0}
+
+        def _gone(run_id, event_type, payload=None):
+            calls["n"] += 1
+            raise KeyError(f"Unknown run: {run_id}")
+
+        monkeypatch.setattr(manager_mod.run_store, "append_event", _gone)
+        manager, record = self._manager_and_record()
+        record.attach()  # registers one subscriber queue
+
+        first = manager._publish(record, "plan", {"plan_id": "p"})
+        assert first["type"] == "plan"
+        assert record.orphaned is True
+        # Still delivered live.
+        frame = record._subscribers.copy().pop().get(timeout=5)
+        assert frame["type"] == "plan"
+        # Once orphaned, persistence is not retried (no log spam / no DB churn).
+        second = manager._publish(record, "summary", {"content": "x"})
+        assert calls["n"] == 1
+        assert second["seq"] != first["seq"]
+
+    def test_healthy_path_still_persists(self, monkeypatch):
+        from app.runs import manager as manager_mod
+
+        class _Stored:
+            seq = 7
+
+        seen = []
+
+        def _ok(run_id, event_type, payload=None):
+            seen.append(event_type)
+            return _Stored()
+
+        monkeypatch.setattr(manager_mod.run_store, "append_event", _ok)
+        manager, record = self._manager_and_record()
+        event = manager._publish(record, "plan", {"plan_id": "p"})
+        assert event["seq"] == 7
+        assert record.orphaned is False
+        assert seen == ["plan"]

@@ -141,6 +141,15 @@ class Settings(BaseSettings):
     coding_max_tokens: int = 32768
     chat_max_tokens: int = 1024
 
+    # Control-plane call deadlines. The L1 router and the L3 ReAct planner emit
+    # tiny JSON (intent; thought/executor/is_final) but were inheriting the full
+    # ollama_timeout_ms generation budget. Under Ollama saturation that made a
+    # ~20-token classification block for the full budget: trace5f98fe9c burned
+    # 2 x 300s = the entire 600s run timeout (RUN_TIMEOUT_S) and completed zero
+    # work. Failing these open fast keeps real generation budget for the run.
+    router_timeout_ms: int = 20000
+    planner_timeout_ms: int = 60000
+
     # Orchestration
     default_max_plan_steps: int = 10
 

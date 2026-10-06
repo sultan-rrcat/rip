@@ -23,13 +23,15 @@ class FakeRouterProvider(ModelProvider):
         self.fail = fail
         self.calls = 0
         self.messages: list = []
+        self.timeouts: list[int | None] = []
 
     def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
         raise NotImplementedError("router uses generate_structured")
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
         self.calls += 1
         self.messages = messages
+        self.timeouts.append(timeout_ms)
         if self.fail:
             raise ValueError("ollama down")
         return dict(self.payload)
@@ -39,6 +41,28 @@ class FakeRouterProvider(ModelProvider):
 
     def list_available_models(self) -> list[dict]:
         return [{"id": "fake"}]
+
+
+def test_router_uses_tight_deadline() -> None:
+    # Trace 5f98fe9c: the router inherited the full 300s generation budget,
+    # so a saturated Ollama held the run hostage (2 x 300s consumed the whole
+    # 600s run timeout doing zero work). It must bound its own call.
+    from app.core.config import settings
+
+    provider = FakeRouterProvider()
+    Router(provider).route("modernize the provided code")
+    assert provider.timeouts == [settings.router_timeout_ms]
+    assert settings.router_timeout_ms < settings.ollama_timeout_ms
+
+
+def test_router_timeout_fails_open_fast() -> None:
+    # A deadline breach must fail open to UNKNOWN (→ L3 ReAct), not raise.
+    from app.orchestration.intents import ROUTER_CONFIDENCE_THRESHOLD
+
+    provider = FakeRouterProvider(fail=True)
+    result = Router(provider).route("modernize the provided code")
+    assert result.intent is Intent.UNKNOWN
+    assert result.confidence < ROUTER_CONFIDENCE_THRESHOLD
 
 
 def test_greeting_goes_through_llm() -> None:

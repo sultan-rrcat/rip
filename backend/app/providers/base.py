@@ -60,8 +60,15 @@ class ModelProvider(ABC):
         schema: dict[str, Any],
         *,
         temperature: float = 0.0,
+        timeout_ms: int | None = None,
     ) -> dict[str, Any]:
-        """Return a JSON object (as a Python dict) conforming to `schema`."""
+        """Return a JSON object (as a Python dict) conforming to `schema`.
+
+        `timeout_ms` bounds THIS call only (None = provider default). The
+        control-plane callers pass a tight deadline: router and ReAct planner
+        emit tiny JSON, so inheriting the full generation budget let a saturated
+        Ollama hold a run hostage for the whole ollama_timeout_ms window.
+        """
 
     @abstractmethod
     def embed(self, model: str, text: str) -> list[float]:

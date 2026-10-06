@@ -70,6 +70,20 @@ class Router:
             "one intent. Query generation for document retrieval is performed "
             "inside rag.query, not by you.\n"
             f"Intents:\n{lines}\n"
+            "DELIVERABLE-FIRST (decides before anything else): classify by what "
+            "the user wants PRODUCED, not by which words appear. If the request "
+            "asks for SOURCE CODE (write/generate an HTML, CSS, JS, TS, Python "
+            "or other file; 'return only the code'; 'no external libraries'; 'no "
+            "CDN'; 'self-contained page') the intent is code — even when the "
+            "request also says chart, visualize, plot, graph, table, or compare, "
+            "because the answer IS a program. Trace c1bbae95: 'create a "
+            "self-contained HTML page that visualizes this data as a chart ... "
+            "use only HTML/CSS/JS, no CDN, return only the HTML' was routed to "
+            "plot_standalone and the user got a request to re-upload instead of "
+            "the page.\n"
+            "The chart/plot precedence below applies ONLY when the requested "
+            "deliverable is a rendered chart or document — never when the "
+            "deliverable is code that would draw it.\n"
             "Precedence: plot/draw/chart/show-as-graph (from document data) "
             "is always summarize_plot, even when the request also says "
             "compare; compare_multi is only for comparisons with no chart.\n"
@@ -108,6 +122,12 @@ class Router:
                 messages=messages,
                 schema=ROUTER_SCHEMA,
                 temperature=0,
+                # Tight deadline: this call emits ~20 tokens of JSON. Under
+                # Ollama saturation the inherited generation budget (300s)
+                # held the run hostage — trace 5f98fe9c spent the entire
+                # 600s run timeout on router + planner timeouts and did no
+                # work. Failing open to UNKNOWN fast leaves budget for ReAct.
+                timeout_ms=settings.router_timeout_ms,
             )
         except Exception as e:  # noqa: BLE001 - fail-open to L3 ReAct
             logger.warning("router LLM failed, falling back to unknown: %s", e)
