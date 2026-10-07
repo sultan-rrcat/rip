@@ -1,8 +1,7 @@
 """Intent taxonomy for layered planning.
 
 L1 router classifies into these intents; L2 builders handle the
-deterministic subset. Everything else (including UNKNOWN/low-confidence)
-goes to L3 ReAct.
+deterministic subset. Everything else (including UNKNOWN) goes to L3 ReAct.
 
 Pure data. NO LLM here.
 """
@@ -26,7 +25,9 @@ class Intent(str, Enum):
     UNKNOWN = "unknown"
 
 
-#: Router confidence below this routes to UNKNOWN (→ L3 ReAct).
+#: Deprecated: confidence was removed from the router contract (the LLM now
+#: returns intent only; parse success is trust). Kept for import
+#: compatibility; no routing code reads it.
 ROUTER_CONFIDENCE_THRESHOLD = 0.6
 
 #: One line per intent for the tiny router prompt (kept here so prompts stay small).
@@ -37,8 +38,8 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
     Intent.SUMMARIZE: "summarize documents without chart",
     Intent.SUMMARIZE_PLOT: "summarize/compare AND draw/plot/chart the numbers — any plot/draw/chart/show-as-graph ask belongs here, even when the request also says compare",
     Intent.PLOT_STANDALONE: "draw a chart from numbers given in the message",
-    Intent.CONVERT_ONE: "convert one named file to md/docx/pdf",
-    Intent.CONVERT_ALL: "convert all/plural documents to md/docx/pdf",
+    Intent.CONVERT_ONE: "re-render one ORIGINAL uploaded file to md/docx/pdf via convert/export/save-as (requires a named source file; write/create/generate/draft new content such as an email/letter/report in pdf is NOT convert)",
+    Intent.CONVERT_ALL: "re-render all ORIGINAL uploaded files to md/docx/pdf via convert/export/save-as (requires all/every/each; new content is NOT convert)",
     Intent.QUIZ: "generate questions, quiz, or MCQs from documents",
     Intent.CODE: "any software task: write new code from scratch in any language (including HTML/CSS/JS web pages, sites, apps, scripts), or explain, review, debug, test, or modify uploaded code files",
     Intent.UNKNOWN: "anything else or unclear",

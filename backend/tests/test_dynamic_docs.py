@@ -386,17 +386,14 @@ class _FakeProvider:
 
 
 class TestRouterDocAwareness:
-    def test_router_prompt_covers_convert_slots(self):
+    def test_router_slots_come_from_text_not_llm(self):
         from app.orchestration.router import Router
 
-        provider = _FakeProvider(
-            {"intent": "convert_one", "queries": [], "confidence": 0.9,
-             "file_hint": "a.pdf", "target_format": "md"}
-        )
+        provider = _FakeProvider({"intent": "convert_one"})
         result = Router(provider).route("convert a.pdf to md please")
         assert result.file_hint == "a.pdf" and result.target_format == "md"
-        system = provider.seen_messages[0]["content"]
-        assert "file_hint" in system and "target_format" in system
+        # Slots are out of the LLM: legacy payload slots are ignored and
+        # the prompt carries no slot instructions.
 
     def test_react_prompt_renders_snapshot(self):
         from app.agents.registry import get_default_agent_registry

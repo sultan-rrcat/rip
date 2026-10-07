@@ -118,10 +118,14 @@ class TestCancelForwarding:
 
     def test_router_forwards_cancel_event(self):
         provider = _RecordingProvider(
-            {"intent": "chat", "confidence": 0.9}
+            {"intent": "chat"}
         )
         event = _event()
-        result = Router(provider).route("hello", cancel_event=event)
+        # "hello" hits the rule pre-filter (no LLM call), so use an
+        # ambiguous request that must reach the LLM to assert forwarding.
+        result = Router(provider).route(
+            "hello there friend, how are you doing today?", cancel_event=event
+        )
         assert result.intent.value == "chat"
         assert provider.seen == [event]
 

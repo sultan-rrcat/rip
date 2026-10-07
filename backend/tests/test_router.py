@@ -57,28 +57,24 @@ def test_router_uses_tight_deadline() -> None:
 
 def test_router_timeout_fails_open_fast() -> None:
     # A deadline breach must fail open to UNKNOWN (→ L3 ReAct), not raise.
-    from app.orchestration.intents import ROUTER_CONFIDENCE_THRESHOLD
-
     provider = FakeRouterProvider(fail=True)
     result = Router(provider).route("modernize the provided code")
     assert result.intent is Intent.UNKNOWN
-    assert result.confidence < ROUTER_CONFIDENCE_THRESHOLD
+    assert result.confidence == 0.0
 
 
-def test_greeting_goes_through_llm() -> None:
-    # L0 removed: every request — including greetings — is classified by
-    # the L1 LLM. The canned payload here returns compare_multi, proving
-    # a router call was spent even on short input.
+def test_greeting_short_circuits_without_llm() -> None:
+    # Cautious pre-filter: pure greetings are deterministic (no LLM call).
     provider = FakeRouterProvider()
     result = Router(provider).route("hello")
-    assert provider.calls == 1
-    assert result.routed_by == "llm"
-    assert result.intent is Intent.COMPARE_MULTI
+    assert provider.calls == 0
+    assert result.routed_by == "rule"
+    assert result.intent is Intent.CHAT
 
 
 def test_chat_intent_maps() -> None:
     provider = FakeRouterProvider(
-        {"intent": "chat", "confidence": 0.95}
+        {"intent": "chat"}
     )
     result = Router(provider).route("hello there friend, how are you doing?")
     assert result.intent is Intent.CHAT
@@ -88,20 +84,21 @@ def test_llm_classification_maps() -> None:
     router = Router(FakeRouterProvider())
     result = router.route("compare both reports and rank them")
     assert result.intent is Intent.COMPARE_MULTI
-    assert result.confidence == 0.9
+    assert result.confidence == 1.0
 
 
-def test_low_confidence_falls_to_unknown() -> None:
-    provider = FakeRouterProvider(
-        {"intent": "qa_single", "confidence": 0.2}
-    )
+def test_no_confidence_threshold_any_parsed_intent_is_trusted() -> None:
+    # Confidence was dropped: parse success is trust. A payload that used
+    # to fall to UNKNOWN on low confidence now routes to its intent.
+    provider = FakeRouterProvider({"intent": "qa_single"})
     result = Router(provider).route("something vague here with length over limit x")
-    assert result.intent is Intent.UNKNOWN
+    assert result.intent is Intent.QA_SINGLE
+    assert result.confidence == 1.0
 
 
 def test_bad_intent_string_falls_to_unknown() -> None:
     provider = FakeRouterProvider(
-        {"intent": "not_a_real_intent", "confidence": 0.95}
+        {"intent": "not_a_real_intent"}
     )
     result = Router(provider).route("a long enough request that needs the llm path")
     assert result.intent is Intent.UNKNOWN
@@ -115,17 +112,15 @@ def test_llm_failure_falls_open_to_unknown() -> None:
 
 
 def test_prompt_disambiguates_plot_vs_compare() -> None:
-    # Live trace: "compare the class distribution and plot in a bar chart"
-    # was routed compare_multi (no plot step emitted). The prompt must carry
+    # "compare the class distribution and plot in a bar chart" must carry
     # the precedence rule so a chart ask wins over a compare ask.
     provider = FakeRouterProvider()
     Router(provider).route("compare the class distribution and plot in a bar chart")
     system = provider.messages[0]["content"]
     assert "summarize_plot" in system
-    assert "compare_multi is only for comparisons with no chart" in system
-    # NB: no "distinct" assert — that word belonged to the removed
-    # router-side query-generation line (e2fa13f moved decomposition into
-    # rag.query per ADR-030); precedence is covered by the asserts above.
+    assert "no chart" in system
+    assert "stop at the first match" in system
+    assert "c1bbae95" not in system  # no trace anecdotes in the prompt
 
 
 def test_prompt_built_from_descriptions_with_precedence() -> None:
@@ -148,22 +143,18 @@ def test_compare_without_chart_stays_compare_multi() -> None:
     assert result.intent is Intent.COMPARE_MULTI
 
 
-def test_convert_slots_parsed() -> None:
-    provider = FakeRouterProvider(
-        {"intent": "convert_one", "confidence": 0.9,
-         "file_hint": "Faultbook", "target_format": "MD"}
-    )
-    result = Router(provider).route("convert the faultbook report to MD please!")
+def test_convert_slots_parsed_from_text_not_llm() -> None:
+    # Slots are regex-extracted from the request text; LLM payload slots
+    # are ignored. Quoted/bare filenames + format word drive the result.
+    provider = FakeRouterProvider({"intent": "convert_one"})
+    result = Router(provider).route('convert the "faultbook.pdf" report to MD please!')
     assert result.intent is Intent.CONVERT_ONE
-    assert result.file_hint == "Faultbook"
+    assert result.file_hint == "faultbook.pdf"
     assert result.target_format == "md"  # normalized
 
 
 def test_convert_slots_default_empty_and_bad_format_dropped() -> None:
-    provider = FakeRouterProvider(
-        {"intent": "convert_all", "confidence": 0.9,
-         "file_hint": "*", "target_format": "exe"}
-    )
+    provider = FakeRouterProvider({"intent": "convert_all"})
     result = Router(provider).route("convert all documents to exe somehow here")
     assert result.intent is Intent.CONVERT_ALL
     assert result.file_hint == "*"
@@ -177,17 +168,13 @@ def test_convert_slots_default_empty_and_bad_format_dropped() -> None:
 
 def test_doc_intent_empty_queries_postfilled() -> None:
     # Router no longer returns queries; query generation moves to rag.query tool.
-    provider = FakeRouterProvider(
-        {"intent": "qa_single", "confidence": 0.95}
-    )
+    provider = FakeRouterProvider({"intent": "qa_single"})
     result = Router(provider).route("What is QLoRA?")
     assert result.intent is Intent.QA_SINGLE
 
 
 def test_non_doc_intent_empty_queries_stay_empty() -> None:
-    provider = FakeRouterProvider(
-        {"intent": "chat", "confidence": 0.95}
-    )
+    provider = FakeRouterProvider({"intent": "chat"})
     result = Router(provider).route("hello there friend, how are you doing?")
     assert result.intent is Intent.CHAT
 
@@ -201,11 +188,10 @@ def test_router_prompt_requires_queries_for_doc_intents() -> None:
 
 
 def test_router_context_passed_for_followup() -> None:
-    # Trace 35e8fbd9: the bare follow-up "in a table format" classified
-    # unknown (0.85) because the router never saw the conversation. With
-    # context, recent turns reach the router so it can classify the
+    # The bare follow-up "in a table format" is unclassifiable alone;
+    # with context, recent turns reach the router so it can classify the
     # combined intent.
-    provider = FakeRouterProvider({"intent": "chat", "confidence": 0.9})
+    provider = FakeRouterProvider({"intent": "chat"})
     result = Router(provider).route(
         "in a table format",
         context=(
@@ -222,6 +208,66 @@ def test_router_context_passed_for_followup() -> None:
 
 
 def test_router_without_context_keeps_two_messages() -> None:
-    provider = FakeRouterProvider({"intent": "chat", "confidence": 0.9})
-    Router(provider).route("hello")
+    provider = FakeRouterProvider({"intent": "chat"})
+    # "hello" would hit the rule pre-filter (0 messages); use a longer
+    # greeting so the LLM path runs and the message shape can be asserted.
+    Router(provider).route("hello there friend, how are you doing today?")
     assert len(provider.messages) == 2  # system + user, no context turn
+
+
+def test_rule_prefilter_convert_all_names_star() -> None:
+    provider = FakeRouterProvider({"intent": "should-not-be-used"})
+    result = Router(provider).route("convert all documents to pdf please")
+    assert provider.calls == 0
+    assert result.routed_by == "rule"
+    assert result.intent is Intent.CONVERT_ALL
+    assert result.file_hint == "*"
+    assert result.target_format == "pdf"
+
+
+def test_rule_prefilter_plot_standalone_needs_numbers() -> None:
+    provider = FakeRouterProvider({"intent": "should-not-be-used"})
+    result = Router(provider).route("plot bar chart with Alpha: 10, Beta: 20")
+    assert provider.calls == 0
+    assert result.intent is Intent.PLOT_STANDALONE
+
+    llm_only = FakeRouterProvider({"intent": "summarize_plot"})
+    routed = Router(llm_only).route("plot the class distribution from the docs")
+    assert llm_only.calls == 1
+    assert routed.intent is Intent.SUMMARIZE_PLOT
+
+
+def test_rule_prefilter_code_marker_without_llm() -> None:
+    provider = FakeRouterProvider({"intent": "should-not-be-used"})
+    result = Router(provider).route(
+        "create a self-contained HTML page, no CDN, return only the HTML"
+    )
+    assert provider.calls == 0
+    assert result.routed_by == "rule"
+    assert result.intent is Intent.CODE
+
+
+def test_llm_slots_ignored_text_wins() -> None:
+    # Even if the LLM echoes slots (legacy fakes), the router uses regex.
+    provider = FakeRouterProvider(
+        {"intent": "convert_one", "file_hint": "wrong", "target_format": "exe"}
+    )
+    result = Router(provider).route('convert the "real.pdf" to docx please')
+    assert result.file_hint == "real.pdf"
+    assert result.target_format == "docx"
+
+
+def test_write_new_content_in_pdf_is_not_a_rule_convert() -> None:
+    # "write an email in pdf format" is NEW content (doc.generate via ReAct),
+    # not a re-render of an ORIGINAL upload — the pre-filter must stay out.
+    from app.orchestration.router import _rule_pre_filter
+
+    assert _rule_pre_filter("write an email in pdf format for my today's leave") is None
+
+
+def test_prompt_excludes_generate_from_convert() -> None:
+    provider = FakeRouterProvider({"intent": "unknown"})
+    Router(provider).route("write an email in pdf format for my today's leave")
+    system = provider.messages[0]["content"]
+    assert "Write/create/generate/draft NEW content" in system
+    assert "is NOT convert" in system

@@ -118,14 +118,14 @@ def test_unknown_intent_falls_back_to_react() -> None:
     assert provider.structured_calls == 2  # router + react turn
 
 
-def test_greeting_goes_through_router_to_builder() -> None:
+def test_greeting_uses_rule_prefilter_to_builder() -> None:
     provider = FakeLayeredProvider(queued=[
-        {"intent": "chat", "queries": [], "confidence": 0.95},
+        {"intent": "chat"},
     ])
     result = _orchestrator(provider).run("hi", "nb-1")
     assert result.status == "success" and result.summary == "layered answer"
     assert len(result.step_results) == 1
-    assert provider.structured_calls == 1  # L1 router, then L2 builder (no LLM)
+    assert provider.structured_calls == 0  # rule pre-filter, then L2 builder (no LLM)
 
 
 def _prose_validator():
@@ -493,11 +493,10 @@ HTML_CHART_REQUEST = (
 )
 
 
-def test_router_prompt_is_deliverable_first_for_code_output() -> None:
-    # Trace c1bbae95: "self-contained HTML page ... as a chart ... no CDN ...
-    # return only the HTML" was routed to plot_standalone at 0.99 confidence,
-    # had no builder, and the run died asking for a re-upload. The router
-    # prompt must classify by DELIVERABLE (source code) over chart wording.
+def test_router_prompt_is_ordered_rule_list_without_trace() -> None:
+    # The self-contained-HTML class is now a rule pre-filter hit (no LLM).
+    # The LLM prompt itself must stay an ordered stop-at-first-match list
+    # with code above chart, and carry no trace anecdotes.
     from app.orchestration.router import Router
 
     seen: list = []
@@ -505,13 +504,20 @@ def test_router_prompt_is_deliverable_first_for_code_output() -> None:
     class _ProbeProvider(FakeLayeredProvider):
         def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
             seen.append(messages)
-            return {"intent": "code", "confidence": 0.9}
+            return {"intent": "code"}
 
-    Router(_ProbeProvider()).route(HTML_CHART_REQUEST)
+    result = Router(_ProbeProvider()).route(HTML_CHART_REQUEST)
+    assert result.intent.value == "code"
+    assert result.routed_by == "rule"
+    assert seen == []  # pre-filter spent no LLM call
+
+    Router(_ProbeProvider()).route(
+        "write a python function that plots accuracy from the reports"
+    )
     system = seen[0][0]["content"]
-    assert "DELIVERABLE-FIRST" in system
+    assert "stop at the first match" in system
     assert "SOURCE CODE" in system
-    assert "no CDN" in system
+    assert "c1bbae95" not in system
 
 
 def test_misnamed_code_read_still_reaches_coding_agent() -> None:
@@ -667,14 +673,12 @@ def test_plan_event_carries_routing_fields() -> None:
     route = plans[0].get("route") or {}
     assert route.get("intent") == "compare_multi"
     assert route.get("routed_by") == "llm"
-    assert route.get("confidence") == 0.9
+    assert route.get("confidence") == 1.0
 
 
-def test_greeting_plan_event_llm_route() -> None:
+def test_greeting_plan_event_rule_route() -> None:
     events: list[dict] = []
-    provider = FakeLayeredProvider(queued=[
-        {"intent": "chat", "queries": [], "confidence": 0.95},
-    ])
+    provider = FakeLayeredProvider(queued=[])
     result = _orchestrator(provider).run(
         "hi", "nb-1", on_event=events.append,
     )
@@ -682,7 +686,7 @@ def test_greeting_plan_event_llm_route() -> None:
     plans = [e for e in events if e.get("type") == "plan"]
     assert len(plans) == 1
     route = plans[0].get("route") or {}
-    assert route.get("routed_by") == "llm"
+    assert route.get("routed_by") == "rule"
     assert route.get("intent") == "chat"
 
 
