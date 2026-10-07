@@ -314,6 +314,178 @@ class TestRagQuery:
             bind_rag_singleton(None)  # type: ignore[arg-type]
 
 
+class FilterProvider:
+    """Fake provider serving both the sub-query planner and the filter.
+
+    Dispatches on the schema: `quotes` properties get the canned verbatim
+    quotes, anything else gets one sub-query. Counts only filter calls.
+    """
+
+    def __init__(self, quotes: list[str] | None = None, fail: bool = False):
+        self.quotes = quotes if quotes is not None else []
+        self.fail = fail
+        self.filter_calls = 0
+        self.seen_timeout_ms: list = []
+
+    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None, cancel_event=None):
+        if "quotes" in (schema.get("properties") or {}):
+            self.filter_calls += 1
+            self.seen_timeout_ms.append(timeout_ms)
+            if self.fail:
+                raise RuntimeError("filter llm down")
+            return {"quotes": list(self.quotes)}
+        return {"queries": ["sub one"]}
+
+
+def _big_results(n: int = 3, size: int = 5000, tag: str = "chunk") -> list[dict]:
+    """Results whose formatted output exceeds the filter threshold."""
+    return [
+        {
+            "content": f"{tag}-{i} " + ("x" * size),
+            "source": "f.pdf",
+            "section": "H1",
+            "rerank_score": 0.9,
+        }
+        for i in range(n)
+    ]
+
+
+class TestRelevanceFilter:
+    def test_small_results_skip_filter_without_provider_call(self):
+        provider = FilterProvider(quotes=["c1"])
+        tool = RagQueryTool(rag=FakeRAG(), provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert resp.ok
+        assert provider.filter_calls == 0
+        assert resp.data["filtered"] is False
+        assert resp.data["filter_reason"] == "under_threshold"
+        assert len(resp.data["results"]) == 3
+
+    def test_large_results_filtered_by_default(self):
+        big = _big_results()
+        rag = WholeFileRAG(whole=big)
+        provider = FilterProvider(quotes=[big[1]["content"]])
+        tool = RagQueryTool(rag=rag, provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert resp.ok
+        assert provider.filter_calls == 1
+        assert resp.data["filtered"] is True
+        # Subset only, original order preserved, sources consistent.
+        assert [r["content"] for r in resp.data["results"]] == [big[1]["content"]]
+        assert "chunk-1" in (resp.output or "")
+        assert "chunk-0" not in (resp.output or "")
+
+    def test_verbatim_true_skips_filter(self):
+        big = _big_results()
+        rag = WholeFileRAG(whole=big)
+        provider = FilterProvider(quotes=[big[1]["content"]])
+        tool = RagQueryTool(rag=rag, provider=provider)
+        resp = tool.execute(
+            ToolRequest(
+                tool_id="rag.query",
+                input={"notebook_id": "nb-1", "query": "q", "verbatim": True},
+            )
+        )
+        assert resp.ok
+        assert provider.filter_calls == 0
+        assert resp.data["filtered"] is False
+        assert resp.data["filter_reason"] == "not_requested"
+        assert len(resp.data["results"]) == 3
+
+    def test_filter_uses_tight_deadline(self):
+        from app.core.config import settings
+
+        big = _big_results()
+        provider = FilterProvider(quotes=[big[0]["content"]])
+        tool = RagQueryTool(rag=WholeFileRAG(whole=big), provider=provider)
+        tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert provider.seen_timeout_ms == [settings.planner_timeout_ms]
+
+    def test_filter_failure_falls_back_unfiltered(self):
+        big = _big_results()
+        provider = FilterProvider(fail=True)
+        tool = RagQueryTool(rag=WholeFileRAG(whole=big), provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert resp.ok
+        assert resp.data["filtered"] is False
+        assert resp.data["filter_reason"] == "filter_failed"
+        assert len(resp.data["results"]) == 3
+
+    def test_filter_no_provider_falls_back_unfiltered(self):
+        big = _big_results()
+        tool = RagQueryTool(rag=WholeFileRAG(whole=big))
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert resp.ok
+        assert resp.data["filtered"] is False
+        assert resp.data["filter_reason"] == "no_provider"
+        assert len(resp.data["results"]) == 3
+
+    def test_filter_empty_quotes_falls_back_unfiltered(self):
+        big = _big_results()
+        provider = FilterProvider(quotes=[])
+        tool = RagQueryTool(rag=WholeFileRAG(whole=big), provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert resp.ok
+        assert resp.data["filtered"] is False
+        assert resp.data["filter_reason"] == "nothing_mapped"
+        assert len(resp.data["results"]) == 3
+
+    def test_filter_paraphrase_matches_nothing(self):
+        big = _big_results()
+        provider = FilterProvider(quotes=["a completely unrelated sentence"])
+        tool = RagQueryTool(rag=WholeFileRAG(whole=big), provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert resp.ok and resp.data["filtered"] is False
+        assert len(resp.data["results"]) == 3
+
+    def test_filter_partial_quote_matches_source(self):
+        from app.tools.rag_query import _map_quotes_to_results
+
+        results = [
+            {"content": "alpha beta gamma delta", "source": "f.pdf"},
+            {"content": "one two three four", "source": "f.pdf"},
+        ]
+        # Partial quote still matches its source chunk, in doc order.
+        assert _map_quotes_to_results(["beta gamma"], results) == [results[0]]
+        # Paraphrase matches nothing.
+        assert _map_quotes_to_results(["something else entirely"], results) == []
+        # Non-list / empty input matches nothing (never raises).
+        assert _map_quotes_to_results("alpha", results) == []
+        assert _map_quotes_to_results([], results) == []
+        assert _map_quotes_to_results(None, results) == []
+
+    def test_ranked_path_filters_large_merge(self):
+        """The filter also applies past the whole-file shortcut."""
+
+        class _BigRanked(FakeRAG):
+            def __init__(self):
+                super().__init__(results=_big_results(n=3))
+
+        big = _BigRanked().results
+        provider = FilterProvider(quotes=[big[0]["content"]])
+        tool = RagQueryTool(rag=_BigRanked(), provider=provider)
+        resp = tool.execute(
+            ToolRequest(tool_id="rag.query", input={"notebook_id": "nb-1", "query": "q"})
+        )
+        assert resp.ok and resp.data["whole_file"] is False
+        assert resp.data["filtered"] is True
+        assert [r["content"] for r in resp.data["results"]] == [big[0]["content"]]
+
+
 # --- plot.chart ---
 
 

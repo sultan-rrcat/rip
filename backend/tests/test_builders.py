@@ -304,6 +304,31 @@ def test_deterministic_intents_all_dispatched() -> None:
     } <= DETERMINISTIC_INTENTS
 
 
+def test_all_builder_rag_steps_opt_out_of_filtering() -> None:
+    """Every L2 builder rag.query step must carry verbatim=True.
+
+    The relevance filter is default-on: a builder step without the opt-out
+    would silently receive filtered evidence, breaking the placeholder
+    grounding its reasoning step depends on. This pins all four retrieval
+    builders so a future builder (or a new shard branch) cannot forget it.
+    """
+    snapshot = "2 file(s): a.pdf [ready] id=aaa; b.pdf [ready] id=bbb"
+    cases = [
+        (Intent.QA_SINGLE, "what is X?"),
+        (Intent.COMPARE_MULTI, "compare a and b"),
+        (Intent.SUMMARIZE, "summarize the docs"),
+        (Intent.QUIZ, "quiz me on the docs"),
+    ]
+    for intent, text in cases:
+        route = RouterResult(intent=intent, confidence=0.9, routed_by="llm")
+        plan = build(text, route, snapshot)
+        assert plan is not None, intent
+        rag_steps = [s for s in plan.steps if s.tool_id == "rag.query"]
+        assert rag_steps, intent
+        for step in rag_steps:
+            assert step.input.get("verbatim") is True, (intent, step.step_id)
+
+
 def _qa_route(queries=None) -> RouterResult:
     return RouterResult(
         intent=Intent.QA_SINGLE,

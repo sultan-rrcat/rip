@@ -28,11 +28,69 @@ logger = logging.getLogger("tools.rag_query")
 
 _DEFAULT_TOP_K = 4
 
+#: Fire the relevance filter only when the formatted output exceeds this.
+#: 12000 matches the downstream ReAct observation budget, so filtered
+#: output always fits where it is going. Callers that need every chunk
+#: verbatim (L2 builders, whose reasoning steps ground on full text via
+#: {{id}} placeholders) pass `verbatim: true` to skip filtering entirely.
+_FILTER_THRESHOLD_CHARS = 12000
+
+#: Narrow schema for the relevance filter: a flat list of verbatim quotes.
+#: Structured output (not free text) so the tool can map each quote back to
+#: its source result by substring match — anything paraphrased matches
+#: nothing and is dropped by construction, never entering the evidence.
+_FILTER_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"quotes": {"type": "array", "items": {"type": "string"}}},
+    "required": ["quotes"],
+}
+
+_FILTER_SYSTEM_PROMPT = (
+    "You are a retrieval relevance filter. Given the user query and the "
+    "retrieved chunks below, return the chunks relevant to the query. "
+    "Copy each relevant chunk VERBATIM, including its header line, without "
+    "paraphrasing, summarizing, or inventing anything. Return an empty list "
+    "when none of the chunks is relevant."
+)
+
 _VALID_MODES = frozenset({"specific", "overview"})
 
 # Module-global singleton slot. Bound at lifespan (Phase 4.2 main.py calls
 # bind_rag_singleton(app.state.rag)) or directly in tests via RagQueryTool(rag=...).
 _rag_singleton: Any | None = None
+
+
+def _norm(text: object) -> str:
+    """Collapse whitespace so verbatim quotes match despite formatting."""
+    return " ".join(str(text or "").split())
+
+
+def _map_quotes_to_results(
+    quotes: object, results: list[dict]
+) -> list[dict]:
+    """Keep results covered by the model's verbatim quotes, in doc order.
+
+    A result is kept when its normalized content contains (or is contained
+    in) a normalized non-empty quote — partial quotes still match their
+    source chunk, while paraphrases match nothing and are dropped. Returns
+    [] when nothing maps, which the caller treats as "keep unfiltered".
+    """
+    normed = []
+    if isinstance(quotes, list):
+        normed = [_norm(q) for q in quotes if isinstance(q, str) and _norm(q)]
+    if not normed:
+        return []
+    kept: list[dict] = []
+    for r in results or []:
+        content = _norm(
+            (r.get("content") if isinstance(r, dict) else None)
+            or (r.get("chunk_text") if isinstance(r, dict) else None)
+        )
+        if not content:
+            continue
+        if any(q in content or content in q for q in normed):
+            kept.append(r)
+    return kept
 
 
 def bind_rag_singleton(rag: Any) -> None:
@@ -114,7 +172,9 @@ class RagQueryTool(Tool):
         "and return grounded chunks with source metadata. "
         "Set file_id to scope to one file; mode='overview' returns a "
         "stratified one-per-section sample, mode='specific' (default) "
-        "returns topical ranking."
+        "returns topical ranking. When the result is large, an LLM relevance "
+        "filter keeps only query-relevant chunks quoted verbatim; pass "
+        "verbatim=true to skip filtering and always receive every chunk."
     )
     input_schema: ClassVar[dict] = {
         "type": "object",
@@ -125,6 +185,7 @@ class RagQueryTool(Tool):
             "file_id": {"type": "string"},
             "file_name": {"type": "string"},
             "mode": {"type": "string"},
+            "verbatim": {"type": "boolean"},
         },
         "required": ["notebook_id", "query"],
     }
@@ -147,6 +208,77 @@ class RagQueryTool(Tool):
     def bind_rag(self, rag: Any) -> None:
         """Direct binding for the worker and non-factory construction."""
         self._rag = rag
+
+    def _apply_relevance_filter(
+        self, query: str, results: list[dict], cancel_event=None
+    ) -> tuple[list[dict] | None, str]:
+        """LLM relevance filter over retrieved results.
+
+        Returns (subset, "filtered") when the model kept a strict, non-empty
+        subset, else (None, reason) meaning "keep unfiltered". Never raises —
+        no provider, timeouts, malformed output, or nothing mapped all fall
+        back to the full results, so filtering is evidence-preserving in the
+        worst case.
+        """
+        if not self._provider:
+            return None, "no_provider"
+        try:
+            formatted = format_context_for_llm({"results": results})
+            raw = self._provider.generate_structured(
+                model=getattr(settings, "ollama_default_model", "qwen2.5:14b"),
+                messages=[
+                    {"role": "system", "content": _FILTER_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Query: {query}\n\nRetrieved chunks:\n{formatted}"
+                        ),
+                    },
+                ],
+                schema=_FILTER_SCHEMA,
+                temperature=0,
+                timeout_ms=settings.planner_timeout_ms,
+                cancel_event=cancel_event,
+            )
+        except Exception as e:  # noqa: BLE001 - filter must never fail retrieval
+            logger.warning(
+                "relevance filter unavailable, returning unfiltered results: %s", e
+            )
+            return None, "filter_failed"
+        quotes = raw.get("quotes", []) if isinstance(raw, dict) else []
+        subset = _map_quotes_to_results(quotes, results)
+        if not subset:
+            return None, "nothing_mapped"
+        if len(subset) >= len(results):
+            # The model kept everything: unfiltered either way.
+            return None, "kept_all"
+        return subset, "filtered"
+
+    def _maybe_filter(
+        self, query: str, results: list[dict], verbatim: bool, cancel_event=None
+    ) -> tuple[list[dict], bool, str]:
+        """Apply the relevance filter when requested and worthwhile.
+
+        Returns (results_to_use, filtered, reason). `verbatim=True` skips
+        filtering (L2 builders ground on full text); small outputs skip it
+        too. Never raises — failures keep the unfiltered results.
+        """
+        if verbatim:
+            return results, False, "not_requested"
+        if not results:
+            return results, False, "no_results"
+        try:
+            probe = format_context_for_llm({"results": results})
+        except Exception:  # noqa: BLE001 - filter must never fail retrieval
+            return results, False, "filter_failed"
+        if len(probe or "") <= _FILTER_THRESHOLD_CHARS:
+            return results, False, "under_threshold"
+        subset, reason = self._apply_relevance_filter(
+            query, results, cancel_event
+        )
+        if subset is None:
+            return results, False, reason
+        return subset, True, "filtered"
 
     def execute(self, request: ToolRequest) -> ToolResponse:
         notebook_id = request.input.get("notebook_id")
@@ -207,6 +339,11 @@ class RagQueryTool(Tool):
                 output=None,
                 error="'mode' must be one of ['overview', 'specific']",
             )
+        # `verbatim=true` skips the LLM relevance filter and always returns
+        # every chunk (L2 builders ground their reasoning steps on full text
+        # via {{id}} placeholders). Default (false) filters large results
+        # down to query-relevant chunks quoted verbatim.
+        verbatim = bool(request.input.get("verbatim", False))
         # Whole-file shortcut: when the scoped file(s) fit the context window,
         # return every chunk and skip BOTH the sub-query planner LLM call and
         # the embed -> vector -> FTS -> RRF -> rerank pipeline. Returns None
@@ -229,6 +366,9 @@ class RagQueryTool(Tool):
             whole_file = None
 
         if whole_file:
+            whole_file, was_filtered, filter_reason = self._maybe_filter(
+                str(query), whole_file, verbatim, request.cancel_event
+            )
             sources = extract_sources({"results": whole_file})
             output = format_context_for_llm({"results": whole_file})
             return ToolResponse(
@@ -246,6 +386,8 @@ class RagQueryTool(Tool):
                     "file_name": file_name,
                     "mode": mode,
                     "whole_file": True,
+                    "filtered": was_filtered,
+                    "filter_reason": filter_reason,
                 },
             )
         # Generate sub-queries via LLM, always.
@@ -330,6 +472,9 @@ class RagQueryTool(Tool):
                 error=f"retrieval failed: {e}",
             )
         results = all_results
+        results, was_filtered, filter_reason = self._maybe_filter(
+            str(query), results, verbatim, request.cancel_event
+        )
         sources = extract_sources({"results": results})
         output = format_context_for_llm({"results": results})
         return ToolResponse(
@@ -346,5 +491,7 @@ class RagQueryTool(Tool):
                 "file_name": file_name,
                 "mode": mode,
                 "whole_file": False,
+                "filtered": was_filtered,
+                "filter_reason": filter_reason,
             },
         )

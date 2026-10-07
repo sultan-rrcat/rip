@@ -1105,6 +1105,70 @@ def test_react_empty_notebook_still_fails_honestly() -> None:
     assert outcome.result.step_results[0].status.value == "failure"
 
 
+def test_react_large_retrieval_filtered_by_tool_default() -> None:
+    # The relevance filter is default-on in rag.query, so ReAct needs no
+    # engine change to benefit: a large retrieval is filtered to the
+    # query-relevant chunks before it reaches the scratchpad.
+    from app.orchestration.react import run_react
+
+    keep = "BENCHMARK " + ("v" * 7000)
+    drop = "FILLER " + ("w" * 7000)
+
+    class _BigRAG:
+        def retrieve_context(
+            self, notebook_id, query, top_k=4, file_id=None, file_name=None,
+            mode="specific",
+        ):
+            return {
+                "query": query, "mode": mode,
+                "results": [
+                    {"content": drop, "source": "r.pdf",
+                     "section": "Cover", "rerank_score": 0.9},
+                    {"content": keep, "source": "r.pdf",
+                     "section": "Results", "rerank_score": 0.8},
+                ],
+            }
+
+    class _DispatchProvider(FakeLayeredProvider):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.filter_calls = 0
+
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+            if "quotes" in (schema.get("properties") or {}):
+                self.filter_calls += 1
+                return {"quotes": [keep]}
+            return super().generate_structured(
+                model, messages, schema, temperature=temperature,
+                timeout_ms=timeout_ms, cancel_event=cancel_event,
+            )
+
+    provider = _DispatchProvider(
+        text="done",
+        queued=[
+            {"thought": "read", "executor": "rag.query",
+             "input": {"query": "benchmark comparison"}, "is_final": False},
+            {"thought": "answer", "executor": "reasoning",
+             "input": {}, "is_final": True, "answer": "have numbers"},
+        ],
+    )
+    agents = get_default_agent_registry(provider)
+    tools = get_default_tool_registry(_BigRAG(), provider)
+    outcome = run_react(
+        "plot the benchmark comparison", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="1 file(s): r.pdf [ready] id=abc",
+    )
+    assert provider.filter_calls == 1
+    turn2 = next(
+        m for m in provider.prompts
+        if any("step r1 (rag.query)" in str(x.get("content", "")) for x in m)
+    )
+    seen = str(turn2[-1]["content"])
+    assert "BENCHMARK" in seen
+    assert "FILLER" not in seen
+
+
 def test_react_retrieval_observation_not_truncated_to_1500() -> None:
     # Trace 7720c817: a whole-file return (~19k chars, 14 chunks) was sliced
     # to 1500 chars for the scratchpad, so the model saw the cover page plus

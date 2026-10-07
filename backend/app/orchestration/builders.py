@@ -189,6 +189,8 @@ def build_qa_single(query: str, request_text: str) -> Plan:
                     "query": query or request_text,
                     "top_k": _PER_FILE_TOP_K,
                     "mode": "specific",
+                    # Builders ground on full text: never filter our evidence.
+                    "verbatim": True,
                 },
                 expected_output_type="chunks",
             ),
@@ -238,6 +240,8 @@ def build_compare_multi(
                         "top_k": _PER_FILE_TOP_K,
                         "file_id": fid,
                         "mode": "specific",
+                        # Builders ground on full text: never filter our evidence.
+                        "verbatim": True,
                     },
                     expected_output_type="chunks",
                 )
@@ -256,7 +260,9 @@ def build_compare_multi(
                 PlanStep(
                     step_id=str(i),
                     tool_id="rag.query",
-                    input={"query": q, "top_k": _PER_FILE_TOP_K, "mode": "specific"},
+                    input={"query": q, "top_k": _PER_FILE_TOP_K, "mode": "specific",
+                       # Builders ground on full text: never filter our evidence.
+                       "verbatim": True},
                     expected_output_type="chunks",
                 )
             )
@@ -302,6 +308,8 @@ def build_summarize(request_text: str, notebook_context: str | None = None) -> P
                         "top_k": _PER_FILE_TOP_K,
                         "file_id": fid,
                         "mode": "overview",
+                        # Builders ground on full text: never filter our evidence.
+                        "verbatim": True,
                     },
                     expected_output_type="chunks",
                 )
@@ -315,6 +323,8 @@ def build_summarize(request_text: str, notebook_context: str | None = None) -> P
                     "query": request_text,
                     "top_k": _PER_FILE_TOP_K,
                     "mode": "overview",
+                    # Builders ground on full text: never filter our evidence.
+                    "verbatim": True,
                 },
                 expected_output_type="chunks",
             )
@@ -365,6 +375,8 @@ def build_quiz(
                         "top_k": _PER_FILE_TOP_K,
                         "file_id": fid,
                         "mode": "overview",
+                        # Builders ground on full text: never filter our evidence.
+                        "verbatim": True,
                     },
                     expected_output_type="chunks",
                 )
@@ -401,6 +413,8 @@ def build_quiz(
                     "query": query or request_text,
                     "top_k": _PER_FILE_TOP_K,
                     "mode": "overview",
+                    # Builders ground on full text: never filter our evidence.
+                    "verbatim": True,
                 },
                 expected_output_type="chunks",
             ),
