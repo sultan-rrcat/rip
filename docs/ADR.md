@@ -238,6 +238,16 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-040: ReAct loop gathers evidence; a separate synthesis call writes the answer
+
+- **Status:** Accepted
+- **Context:** When the ReACT planner marked `is_final=true`, its `answer` field became the user-facing answer verbatim. That field is produced inside the same structured-output call that also carries internal `thought`/`executor` reasoning and scratchpad context, so it frequently hallucinated structure (leaked step ids, placeholder-wiring, invented details) and framed the answer around internal steps instead of the request.
+- **Decision:** The ReACT loop only gathers observations. Its `is_final` answer is demoted to a *hint* (`final_hint_answer`); the user-facing answer is always produced by one subsequent synthesis call (`_synthesize_final_answer`, step id `r-final`) grounded in the loop's successful observations. When no tools ran (e.g. greetings/small-talk), the synthesis call still runs and polishes the planner's draft; it returns `None` only when there is nothing to work from (no observations AND no hint) or the call fails, in which case the planner's draft is surfaced verbatim as `r-final`, or the existing honest failure/clarification paths apply.
+- **Streaming rule:** no live `delta` events are emitted from inside the ReACT loop (the loop's `on_event` strips `delta` frames and keeps structural events — `step_started`/`step_completed`/`sources`/`artifacts`). Only the final synthesis call streams prose deltas to the user.
+- **Consequences:** Exactly one extra LLM call per ReACT run (synthesis now runs even on an early `is_final`). Pinned by `test_react_deltas_only_from_final_synthesis`, `test_orchestrator_falls_back_to_react_on_builder_miss`, `test_force_react_skips_router`, and `test_react_synthesizes_answer_when_iterations_exhaust`.
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

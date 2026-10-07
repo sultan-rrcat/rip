@@ -65,7 +65,7 @@ L2 deterministic plan constructor: fixed DAGs for `chat/qa_single/compare_multi/
 _Avoid_: Planner, template
 
 **ReAct fallback**:
-L3 general fallback (promoted from L4 per ADR-032): thought → action → observation loop (max 6 iterations, no placeholders) when no L2 builder applies, the router is unsure, or validation rejects the plan. Failure stays honest (`OrchestrationError`).
+L3 general fallback (promoted from L4 per ADR-032): thought → action → observation loop (max 6 iterations, no placeholders) when no L2 builder applies, the router is unsure, or validation rejects the plan. Failure stays honest (`OrchestrationError`). The loop only gathers observations; the user-facing answer is always a separate synthesis LLM call outside the loop (`r-final`, ADR-040) - the planner's own `is_final` text is a hint at most. No streaming deltas are emitted from inside the loop; only the synthesis call streams.
 _Avoid_: Planner, mega-prompt
 
 **Step**:

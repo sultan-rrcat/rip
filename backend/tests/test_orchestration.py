@@ -960,8 +960,10 @@ class TestReactFallback:
             _react_final("react rescued"),
         ])
         result = orch.run("a vague request with no clear shape", "nb-1")
-        assert result.status == "success" and result.summary == "react rescued"
-        assert len(provider.models) == 3  # router + 2 react turns
+        # The final answer now comes from the always-on synthesis call
+        # (ReasoningFakeAgent output), not the planner's is_final text.
+        assert result.status == "success" and result.summary == "recovered"
+        assert len(provider.models) == 3  # router + 2 react turns (synthesis via FakeAgent)
 
     def test_force_react_skips_router(self, monkeypatch):
         # force_react=True: no router LLM call — the queued payloads are
@@ -976,7 +978,7 @@ class TestReactFallback:
             _react_final("forced react"),
         ])
         result = orch.run("a vague request with no clear shape", "nb-1")
-        assert result.status == "success" and result.summary == "forced react"
+        assert result.status == "success" and result.summary == "recovered"
         assert len(provider.models) == 2  # 2 react turns, zero router calls
 
     def test_react_failure_surfaces_honest(self):

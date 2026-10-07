@@ -785,11 +785,21 @@ class ReActEngine:
         react_ctx = (
             parent_span_ctx if parent_span_ctx is not None else _get_trace_context()
         )
-        final_answered = False
+        # The planner's is_final answer, captured as a HINT only — never the
+        # user-facing deliverable (see the end-of-loop synthesis call).
+        final_hint_answer = ""
         # Why the loop ended with ZERO steps, for an honest terminal message
         # (the generic fallback cannot tell "kept saying it was done" from
         # "never proposed a valid action").
         no_step_reason = ""
+
+        def _loop_on_event(event: dict) -> None:
+            # No live streaming from inside the loop: internal step deltas
+            # framed mid-run are noise (and hallucination bait). Structural
+            # events still flow; only the evidence-grounded synthesis call at
+            # loop end streams prose deltas.
+            if on_event is not None and event.get("type") != "delta":
+                on_event(event)
         for iteration in range(1, max_iterations + 1):
             with _manual_span(
                 f"react:iter-{iteration}",
@@ -932,24 +942,13 @@ class ReActEngine:
                             "is_final": True,
                         })
                         continue
-                    step_id = f"r{iteration}"
-                    steps.append(
-                        PlanStep(
-                            step_id=step_id,
-                            agent_id="reasoning",
-                            input={"message": str(answer)},
-                            expected_output_type="answer",
-                        )
-                    )
-                    step_results.append(
-                        StepResult(
-                            step_id=step_id,
-                            agent_id="reasoning",
-                            status=StepStatus.SUCCESS,
-                            output=str(answer),
-                        )
-                    )
-                    final_answered = True
+                    # The planner's own answer is NOT the deliverable: it
+                    # was framed alongside internal thought/executor
+                    # reasoning, which biases it (hallucinated structure,
+                    # leaked steps). Capture it as a hint — the always-on
+                    # synthesis call below phrases the final answer from the
+                    # loop's observations.
+                    final_hint_answer = str(answer)
                     guard.record_progress()
                     iter_obs.update(
                         output={
@@ -958,6 +957,7 @@ class ReActEngine:
                             "executor": "reasoning",
                             "is_final": True,
                             "answer": _truncate(str(answer), 2000),
+                            "final_via": "synthesis",
                         }
                     )
                     break
@@ -1281,7 +1281,7 @@ class ReActEngine:
                         context=None,
                         fallback_message=request_text,
                         timeout_ms=timeout_ms or settings.default_timeout_ms,
-                        on_event=on_event,
+                        on_event=_loop_on_event if on_event is not None else None,
                         cancel_event=cancel_event,
                         parent_span_ctx=step_parent,
                     )
@@ -1465,7 +1465,14 @@ class ReActEngine:
                             "error": _truncate(outcome.error, 500),
                         }
                     )
-        if not final_answered:
+        # ALWAYS synthesize the user-facing answer outside the loop: the
+        # planner's is_final answer is framed amid internal reasoning (which
+        # biases/hallucinates it), so it is demoted to a hint. The loop
+        # gathers observations; one fresh, grounded call phrases the answer.
+        # This also streams the only prose deltas — internal steps emit none.
+        synth = None
+        cancelled = cancel_event is not None and cancel_event.is_set()
+        if not cancelled:
             synth = self._synthesize_final_answer(
                 request_text,
                 step_results,
@@ -1475,12 +1482,31 @@ class ReActEngine:
                 cancel_event=cancel_event,
                 on_event=on_event,
                 chart_fingerprints=chart_fingerprints,
+                hint_answer=final_hint_answer or None,
             )
-            if synth is not None:
-                synth_step, synth_outcome = synth
-                steps.append(synth_step)
-                step_results.append(synth_outcome)
-                final_answered = True
+        if synth is not None:
+            synth_step, synth_outcome = synth
+            steps.append(synth_step)
+            step_results.append(synth_outcome)
+        elif final_hint_answer and not cancelled:
+            # Synthesis produced nothing (provider miss): surface the
+            # planner's draft verbatim rather than failing the run.
+            steps.append(
+                PlanStep(
+                    step_id="r-final",
+                    agent_id="reasoning",
+                    input={"message": final_hint_answer},
+                    expected_output_type="answer",
+                )
+            )
+            step_results.append(
+                StepResult(
+                    step_id="r-final",
+                    agent_id="reasoning",
+                    status=StepStatus.SUCCESS,
+                    output=final_hint_answer,
+                )
+            )
         plan = Plan(
             plan_id=str(uuid.uuid4()),
             goal=request_text,
@@ -1565,36 +1591,47 @@ class ReActEngine:
         cancel_event: threading.Event | None,
         on_event: Callable[[dict], None] | None,
         chart_fingerprints: dict[str, str] | None = None,
+        hint_answer: str | None = None,
     ) -> tuple[PlanStep, StepResult] | None:
-        """Grounded final answer when the loop exhausts iterations without is_final.
+        """Grounded final answer, synthesized OUTSIDE the ReACT loop.
 
-        (Trace cfbaa9c3: six rag.query observations, final summary was a
-        truncated raw chunk dump via the aggregator anti-blank fallback.)
-        Synthesizes one grounded answer from the successful observations so
-        the user gets prose covering every retrieved document instead of
-        raw chunks. Returns None when there is nothing to synthesize from.
+        The loop's is_final `answer` field is unreliable as the deliverable
+        (it is framed amid internal thought/executor reasoning, so it tends
+        to hallucinate structure and leak steps); it arrives here only as a
+        `hint_answer` seed. One fresh call phrases the user-facing answer
+        from the loop's successful observations (or, when no tools ran —
+        e.g. greetings — polishes the planner's draft). Returns None only
+        when there is nothing at all to work from (no observations AND no
+        hint), or the call fails.
         """
         successes = [
             r
             for r in step_results
             if r.status is StepStatus.SUCCESS and (r.output or "").strip()
         ]
-        if successes and not (cancel_event is not None and cancel_event.is_set()):
+        cancelled = cancel_event is not None and cancel_event.is_set()
+        if not cancelled and (successes or (hint_answer or "").strip()):
             synth_id = (
                 "reasoning"
                 if "reasoning" in self._known_agents
                 else (self._agent_ids[0] if self._agent_ids else "")
             )
             if synth_id:
-                fingerprints = chart_fingerprints or {}
-                evidence_lines: list[str] = []
-                seen_evidence: set[str] = set()
-                for r in successes[-4:]:
-                    line = _synthesis_evidence_line(r, fingerprints.get(r.step_id, ""))
-                    if line not in seen_evidence:
-                        seen_evidence.add(line)
-                        evidence_lines.append(line)
-                evidence = "\n\n".join(evidence_lines)
+                if successes:
+                    fingerprints = chart_fingerprints or {}
+                    evidence_lines: list[str] = []
+                    seen_evidence: set[str] = set()
+                    for r in successes[-4:]:
+                        line = _synthesis_evidence_line(r, fingerprints.get(r.step_id, ""))
+                        if line not in seen_evidence:
+                            seen_evidence.add(line)
+                            evidence_lines.append(line)
+                    evidence = "\n\n".join(evidence_lines)
+                else:
+                    # No tool observations (e.g. greeting, or a planner-only
+                    # answer): seed the synthesis from the planner's draft so
+                    # the user still gets one fresh, well-framed answer.
+                    evidence = f"(no tool observations were collected)\n\nPlanner draft:\n{hint_answer}"
                 # Task-aware synthesis (trace 987e6ceb): the old prompt
                 # banned uploads AND code generation unconditionally — right
                 # for doc/chart runs (evidence already produced the file),
@@ -1611,7 +1648,7 @@ class ReActEngine:
                     for k in ("test script", "test file", "unit test",
                               "write code", "code", "script", ".py")
                 )
-                if wants_code:
+                if successes and wants_code:
                     synth_message = (
                         f"Synthesize the final answer to the request using ONLY "
                         f"these observations. When file content is present "
@@ -1625,6 +1662,21 @@ class ReActEngine:
                         f"a world-class assistant in clear Markdown; never "
                         f"expose step ids or internal machinery. "
                         f"Request: {request_text}\n\nObservations:\n{evidence}"
+                    )
+                elif not successes:
+                    # No observations gathered: polish the planner's draft
+                    # into a proper user-facing reply (greetings, clarifications,
+                    # small-talk, or a direct answer the planner gave).
+                    synth_message = (
+                        f"Write the final reply to the request. No tools were "
+                        f"needed. Use the planner's draft below as the "
+                        f"starting point: keep what answers the request, fix "
+                        f"the framing, and remove any trace of internal "
+                        f"reasoning, step ids, or tool machinery. Write like a "
+                        f"world-class assistant: direct answer first, then "
+                        f"supporting detail in clear Markdown. Never invent "
+                        f"content beyond the draft.\n\n"
+                        f"Request: {request_text}\n\nDraft:\n{hint_answer}"
                     )
                 else:
                     synth_message = (

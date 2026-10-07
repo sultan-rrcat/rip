@@ -106,7 +106,7 @@ def test_compare_request_uses_builder_plan_without_mega_call() -> None:
 
 
 def test_unknown_intent_falls_back_to_react() -> None:
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="react answer", queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
         {"thought": "answer directly", "executor": "reasoning",
          "input": {}, "is_final": True, "answer": "react answer"},
@@ -203,7 +203,7 @@ def _react_orchestrator(provider):
 def test_react_answers_after_tool_observation() -> None:
     from app.orchestration.react import run_react
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="react final", queued=[
         {"thought": "need docs", "executor": "rag.query",
          "input": {"query": "fire"}, "is_final": False},
         {"thought": "have chunks", "executor": "reasoning",
@@ -224,7 +224,7 @@ def test_react_answers_after_tool_observation() -> None:
 def test_react_rejects_unknown_executor_then_recovers() -> None:
     from app.orchestration.react import run_react
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="recovered", queued=[
         {"thought": "bad pick", "executor": "ghost",
          "input": {}, "is_final": False},
         {"thought": "answer directly", "executor": "reasoning",
@@ -280,7 +280,7 @@ def test_react_validation_hints_without_executing() -> None:
 
     # Malformed first turn gets a retry hint WITHOUT burning a step;
     # normalized second turn executes and the loop finishes.
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="react final", queued=[
         {"thought": "bad shape", "executor": "rag.query",
          "input": {"agent": {"message": ""}}, "is_final": False},
         {"thought": "need docs", "executor": "rag.query",
@@ -296,7 +296,7 @@ def test_react_validation_hints_without_executing() -> None:
     assert outcome.result.step_results[-1].output == "react final"
     # Only ONE executed tool step (r2) + final answer: the malformed r1
     # never reached execution.
-    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
+    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r-final"]
 
 
 def test_react_recovers_final_answer_stranded_in_input() -> None:
@@ -305,7 +305,7 @@ def test_react_recovers_final_answer_stranded_in_input() -> None:
     # must recover it instead of discarding a correct answer.
     from app.orchestration.react import run_react
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="| A | B |\n|---|---|", queued=[
         {"thought": "format as table", "executor": "doc.generate",
          "input": {"title": "T", "content": "| A | B |\n|---|---|"},
          "is_final": True},
@@ -386,7 +386,7 @@ def test_react_repeat_of_failed_executor_is_idle_turn() -> None:
                 tool_id=self.tool_id, ok=False, output=None, error="boom"
             )
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="failed over", queued=[
         {"thought": "try it", "executor": "fail.tool",
          "input": {}, "is_final": False},
         {"thought": "try it again", "executor": "fail.tool",
@@ -406,8 +406,8 @@ def test_react_repeat_of_failed_executor_is_idle_turn() -> None:
     # retries); the identical repeat never executes (6 calls without it).
     assert fail_tool.calls == 3
     assert outcome.result.step_results[-1].output == "failed over"
-    # r1 executed, r2 idle (no step), r3 final answer.
-    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+    # r1 executed, r2 idle (no step), final answer synthesized outside the loop.
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r-final"]
     assert provider.structured_calls == 3
 
 
@@ -416,7 +416,7 @@ def test_react_refuses_rag_query_on_empty_corpus() -> None:
     # returns "(no chunks retrieved)" — refuse it as an idle turn.
     from app.orchestration.react import run_react
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="no docs answer", queued=[
         {"thought": "need data", "executor": "rag.query",
          "input": {"query": "gdp"}, "is_final": False},
         {"thought": "answer directly", "executor": "reasoning",
@@ -429,7 +429,7 @@ def test_react_refuses_rag_query_on_empty_corpus() -> None:
         notebook_context="(no documents)",
     )
     assert outcome.result.step_results[-1].output == "no docs answer"
-    assert [s.step_id for s in outcome.plan.steps] == ["r2"]
+    assert [s.step_id for s in outcome.plan.steps] == ["r-final"]
     assert provider.structured_calls == 2
 
 
@@ -441,7 +441,7 @@ def test_react_refuses_redundant_convert_after_generate() -> None:
     # uploads after a generate are refused as idle turns.
     from app.orchestration.react import run_react
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="table pdf ready", queued=[
         {"thought": "make report", "executor": "doc.generate",
          "input": {"title": "T",
                    "sections": [{"heading": "H", "body": "tab"}]},
@@ -458,8 +458,8 @@ def test_react_refuses_redundant_convert_after_generate() -> None:
         trace_id="t", notebook_id="nb-1",
         notebook_context="1 file(s): CD_lab_report.pdf [ready] id=src-1",
     )
-    # r2 convert never executed: r1 generate + r3 final answer only.
-    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+    # r2 convert never executed: r1 generate + synthesized final answer only.
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r-final"]
     assert outcome.result.step_results[-1].output == "table pdf ready"
     assert provider.structured_calls == 3
 
@@ -630,7 +630,7 @@ def test_react_prompt_drafts_new_content_before_asking() -> None:
 
 
 def test_orchestrator_falls_back_to_react_on_builder_miss() -> None:
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="react rescued", queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
         {"thought": "need docs", "executor": "rag.query",
          "input": {"query": "x"}, "is_final": False},
@@ -761,7 +761,7 @@ def test_builder_miss_emits_no_plan_span_and_runs_react(monkeypatch) -> None:
 
     recorder = _SpanRecorder()
     monkeypatch.setattr(engine, "manual_span", recorder)
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="react answer", queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
         {"thought": "answer directly", "executor": "reasoning",
          "input": {}, "is_final": True, "answer": "react answer"},
@@ -783,7 +783,7 @@ def test_react_iteration_spans(monkeypatch) -> None:
 
     recorder = _SpanRecorder()
     monkeypatch.setattr(react_mod, "_manual_span", recorder)
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="react final", queued=[
         {"thought": "need docs", "executor": "rag.query",
          "input": {"query": "fire"}, "is_final": False},
         {"thought": "have chunks", "executor": "reasoning",
@@ -814,7 +814,7 @@ def test_orchestrator_react_span(monkeypatch) -> None:
     # same recorder. engine/plan_graph keep the real no-op here.
     monkeypatch.setattr(lf, "manual_span", recorder)
     monkeypatch.setattr(react_mod, "_manual_span", recorder)
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="react rescued", queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
         {"thought": "need docs", "executor": "rag.query",
          "input": {"query": "x"}, "is_final": False},
@@ -936,7 +936,7 @@ def test_react_plot_nested_values_is_idle_hint() -> None:
     )
     assert hint2 is not None and "series_labels" in hint2
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="have chart", queued=[
         {"thought": "bad shape", "executor": "plot.chart",
          "input": {"chart_type": "bar", "labels": ["Documents", "Pages"],
                    "values": [[229, 135], [66, 47.5]]}, "is_final": False},
@@ -952,7 +952,7 @@ def test_react_plot_nested_values_is_idle_hint() -> None:
         trace_id="t", notebook_id="nb-1",
     )
     # Malformed r1 never executed: only the fixed r2 chart + final answer.
-    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
+    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r-final"]
     assert outcome.result.step_results[-1].output == "have chart"
 
 
@@ -979,7 +979,7 @@ def test_react_plot_without_title_is_idle_hint() -> None:
          "title": "t"},
     ) is None
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="have chart", queued=[
         {"thought": "plot it", "executor": "plot.chart",
          "input": {"chart_type": "bar", "labels": ["A", "B"],
                    "values": [1, 2]}, "is_final": False},
@@ -995,7 +995,7 @@ def test_react_plot_without_title_is_idle_hint() -> None:
         trace_id="t", notebook_id="nb-1",
     )
     # Untitled r1 never executed: titled r2 chart + final answer.
-    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r3"]
+    assert [s.step_id for s in outcome.plan.steps] == ["r2", "r-final"]
     assert outcome.result.step_results[-1].output == "have chart"
 
 
@@ -1006,7 +1006,7 @@ def test_react_exact_successful_repeat_is_idle() -> None:
 
     chart = {"chart_type": "bar", "labels": ["A", "B"],
              "values": [46377, 21214], "title": "tokens"}
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="have chart", queued=[
         {"thought": "plot tokens", "executor": "plot.chart",
          "input": dict(chart), "is_final": False},
         {"thought": "plot tokens again", "executor": "plot.chart",
@@ -1019,7 +1019,7 @@ def test_react_exact_successful_repeat_is_idle() -> None:
         "plot tokens as bar graph", provider, agents, tools,
         trace_id="t", notebook_id="nb-1",
     )
-    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r-final"]
     assert outcome.result.step_results[-1].output == "have chart"
 
 
@@ -1041,7 +1041,7 @@ def test_react_replot_same_data_is_idle() -> None:
         {"chart_type": "bar", "labels": ["A", "B"], "values": [46377, 21214]}
     )
 
-    provider = FakeLayeredProvider(queued=[
+    provider = FakeLayeredProvider(text="have chart", queued=[
         {"thought": "plot docs", "executor": "plot.chart",
          "input": {"chart_type": "bar",
                    "labels": ["DocBench (documents)", "MMLongBench (documents)"],
@@ -1059,7 +1059,30 @@ def test_react_replot_same_data_is_idle() -> None:
         "plot docs as bar graph", provider, agents, tools,
         trace_id="t", notebook_id="nb-1",
     )
-    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r3"]
+    assert [s.step_id for s in outcome.plan.steps] == ["r1", "r-final"]
+
+
+def test_react_deltas_only_from_final_synthesis() -> None:
+    # No streaming from inside the loop — only the trailing synthesis call
+    # streams prose deltas to the user.
+    from app.orchestration.react import run_react
+
+    events: list[dict] = []
+    provider = FakeLayeredProvider(text="synthesized prose", queued=[
+        {"thought": "draft first", "executor": "reasoning",
+         "input": {"message": "draft"}, "is_final": False},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "planner draft"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "what do docs say?", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1", on_event=events.append,
+    )
+    deltas = [e for e in events if e.get("type") == "delta"]
+    assert len(deltas) == 1  # exactly the synthesis stream
+    assert deltas[0]["step_id"] == "r-final"
+    assert outcome.result.step_results[-1].output == "synthesized prose"
 
 
 def test_react_synthesis_evidence_collapses_charts() -> None:
