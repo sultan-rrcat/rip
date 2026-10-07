@@ -48,14 +48,14 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
 #: Intents served by deterministic code-built DAGs (no DAG-LLM needed).
 #: SUMMARIZE is included: per-file overview shards (mode=overview) fan
 #: into one reduce step — wiring set by construction like compare_multi.
-#: PLOT_STANDALONE is included: labels+values are parsed from the message
-#: text in Python, so nothing is invented (standalone literals stay legal).
-#: SUMMARIZE_PLOT is deliberately excluded: chart labels are content-derived
-#: and their COUNT is independent of the file count. Trace cb0e6ab0 (1 file,
-#: 6 benchmark rows) proved a file-stem label set cannot work — it produced a
-#: 1-label/6-value plot rejected as "'labels' and 'values' must have the same
-#: length", and any length-matching shape would mislabel each row as a file.
-#: REPORT/CONVERT_AMBIGUOUS were removed: report asks route via
+#: PLOT_STANDALONE is included: labels+values both come from the message
+#: text, so nothing is invented (standalone literals stay legal).
+#: SUMMARIZE_PLOT is included since ADR-041: chart labels are
+#: content-derived, so the builder funnels overview shards → ONE numbers
+#: reasoning step that emits a strict {"labels", "values"} JSON object →
+#: plot.chart's 'data' field. Pairing is by construction (one JSON
+#: object), replacing the ReAct path; unparseable output fails honestly
+#: in the tool. REPORT/CONVERT_AMBIGUOUS were removed: report asks route via
 #: SUMMARIZE/QA_SINGLE (doc.generate stays ReAct-reachable) and ambiguous
 #: converts fall to UNKNOWN → ReAct, which asks the counter-question. Stale
 #: "report"/"convert_ambiguous" router values fail closed to UNKNOWN.
@@ -65,6 +65,7 @@ DETERMINISTIC_INTENTS = frozenset(
         Intent.QA_SINGLE,
         Intent.COMPARE_MULTI,
         Intent.SUMMARIZE,
+        Intent.SUMMARIZE_PLOT,
         Intent.PLOT_STANDALONE,
         Intent.CONVERT_ONE,
         Intent.CONVERT_ALL,

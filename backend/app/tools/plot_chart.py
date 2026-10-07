@@ -12,6 +12,8 @@ RIP port: no plugin system — direct Tool subclass (ADR-017).
 
 from __future__ import annotations
 
+import json
+import re
 from html import escape
 from typing import ClassVar
 
@@ -23,6 +25,54 @@ _PAD_LEFT, _PAD_RIGHT, _PAD_TOP, _PAD_BOTTOM = 56, 16, 36, 44
 
 #: Series palette for multi-series charts (line strokes / bar fills).
 _PALETTE = ("#4a90d9", "#e94f37", "#44af69", "#f2a541", "#7b6fd0")
+
+
+def _parse_chart_data(data: object) -> tuple[list[str], list[float]] | None:
+    """Parse an extracted-chart JSON object from upstream step text.
+
+    Accepts a raw JSON string (optionally fence-wrapped or padded with
+    one sentence of prose — the first balanced ``{...}`` block wins) or
+    an already-decoded dict. Requires non-empty ``labels`` (list of
+    strings) and ``values`` (list of numbers) of equal length. Returns
+    None on any shape mismatch so the caller fails honestly.
+    """
+    if isinstance(data, dict):
+        obj: object = data
+    elif isinstance(data, str):
+        text = data.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[A-Za-z]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text).strip()
+        try:
+            obj = json.loads(text)
+        except (ValueError, UnicodeDecodeError):
+            start = text.find("{")
+            if start < 0:
+                return None
+            try:
+                obj, _end = json.JSONDecoder().raw_decode(text[start:])
+            except ValueError:
+                return None
+    else:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    labels = obj.get("labels")
+    values = obj.get("values")
+    if (
+        not isinstance(labels, list)
+        or not isinstance(values, list)
+        or not labels
+        or len(labels) != len(values)
+    ):
+        return None
+    if not all(isinstance(label, str) and label.strip() for label in labels):
+        return None
+    if not all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in values
+    ):
+        return None
+    return [str(label) for label in labels], [float(v) for v in values]
 
 
 def _scale(values: list[float], height: float) -> list[float]:
@@ -183,7 +233,8 @@ class PlotChartTool(Tool):
     name = "Plot Chart"
     description = (
         "Render a bar or line chart as inline SVG from labels + numeric values. "
-        "Single series: labels + values. Multi-series (comparisons): shared "
+        "Single series: labels + values (or a single 'data' JSON object like "
+        '{"labels": [...], "values": [...]}). Multi-series (comparisons): shared '
         "labels + series: [{label, values}] (at most 5 series, drawn with a legend)."
     )
     input_schema: ClassVar[dict] = {
@@ -203,9 +254,18 @@ class PlotChartTool(Tool):
                     "required": ["label", "values"],
                 },
             },
+            "data": {
+                "type": "string",
+                "description": (
+                    "Extracted chart JSON instead of literal labels+values: "
+                    'a {"labels": [...], "values": [...]} object, typically the '
+                    "resolved output of an upstream reasoning step. Pass either "
+                    "'data' XOR ('labels'+'values') XOR 'series'."
+                ),
+            },
             "title": {"type": "string"},
         },
-        "required": ["chart_type", "labels"],
+        "required": ["chart_type"],
     }
     output_schema: ClassVar[dict] = {
         "type": "object",
@@ -227,6 +287,7 @@ class PlotChartTool(Tool):
         labels = request.input.get("labels")
         values = request.input.get("values")
         series_in = request.input.get("series")
+        data = request.input.get("data")
         title = str(request.input.get("title", "") or "")
         if chart_type not in ("bar", "line"):
             return ToolResponse(
@@ -234,6 +295,49 @@ class PlotChartTool(Tool):
                 ok=False,
                 output=None,
                 error="'chart_type' must be 'bar' or 'line'",
+            )
+        if data is not None:
+            if series_in is not None or values is not None or labels is not None:
+                return ToolResponse(
+                    tool_id=self.tool_id,
+                    ok=False,
+                    output=None,
+                    error="pass 'data' alone (with chart_type/title) — not together with labels/values/series",
+                )
+            parsed = _parse_chart_data(data)
+            if parsed is None:
+                return ToolResponse(
+                    tool_id=self.tool_id,
+                    ok=False,
+                    output=None,
+                    error=(
+                        "'data' must be a JSON object like "
+                        '{"labels": [...], "values": [...]} with equal, non-empty lengths'
+                    ),
+                )
+            labels, values = parsed
+            if len(labels) > _MAX_POINTS:
+                return ToolResponse(
+                    tool_id=self.tool_id,
+                    ok=False,
+                    output=None,
+                    error=f"at most {_MAX_POINTS} points per chart",
+                )
+            numbers = [float(v) for v in values]
+            svg = render_svg(
+                str(chart_type), [str(label) for label in labels], numbers,
+                title=title or _default_title([str(x) for x in labels], []),
+            )
+            return ToolResponse(
+                tool_id=self.tool_id,
+                ok=True,
+                output=svg,
+                data={
+                    "svg": svg,
+                    "chart_type": chart_type,
+                    "point_count": len(numbers),
+                    "series_count": 1,
+                },
             )
         if not isinstance(labels, list) or not labels:
             return ToolResponse(

@@ -217,18 +217,76 @@ class PlanValidator:
                 step_input = step.input if isinstance(step.input, dict) else {}
                 values = step_input.get("values")
                 series = step_input.get("series")
-                if values is not None and series is not None:
-                    raise PlanValidationError(
-                        f"step {step.step_id} (plot.chart) passes both 'values' "
-                        "and 'series' — pass exactly one (single series vs "
-                        "multi-series comparison)"
-                    )
-                if values is None and series is None:
+                data = step_input.get("data")
+                provided = sum(x is not None for x in (values, series, data))
+                if provided == 0:
                     raise PlanValidationError(
                         f"step {step.step_id} (plot.chart) is missing required "
-                        "input field 'values' (or 'series' for multi-series) — "
-                        "refusing to execute an unguarded tool call"
+                        "input field 'values' (or 'series' for multi-series, "
+                        "or 'data' for extracted JSON) — refusing to execute "
+                        "an unguarded tool call"
                     )
+                if provided > 1:
+                    raise PlanValidationError(
+                        f"step {step.step_id} (plot.chart) passes multiple of "
+                        "'values', 'series', 'data' — pass exactly one "
+                        "(single series vs multi-series vs extracted JSON)"
+                    )
+                if data is not None:
+                    # Extracted-JSON path (summarize_plot builder): ONE
+                    # upstream reasoning step emits the whole
+                    # {"labels": [...], "values": [...]} object, so pairing
+                    # is by construction. Same grounding invariants as the
+                    # values path: dependent plots must reference a
+                    # numbers-producing step and never rag.query chunks.
+                    if step.depends_on:
+                        refs = placeholders_in(data)
+                        if not refs:
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) depends on "
+                                f"{sorted(step.depends_on)} but its data carries no "
+                                "{{{id}}} placeholder — dependent plots must reference "
+                                "upstream numbers, never hardcoded literals"
+                            )
+                        if len(refs) != 1:
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) data references "
+                                f"multiple upstream steps {sorted(refs)} — fan them "
+                                "into ONE extraction step first, then reference only it"
+                            )
+                        if (
+                            isinstance(data, str)
+                            and _PLACEHOLDER.search(data)
+                            and not _PLACEHOLDER.fullmatch(data.strip())
+                        ):
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) data mixes a "
+                                "placeholder with surrounding text — data must be a "
+                                "lone {{{id}}} placeholder or pure JSON text"
+                            )
+                        for ref in refs:
+                            target = by_id.get(ref)
+                            if target is None:
+                                continue
+                            target_eot = (target.expected_output_type or "text").lower()
+                            if target_eot != "numbers":
+                                raise PlanValidationError(
+                                    f"step {step.step_id} (plot.chart) data references "
+                                    f"step {ref} ({target_eot or 'text'}), but plot data "
+                                    "must reference a numbers-producing step"
+                                )
+                        direct = [by_id[d] for d in step.depends_on if d in by_id]
+                        if any(
+                            d.tool_id == "rag.query"
+                            and (d.expected_output_type or "").lower() == "chunks"
+                            for d in direct
+                        ):
+                            raise PlanValidationError(
+                                f"step {step.step_id} (plot.chart) depends directly on "
+                                "rag.query chunks — route through a numbers-producing "
+                                "reasoning step instead"
+                            )
+                    continue
                 if series is not None and (
                     not isinstance(series, list) or not series
                 ):

@@ -245,16 +245,44 @@ def test_convert_one_skips_unready_files() -> None:
     assert build("convert big to pdf", route, snapshot) is None
 
 
-def test_summarize_plot_goes_to_react() -> None:
-    # Chart labels are content-derived AND their count is independent of the
-    # file count. Trace cb0e6ab0: one ready file, six benchmark rows — a
-    # file-stem label set produced 1 label vs 6 values and plot.chart rejected
-    # it ("'labels' and 'values' must have the same length").
-    for snapshot in (None, "(no documents)", "1 file(s): a.pdf [ready] id=x"):
-        route = RouterResult(
-            intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
-        )
-        assert build("summarize and plot", route, snapshot) is None
+def test_summarize_plot_builds_json_extraction_pipeline() -> None:
+    # ADR-041: summarize_plot gets a deterministic builder — overview
+    # shards → one numbers step emitting strict {"labels","values"} JSON
+    # → plot.chart 'data'. Pairing by construction (one JSON object).
+    route = RouterResult(
+        intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
+    )
+    plan = build("summarize and plot the benchmarks", route, "1 file(s): a.pdf [ready] id=x")
+    assert plan is not None
+    rag_steps = [s for s in plan.steps if s.tool_id == "rag.query"]
+    assert rag_steps
+    numbers_steps = [s for s in plan.steps if s.expected_output_type == "numbers"]
+    assert len(numbers_steps) == 1
+    extract = numbers_steps[0]
+    plot_steps = [s for s in plan.steps if s.tool_id == "plot.chart"]
+    assert len(plot_steps) == 1
+    plot = plot_steps[0]
+    assert plot.input["data"] == f"{{{{{extract.step_id}}}}}"
+    assert plot.depends_on == [extract.step_id]
+    _validator().validate(plan)
+
+
+def test_summarize_plot_empty_corpus_yields_clarification() -> None:
+    route = RouterResult(
+        intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
+    )
+    plan = build("summarize and plot", route, "(no documents)")
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].expected_output_type == "clarification"
+
+
+def test_summarize_plot_processing_yields_wait() -> None:
+    route = RouterResult(
+        intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
+    )
+    plan = build("summarize and plot", route, "1 file(s): a.pdf [processing] id=x")
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].expected_output_type == "clarification"
 
 
 def test_plot_standalone_parses_pairs() -> None:
@@ -295,7 +323,7 @@ def test_plot_standalone_unparseable_goes_to_react() -> None:
 def test_deterministic_intents_all_dispatched() -> None:
     from app.orchestration.intents import DETERMINISTIC_INTENTS
 
-    assert Intent.SUMMARIZE_PLOT not in DETERMINISTIC_INTENTS
+    assert Intent.SUMMARIZE_PLOT in DETERMINISTIC_INTENTS
     assert Intent.UNKNOWN not in DETERMINISTIC_INTENTS
     assert {
         Intent.CHAT, Intent.QA_SINGLE, Intent.COMPARE_MULTI,

@@ -5,13 +5,12 @@ values (queries, request text) vary. Wiring (depends_on + {{id}}
 placeholders) is set by construction, so the ecd93eb4 failure class
 (prose mention of steps without placeholders) cannot occur.
 
-Deliberately NOT built: summarize_plot — chart labels are content-derived
-AND their count is independent of the file count (trace cb0e6ab0: one file,
-six benchmark rows), so no fixed label set can match the extracted values
-without mislabeling every row. It goes to L3 ReAct. plot_standalone IS
-built: labels+values both come from the message text, so they match by
-construction. Convert builders resolve literal file ids from the notebook
+Convert builders resolve literal file ids from the notebook
 snapshot; anything unresolvable returns None → L3 ReAct.
+summarize_plot IS built (ADR-041): overview shards → one numbers step
+emitting strict {"labels", "values"} JSON → plot.chart 'data', so
+labels/values pair by construction; extraction failure fails honestly
+in the tool.
 """
 
 from __future__ import annotations
@@ -331,6 +330,112 @@ def build_summarize(request_text: str, notebook_context: str | None = None) -> P
         )
     dep_ids = [s.step_id for s in steps]
     refs = " ".join(f"{{{{{sid}}}}}" for sid in dep_ids)
+    steps.append(
+        PlanStep(
+            step_id=str(len(steps) + 1),
+            agent_id="reasoning",
+            input={
+                "message": (
+                    f"Using ONLY these retrieved chunks ({refs}), write the "
+                    f"requested summary. Say 'not in the documents' when the "
+                    f"chunks are empty or read '(no chunks retrieved)'. "
+                    f"Never mention chunk ids or placeholders. "
+                    f"Request: {request_text}{_PRESENTATION_SUFFIX}"
+                )
+            },
+            depends_on=dep_ids,
+            expected_output_type="answer",
+        )
+    )
+    return Plan(plan_id=str(uuid.uuid4()), goal=request_text, steps=steps)
+
+
+def build_summarize_plot(
+    request_text: str, notebook_context: str | None = None
+) -> Plan:
+    """Per-file overview shards → JSON extraction step → one plot.chart.
+
+    Unlike plot_standalone, the chart literals live in the documents, not
+    the message — so they must be extracted. ONE reasoning step (eot
+    "numbers") emits a single strict JSON object {"labels", "values"};
+    pairing/order/count match by construction and plot.chart parses it
+    via its 'data' input. A second reasoning step reduces the same shards
+    into the written summary, so the intent's "summarize AND plot" both
+    deliverables land. Anything unparseable fails honestly inside
+    plot.chart — never a mislabeled chart.
+    """
+    ready = _ready_files(notebook_context)[:5]
+    steps: list[PlanStep] = []
+    if ready:
+        for i, (_name, fid) in enumerate(ready, start=1):
+            steps.append(
+                PlanStep(
+                    step_id=str(i),
+                    tool_id="rag.query",
+                    input={
+                        "query": request_text,
+                        "top_k": _PER_FILE_TOP_K,
+                        "file_id": fid,
+                        "mode": "overview",
+                        # Builders ground on full text: never filter our evidence.
+                        "verbatim": True,
+                    },
+                    expected_output_type="chunks",
+                )
+            )
+    else:
+        steps.append(
+            PlanStep(
+                step_id="1",
+                tool_id="rag.query",
+                input={
+                    "query": request_text,
+                    "top_k": _PER_FILE_TOP_K,
+                    "mode": "overview",
+                    # Builders ground on full text: never filter our evidence.
+                    "verbatim": True,
+                },
+                expected_output_type="chunks",
+            )
+        )
+    dep_ids = [s.step_id for s in steps]
+    refs = " ".join(f"{{{{{sid}}}}}" for sid in dep_ids)
+    extract_id = str(len(steps) + 1)
+    steps.append(
+        PlanStep(
+            step_id=extract_id,
+            agent_id="reasoning",
+            input={
+                "message": (
+                    f"Using ONLY these retrieved chunks ({refs}), extract the "
+                    "numeric data that answers the request's chart ask. Output "
+                    'EXACTLY one JSON object of the form {"labels": [...], '
+                    '"values": [...]} and NOTHING else — no prose, no code '
+                    'fences. "labels" and "values" must be the same length '
+                    "and in the same order; every value a bare number; labels "
+                    'short strings. If the chunks contain no numeric data, '
+                    'output {"labels": [], "values": []}. '
+                    f"Request: {request_text}"
+                )
+            },
+            depends_on=dep_ids,
+            expected_output_type="numbers",
+        )
+    )
+    steps.append(
+        PlanStep(
+            step_id=str(len(steps) + 1),
+            tool_id="plot.chart",
+            input={
+                "data": f"{{{{{extract_id}}}}}",
+                "chart_type": _chart_type_for(request_text),
+                "title": " ".join((request_text or "").split())[:160]
+                or "Chart",
+            },
+            depends_on=[extract_id],
+            expected_output_type="chart",
+        )
+    )
     steps.append(
         PlanStep(
             step_id=str(len(steps) + 1),
@@ -771,6 +876,16 @@ def build(
         if ready and len(ready) > 5:
             return None
         return build_summarize(request_text, notebook_context)
+    if route.intent is Intent.SUMMARIZE_PLOT:
+        state = _corpus_state(notebook_context)
+        if state in ("empty", "processing"):
+            return build_no_docs_clarification(
+                request_text, processing=(state == "processing")
+            )
+        ready = _ready_files(notebook_context)
+        if ready and len(ready) > 5:
+            return None  # too many files: fall through to L3 ReAct
+        return build_summarize_plot(request_text, notebook_context)
     if route.intent is Intent.PLOT_STANDALONE:
         return build_plot_standalone(request_text)
     if route.intent is Intent.QUIZ:
