@@ -602,6 +602,55 @@ def _redundant_convert_hint(
     )
 
 
+def _build_react_system_prompt(
+    agent_ids: list[str], tool_ids: list[str], notebook_context: str | None
+) -> str:
+    """Ordered rule-based ReAct prompt (deterministic, no anecdotes).
+
+    Shape first (never violated), then a numbered stop-at-first-match
+    decision list, then tool schemas. Every non-final turn MUST carry a
+    complete `input` — an agent turn without `input.message` is invalid
+    and wastes the iteration, which is exactly how runs starve with
+    "agent missing input.message" idle turns.
+    """
+    return (
+        "You are a ReAct agent. Output EXACTLY one JSON object per turn: "
+        '{"thought","executor","input","is_final","answer"}. '
+        "One step per turn.\n"
+        f"Agents: {agent_ids}\nTools: {tool_ids}\n"
+        "Shape (mandatory, never violated):\n"
+        '- input is a FLAT object, never nested under \'agent\'. WRONG: {"agent": {"message": "..."}}. RIGHT: {"query": "..."}.\n'
+        '- agent executor REQUIRES {"message": "<full task text>"} with observations inlined verbatim — never reference steps by number. A turn with an agent executor but no input.message is INVALID.\n'
+        "- tool executor REQUIRES its flat fields: "
+        'rag.query {"query": "...", "file_id": "..."}, '
+        'plot.chart {"chart_type": "bar", "labels": [...], "values": [...], "title": "<metric>: A vs B"}, '
+        'doc.convert {"file_id": "...", "target_format": "md|docx|pdf"}, '
+        'doc.generate {"title": "...", "sections": [{"heading": ..., "body": ...}], "target_format": "md|docx|pdf"}, '
+        "notebook.inspect {}, "
+        'code.read {"file_id": "..."} or {"file_name": "..."}.\n'
+        "Decide in order, stop at the first match:\n"
+        "1. Greeting/small talk with no task: is_final=true, answer directly, no tool.\n"
+        "2. Empty notebook (snapshot shows no documents/files): NEVER rag.query/code.read/doc.convert — they return nothing. "
+        "For write/create/generate/draft asks (email/letter/report in pdf/docx/md): "
+        "first a reasoning step with {\"message\": \"Draft <deliverable> for: <request>. Use [brackets] for unknown details (name/date/recipient).\"}, "
+        "then doc.generate with {\"title\", \"sections\": [{\"heading\",\"body\": full draft verbatim}], \"target_format\": pdf/docx/md from the request}. "
+        "Draft with placeholders FIRST — never ask clarifying questions INSTEAD of drafting; put follow-ups in the final answer.\n"
+        "3. CODE tasks (write/test/explain/review/debug code): notebook.inspect once, then code.read each needed file, "
+        "then ONE coding step with file content inlined verbatim in {\"message\": \"...\"}. "
+        "Never coding without file content in an observation (empty notebook with no files: write directly with coding, no code.read).\n"
+        "4. Retrieval when documents exist: rag.query first "
+        "(overview for summarize/compare/quiz/overall-content, specific default otherwise). "
+        "doc.generate creates a NEW report file from answer text (its pdf/docx output IS the deliverable); "
+        "doc.convert only re-renders an ORIGINAL upload named in the snapshot — never convert a source file to satisfy a report ask.\n"
+        "5. Charts: bar/line MUST use plot.chart with literal numbers from observations (or a prior reasoning step) plus a short title naming metric and comparison. "
+        "When the notebook has no documents and no observation holds numbers, recall approximate figures with a reasoning step first (state they are approximate), then plot.chart. "
+        "Each plot.chart covers a DIFFERENT metric; grouped comparisons use series:[{label, values}] with shared labels, never nested values arrays.\n"
+        "6. Final: is_final=true carries the polished user-facing Markdown answer (direct answer first, then detail; never expose thought/executor/step numbers). Empty answer is invalid.\n"
+        "doc.generate sections must carry the COMPLETE user-visible answer (full text verbatim, never a stub) — the file renders ONLY sections.\n"
+        f"Notebook documents:\n{notebook_context or '(no documents)'}"
+    )
+
+
 class ReactResult:
     def __init__(self, plan: Plan, result: ExecutionResult):
         self.plan = plan
@@ -767,75 +816,8 @@ class ReActEngine:
                     if scratchpad
                     else "(no actions yet)"
                 )
-                system_prompt = (
-                    "You are a ReAct agent. Answer the user request one step at a time.\n"
-                    f"Agents: {agent_ids}\nTools: {tool_ids}\n"
-                    "Each turn return thought (what you learned / what remains), "
-                    "executor (exactly one agent_id or tool_id for the NEXT single "
-                    "step), input, is_final (true only when answering now), and "
-                    "answer (the final answer when is_final).\n"
-                    "Input shape (FLAT object, never nested under 'agent'):\n"
-                    '- agent executor: {"message": "..."} with observations '
-                    "inlined verbatim — never reference steps by number.\n"
-                    "- tool executor: its FLAT schema fields, e.g. rag.query "
-                    '{"query": "...", "file_id": "..."}, plot.chart '
-                    '{"chart_type": "bar", "labels": [...], "values": [...], '
-                    '"title": "<metric>: A vs B"}, '
-                    'doc.convert {"file_id": "...", '
-                    '"target_format": "md|docx|pdf"}, '
-                    'doc.generate {"title": "...", "sections": [{"heading": '
-                    '...,"body": ...}], "target_format": "md|docx|pdf"}, '
-                    "notebook.inspect {}, "
-                    'code.read {"file_id": "..."} or {"file_name": "..."}.\n'
-                    "For CODE tasks (write/test/explain/review/debug code): call "
-                    "notebook.inspect once, then code.read for each needed file, "
-                    "then ONE coding step with the file content inlined verbatim "
-                    "in {\"message\": \"...\"}. Never call coding without file "
-                    "content already in an observation — a coding step cannot "
-                    "fetch files by itself.\n"
-                    "doc.generate sections must carry the COMPLETE "
-                    "user-visible answer (full table/text verbatim, never a "
-                    "stub) — the file renders ONLY sections, so a stub "
-                    "section yields a stub file.\n"
-                    "doc.generate creates a NEW report file from answer "
-                    "text (its pdf/docx output IS the deliverable); "
-                    "doc.convert only re-renders an ORIGINAL upload named "
-                    "in the snapshot — never convert a source file to "
-                    "satisfy a report/table ask that doc.generate already "
-                    "fulfilled.\n"
-                    'WRONG: {"agent": {"message": "..."}} for a tool — '
-                    "the tool reads top-level fields, so this fails with "
-                    "'query'/'code' required. RIGHT: {\"query\": \"...\"}.\n"
-                    "Prefer rag.query first when documents are available. "
-                    "If the request is a greeting, thanks, or small talk "
-                    "with no task or question, do NOT call any tool — set "
-                    "is_final=true and answer directly (greet back, ask "
-                    "what they need). When the notebook snapshot shows no "
-                    "documents or no files, tools cannot return anything — "
-                    "prefer the reasoning agent or a direct final answer "
-                    "over rag.query/code.read/doc.*. "
-                    "For summarize/compare/quiz or 'overall content' asks use "
-                    "rag.query mode='overview' (stratified one-per-section "
-                    "sample); single-fact QA keeps the specific default. "
-                    "When the notebook has no documents and no observation "
-                    "holds numbers, recall approximate figures with a reasoning "
-                    "step first (state they are approximate), then plot.chart. "
-                    "Bar/line charts MUST use plot.chart with literal numbers "
-                    "from observations (or a prior reasoning step). "
-                    "Every plot.chart MUST include "
-                    "a short 'title' naming the metric and comparison "
-                    "(e.g. 'mAP@50-95: FASDD_CV vs AgniNetra'). "
-                    "Each plot.chart must cover a "
-                    "DIFFERENT metric — never re-plot numbers already charted; "
-                    "grouped comparisons use series:[{label, values}] with "
-                    "shared labels, never nested values arrays. "
-                    "When is_final is true, write answer as a polished, "
-                    "user-facing Markdown response like a world-class "
-                    "assistant: lead with the direct answer, then supporting "
-                    "detail with short headings, bullets, or a table when "
-                    "helpful; never expose thought, executor names, or step "
-                    "numbers. "
-                    + f"Notebook documents:\n{notebook_context or '(no documents)'}"
+                system_prompt = _build_react_system_prompt(
+                    agent_ids, tool_ids, notebook_context
                 )
                 messages = [
                     {"role": "system", "content": system_prompt},

@@ -594,6 +594,41 @@ def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     assert "title" in system
 
 
+def test_react_prompt_is_ordered_with_mandatory_message() -> None:
+    # Your trace: iter-1/iter-2 returned reasoning with NO input.message,
+    # burning 2 idle turns into "no usable action". The prompt must make
+    # input.message mandatory and order decisions stop-at-first-match.
+    from app.orchestration.react_engine import _build_react_system_prompt
+
+    system = _build_react_system_prompt(
+        ["coding", "reasoning"],
+        ["code.read", "doc.convert", "doc.generate", "notebook.inspect",
+         "plot.chart", "rag.query"],
+        "(no documents)",
+    )
+    assert "stop at the first match" in system
+    assert 'REQUIRES {"message"' in system
+    assert "INVALID" in system
+    assert "(no documents)" in system
+
+
+def test_react_prompt_drafts_new_content_before_asking() -> None:
+    # Hybrid: "write an email in pdf" on an empty notebook drafts with
+    # [brackets] first via reasoning, then doc.generates — never clarifies
+    # INSTEAD of drafting.
+    from app.orchestration.react_engine import _build_react_system_prompt
+
+    system = _build_react_system_prompt(
+        ["coding", "reasoning"],
+        ["code.read", "doc.convert", "doc.generate", "notebook.inspect",
+         "plot.chart", "rag.query"],
+        "(no documents)",
+    )
+    assert "Draft with placeholders FIRST" in system
+    assert "doc.generate" in system
+    assert "NEVER rag.query/code.read/doc.convert" in system
+
+
 def test_orchestrator_falls_back_to_react_on_builder_miss() -> None:
     provider = FakeLayeredProvider(queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
