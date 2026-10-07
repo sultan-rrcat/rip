@@ -224,6 +224,14 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Decision:** Delete the `IMAGE`/`VISION` intents (router prompt is generated from `INTENT_DESCRIPTIONS`, so they leave the prompt automatically; stale `image`/`vision` values parse to `UNKNOWN` → ReAct). Generalize `CODE` to any software task in any language — greenfield generation (HTML/CSS/JS pages, apps, scripts) or uploaded-file work — with a router precedence rule (web/HTML/CSS/JS/UI → `code`). `build_code` splits the no-targets case: named-but-unresolvable file → clarification; no hint → greenfield `coding` step carrying the request alone.
 - **Consequences:** Picture/photo/illustration asks now route to `UNKNOWN` → ReAct, which answers honestly in text (no image model exists). Greenfield code asks get a deterministic single `coding` step with the generous `coding_max_tokens` budget. Supersedes the ADR-035 "keep `IMAGE`/`VISION` intents" line.
 
+## ADR-039: plot_standalone becomes deterministic; report/convert_ambiguous removed; summarize_plot stays ReAct-only
+
+- **Status:** Accepted
+- **Context:** Two router labels had no builders. `PLOT_STANDALONE` is safe to build — its labels and values both come from the message, so they match by construction. `SUMMARIZE_PLOT` is not: its chart labels are content-derived. `REPORT`/`CONVERT_AMBIGUOUS` were pure classification surface.
+- **Rejected:** an earlier attempt built `summarize_plot` with snapshot file stems as chart labels. Trace `cb0e6ab0` killed it: one ready file, six benchmark rows in Section 8.2 → 1 label vs 6 extracted values, and `plot.chart` rejected it ("`'labels'` and `'values'` must have the same length", 3 attempts). The flaw is structural, not a prompt miss — **label count is independent of file count** (1 file held 6 rows; N files could hold 1 row each). Any length-matching shape would label every row with a filename, i.e. exactly the hallucinated-chart class ADR-027 forbids. ADR-027's exclusion stands.
+- **Decision:** (1) `build_plot_standalone`: regex-parse `label: number` pairs (else bare numbers with ordinal `Point N` labels) into one literal `plot.chart` step; leading sentence verbs trimmed ("plot Alpha" → "Alpha"); unparseable (`<2` or `>50` numbers) → ReAct. (2) `SUMMARIZE_PLOT` remains ReAct-only, which already owns content-derived labels. (3) Delete the `REPORT`/`CONVERT_AMBIGUOUS` intents; stale values fail closed to `UNKNOWN` → ReAct, and `doc.generate` stays ReAct-reachable so report asks still produce files.
+- **Consequences:** Chart asks whose numbers are in the message resolve in one deterministic DAG; document-data charts stay on ReAct, whose `plot.chart` calls carry literal labels the model derives from the same chunks it read. `test_summarize_plot_goes_to_react` now pins all three snapshot states against regression.
+
 ---
 
 ## Historical (superseded, one line each)

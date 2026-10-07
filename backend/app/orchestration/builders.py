@@ -5,10 +5,12 @@ values (queries, request text) vary. Wiring (depends_on + {{id}}
 placeholders) is set by construction, so the ecd93eb4 failure class
 (prose mention of steps without placeholders) cannot occur.
 
-Deliberately NOT built: summarize_plot — a plot needs content-derived
-`labels` no deterministic shape can know (inventing them would be the
-hallucinated-chart class ADR-027 exists to prevent), so it goes to
-L3 ReAct. Convert builders resolve literal file ids from the notebook
+Deliberately NOT built: summarize_plot — chart labels are content-derived
+AND their count is independent of the file count (trace cb0e6ab0: one file,
+six benchmark rows), so no fixed label set can match the extracted values
+without mislabeling every row. It goes to L3 ReAct. plot_standalone IS
+built: labels+values both come from the message text, so they match by
+construction. Convert builders resolve literal file ids from the notebook
 snapshot; anything unresolvable returns None → L3 ReAct.
 """
 
@@ -422,6 +424,113 @@ def build_quiz(
     )
 
 
+def _chart_type_for(request_text: str) -> str:
+    """Deterministic bar/line pick from the request wording (default bar)."""
+    if re.search(
+        r"\bline\b|\btrend\b|\btimeseries\b|\btime-series\b", request_text.lower()
+    ):
+        return "line"
+    return "bar"
+
+
+#: "Label: 12.5" / "Label = 12.5" pairs — explicit labels stay with numbers.
+_PAIR_RE = re.compile(
+    r"([A-Za-z][A-Za-z0-9 _.\-]{0,40}?)\s*[:=]\s*(-?\d[\d,]*\.?\d*\s*%?)"
+)
+#: Bare numbers fallback when the message carries no explicit labels.
+_NUMBER_RE = re.compile(r"(?<![\w:.=-])-?\d[\d,]*\.?\d*\s*%?(?![\w%])")
+
+
+def _clean_pair_label(raw_label: str) -> str:
+    """Trim sentence spillover off a `label: number` match.
+
+    The pair regex can swallow preceding prose ("plot Alpha: 10" matches
+    "plot Alpha"). Leading lowercase words are sentence verbs, not labels —
+    drop them only when a capitalized word follows ("plot Alpha" → "Alpha",
+    "compare A" → "A") while keeping genuine multi-word labels intact
+    ("North America", "total revenue").
+    """
+    words = (raw_label or "").split()
+    while (
+        len(words) > 1
+        and words[0][:1].islower()
+        and any(w[:1].isupper() for w in words[1:])
+    ):
+        words.pop(0)
+    return " ".join(words)
+
+
+def _parse_standalone_numbers(
+    request_text: str,
+) -> tuple[list[str], list[float]] | None:
+    """Parse chart literals out of the message text (no LLM, no invention).
+
+    Explicit `label: number` pairs win (labels grounded in the user's own
+    words); otherwise bare numbers get positional "Point N" labels. Returns
+    None when fewer than 2 or more than 50 numbers are found — caller falls
+    through to L3 ReAct.
+    """
+    pairs: list[tuple[str, float]] = []
+    for raw_label, raw_number in _PAIR_RE.findall(request_text or ""):
+        try:
+            value = float(raw_number.replace(",", "").rstrip("%").strip())
+        except ValueError:
+            continue
+        label = _clean_pair_label(raw_label)
+        if label:
+            pairs.append((label, value))
+    if pairs:
+        labels = [label for label, _ in pairs[:50]]
+        values = [value for _, value in pairs[:50]]
+        if 2 <= len(values) <= 50:
+            return labels, values
+        return None
+    values: list[float] = []
+    for raw in _NUMBER_RE.findall(request_text or ""):
+        try:
+            values.append(float(raw.replace(",", "").rstrip("%").strip()))
+        except ValueError:
+            continue
+        if len(values) > 50:
+            return None
+    if 2 <= len(values) <= 50:
+        return [f"Point {i}" for i in range(1, len(values) + 1)], values
+    return None
+
+
+def build_plot_standalone(request_text: str) -> Plan | None:
+    """Single literal plot.chart step from message-parsed numbers.
+
+    Both labels and values come from the message, so the pair count always
+    matches by construction and nothing is invented — this is the shape
+    ADR-027 permits for plots. Standalone plots with user-given literals
+    stay validator-legal (no depends_on, no placeholders). Unparseable
+    messages return None → L3 ReAct, which recalls figures via reasoning.
+    """
+    parsed = _parse_standalone_numbers(request_text)
+    if parsed is None:
+        return None
+    labels, values = parsed
+    title = " ".join((request_text or "").split())[:160] or "Chart"
+    return Plan(
+        plan_id=str(uuid.uuid4()),
+        goal=request_text,
+        steps=[
+            PlanStep(
+                step_id="1",
+                tool_id="plot.chart",
+                input={
+                    "chart_type": _chart_type_for(request_text),
+                    "labels": labels,
+                    "values": values,
+                    "title": title,
+                },
+                expected_output_type="chart",
+            )
+        ],
+    )
+
+
 def build_convert_all(target_format: str, request_text: str) -> Plan:
     return Plan(
         plan_id=str(uuid.uuid4()),
@@ -648,6 +757,8 @@ def build(
         if ready and len(ready) > 5:
             return None
         return build_summarize(request_text, notebook_context)
+    if route.intent is Intent.PLOT_STANDALONE:
+        return build_plot_standalone(request_text)
     if route.intent is Intent.QUIZ:
         state = _corpus_state(notebook_context)
         if state in ("empty", "processing"):

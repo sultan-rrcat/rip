@@ -61,7 +61,7 @@ L1 sole dispatcher (ADR-032): one cheap `generate_structured` call per request (
 _Avoid_: Planner (deleted), dispatcher (bare), coordinator
 
 **Builder**:
-L2 deterministic plan constructor: fixed DAGs for `chat/qa_single/compare_multi/summarize/quiz/convert_one/convert_all` (wiring by construction, `top_k=4` per file shard, `>5` files → ReAct). Trivial/conversational requests yield a single `reasoning` step via the `chat` builder or engine trivial-plan repair (never an empty plan — ADR-026).
+L2 deterministic plan constructor: fixed DAGs for `chat/qa_single/compare_multi/summarize/plot_standalone/quiz/convert_one/convert_all/code` (wiring by construction, `top_k=4` per file shard, `>5` files → ReAct). Trivial/conversational requests yield a single `reasoning` step via the `chat` builder or engine trivial-plan repair (never an empty plan — ADR-026).
 _Avoid_: Planner, template
 
 **ReAct fallback**:

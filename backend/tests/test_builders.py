@@ -246,32 +246,61 @@ def test_convert_one_skips_unready_files() -> None:
 
 
 def test_summarize_plot_goes_to_react() -> None:
-    # Plot labels are content-derived: no fixed shape may invent them.
-    route = RouterResult(
-        intent=Intent.SUMMARIZE_PLOT, confidence=0.9,
-        routed_by="llm",
-    )
-    assert build("summarize and plot", route) is None
-
-
-def test_summarize_plot_empty_corpus_goes_to_react() -> None:
-    # Trace 27dcf635: labels/series are model-derived even with no docs
-    # (placeholders carry whole text, so no deterministic shape can wire
-    # them) — L3 ReAct owns this path, not a builder.
-    for intent in (Intent.SUMMARIZE_PLOT, Intent.PLOT_STANDALONE):
+    # Chart labels are content-derived AND their count is independent of the
+    # file count. Trace cb0e6ab0: one ready file, six benchmark rows — a
+    # file-stem label set produced 1 label vs 6 values and plot.chart rejected
+    # it ("'labels' and 'values' must have the same length").
+    for snapshot in (None, "(no documents)", "1 file(s): a.pdf [ready] id=x"):
         route = RouterResult(
-            intent=intent, confidence=0.9, routed_by="llm",
+            intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
         )
-        assert build("plot gdp", route, "(no documents)") is None
+        assert build("summarize and plot", route, snapshot) is None
+
+
+def test_plot_standalone_parses_pairs() -> None:
+    route = RouterResult(
+        intent=Intent.PLOT_STANDALONE, confidence=0.9, routed_by="llm",
+    )
+    plan = build("plot Alpha: 10, Beta: 20.5", route)
+    assert plan is not None
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.tool_id == "plot.chart"
+    assert step.input["labels"] == ["Alpha", "Beta"]
+    assert step.input["values"] == [10.0, 20.5]
+    assert not step.depends_on
+    _validator().validate(plan)
+
+
+def test_plot_standalone_bare_numbers_get_ordinal_labels() -> None:
+    route = RouterResult(
+        intent=Intent.PLOT_STANDALONE, confidence=0.9, routed_by="llm",
+    )
+    plan = build("plot 10, 20, 30 as a line chart", route)
+    assert plan is not None
+    assert plan.steps[0].input["labels"] == ["Point 1", "Point 2", "Point 3"]
+    assert plan.steps[0].input["values"] == [10.0, 20.0, 30.0]
+    assert plan.steps[0].input["chart_type"] == "line"
+    _validator().validate(plan)
+
+
+def test_plot_standalone_unparseable_goes_to_react() -> None:
+    route = RouterResult(
+        intent=Intent.PLOT_STANDALONE, confidence=0.9, routed_by="llm",
+    )
+    assert build("plot the thing over there", route) is None
+    assert build("plot 42", route) is None  # single number: not a chart
 
 
 def test_deterministic_intents_all_dispatched() -> None:
     from app.orchestration.intents import DETERMINISTIC_INTENTS
 
     assert Intent.SUMMARIZE_PLOT not in DETERMINISTIC_INTENTS
+    assert Intent.UNKNOWN not in DETERMINISTIC_INTENTS
     assert {
         Intent.CHAT, Intent.QA_SINGLE, Intent.COMPARE_MULTI,
-        Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.QUIZ,
+        Intent.SUMMARIZE, Intent.PLOT_STANDALONE,
+        Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.QUIZ, Intent.CODE,
     } <= DETERMINISTIC_INTENTS
 
 
