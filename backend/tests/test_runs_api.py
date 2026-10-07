@@ -35,7 +35,7 @@ try:
     )
     from app.orchestration.results import StepResult
     from app.routes.auth import UserResponse, get_current_user
-    from app.runs.manager import RunManager
+    from app.runs.manager import RunManager, RunRecord
     from app.store import runs as store
     from app.tools.registry import ToolRegistry
     from fastapi import FastAPI
@@ -60,6 +60,11 @@ def _db_up() -> bool:
 needs_db = pytest.mark.skipif(
     _IMPORT_ERROR is not None or not _db_up(),
     reason=f"runs api needs postgres ({_IMPORT_ERROR or 'connect failed'})",
+)
+
+needs_imports = pytest.mark.skipif(
+    _IMPORT_ERROR is not None,
+    reason=f"app imports failed ({_IMPORT_ERROR})",
 )
 
 
@@ -507,3 +512,163 @@ class TestAdminStub:
         assert body["status"] == "ok"
         assert body["agents"] == [] and body["tools"] == []
         assert body["model"]
+
+
+@needs_imports
+class TestSubscriberBackpressure:
+    """Regression: a dead SSE consumer must never deadlock the run worker.
+
+    Trace: browser Back closed the EventSource but the subscriber queue
+    stayed registered; once 1000 unread events accumulated, `fan_out`'s
+    blocking `put` wedged the worker while holding the record lock — no
+    terminal event ever arrived and the chat froze (`isRunning` stuck).
+    """
+
+    def _record(self):
+        return RunRecord(
+            run_id=str(uuid.uuid4()), notebook_id=str(uuid.uuid4()),
+            message="hi",
+        )
+
+    def _fill(self, live):
+        for i in range(1000):  # attach() cap: Queue(maxsize=1000)
+            live.put_nowait({"seq": i, "type": "delta", "data": {}})
+        assert live.full()
+
+    def test_fan_out_full_queue_never_blocks(self):
+        record = self._record()
+        live, _ = record.attach()
+        self._fill(live)
+        worker = threading.Thread(
+            target=record.fan_out,
+            args=({"seq": "new", "type": "delta", "data": {}},),
+        )
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive()  # would hang forever pre-fix
+        assert live.qsize() == 1000  # bounded: oldest evicted, newest kept
+
+    def test_close_delivers_sentinel_on_full_queue(self):
+        record = self._record()
+        live, _ = record.attach()
+        self._fill(live)
+        closer = threading.Thread(target=record._close)
+        closer.start()
+        closer.join(timeout=5)
+        assert not closer.is_alive()  # would hang forever pre-fix
+        seen_sentinel, drained = False, 0
+        while drained < 1005:
+            try:
+                if live.get_nowait() is None:
+                    seen_sentinel = True
+                    break
+            except Exception:  # noqa: BLE001 - queue.Empty: drained early
+                break
+            drained += 1
+        assert seen_sentinel  # attached consumers still terminate
+
+    def test_detach_stops_delivery(self):
+        orch = BlockingOrchestrator()
+        manager = RunManager(provider=FakeProvider(), orchestrator=orch)
+        record = self._record()
+        manager._runs[record.run_id] = record  # white-box: skip worker spawn
+        live, _ = record.attach()
+        manager.detach(record.run_id, live)  # Back-navigation path
+        record.fan_out({"seq": 1, "type": "delta", "data": {}})
+        assert live.empty()
+
+    def test_detach_unknown_run_is_noop(self):
+        manager = RunManager(
+            provider=FakeProvider(), orchestrator=BlockingOrchestrator(),
+        )
+        import queue as queue_mod
+
+        manager.detach(str(uuid.uuid4()), queue_mod.Queue())  # must not raise
+
+
+@needs_db
+class TestSseDisconnect:
+    """End to end: dropping the SSE stream (Back during a live run)
+    unregisters the subscriber promptly without stalling the loop — and
+    the run still completes (navigation never kills it).
+
+    NOTE: starlette's TestClient buffers the whole response, so it cannot
+    model a mid-stream disconnect; the ASGI app is driven directly with a
+    fake `receive` that reports `http.disconnect` after the first frame.
+    """
+
+    def test_back_navigation_detaches_subscriber(
+        self, notebook_id, uploads, test_user
+    ):
+        import asyncio
+
+        orch = BlockingOrchestrator()
+        manager = RunManager(provider=FakeProvider(), orchestrator=orch)
+        app = _build_app(manager, test_user)
+        run_id = None
+        with TestClient(app) as client:
+            run_id = client.post(
+                "/v1/runs",
+                json={"notebook_id": notebook_id, "message": "hi"},
+            ).json()["run_id"]
+        assert run_id is not None
+        time.sleep(0.5)  # worker is blocked; run_started+plan persisted
+        try:
+            state = {"chunks": 0}
+            bodies = []
+
+            async def receive():
+                # After the first frame is sent, behave like a Back
+                # navigation: the socket is gone. The sleep(0) yields to
+                # the loop — a bare busy return would starve
+                # StreamingResponse's listen_for_disconnect task.
+                if state["chunks"] >= 1:
+                    return {"type": "http.disconnect"}
+                await asyncio.sleep(0)
+                return {
+                    "type": "http.request", "body": b"", "more_body": False,
+                }
+
+            async def send(message):
+                if (
+                    message["type"] == "http.response.body"
+                    and message.get("body")
+                ):
+                    state["chunks"] += 1
+                    bodies.append(message["body"])
+
+            scope = {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": f"/v1/runs/{run_id}/events",
+                "query_string": b"",
+                "headers": [],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+            }
+            errors = []
+
+            def drive():
+                try:
+                    asyncio.run(app(scope, receive, send))
+                except BaseException as e:  # noqa: BLE001 - surfaced below
+                    errors.append(e)
+
+            driver = threading.Thread(target=drive, daemon=True)
+            driver.start()
+            # Pre-fix this never returned promptly: `live.get(timeout=15)`
+            # blocked the loop, so each Back-disconnect stalled ~15 s.
+            driver.join(timeout=10)
+            assert not driver.is_alive()
+            assert not errors
+            assert bodies, "expected at least the replayed run_started frame"
+            # The dropped connection unregistered its queue ...
+            record = manager.get(run_id)
+            assert record is not None
+            with record._lock:
+                assert not record._subscribers
+        finally:
+            orch.release.set()  # the orphaned-but-alive run still finishes
+            _wait_done(run_id)

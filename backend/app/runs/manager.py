@@ -94,21 +94,50 @@ class RunRecord:
         self.cancel_event.set()
 
     def _close(self) -> None:
-        """Terminal: wake every subscriber queue; late subscribers see done."""
+        """Terminal: wake every subscriber queue; late subscribers see done.
+
+        Never blocks: a full queue evicts its oldest item to make room for
+        the sentinel, so a dead (never-detached) consumer cannot deadlock
+        the worker while it holds `_lock`.
+        """
         with self._lock:
             for sub in self._subscribers:
-                sub.put(_SENTINEL)
+                self._enqueue(sub, _SENTINEL)
             self._done.set()
 
     def _detach(self, sub: queue.Queue) -> None:
         with self._lock:
             self._subscribers.discard(sub)
 
+    def _enqueue(self, sub: queue.Queue, event: dict | None) -> None:
+        """Put one event on a subscriber queue without ever blocking.
+
+        Caller must hold `_lock`. A full queue evicts its oldest item to
+        make room (live deltas are expendable; the terminal event must
+        always fit). This keeps `fan_out`/`attach`/`_close` lock hold times
+        bounded no matter how far behind a consumer is.
+        """
+        try:
+            sub.put_nowait(event)
+            return
+        except queue.Full:
+            pass
+        try:
+            sub.get_nowait()  # evict oldest: latest state wins
+        except queue.Empty:
+            pass
+        try:
+            sub.put_nowait(event)
+        except queue.Full:
+            logger.warning(
+                "run %s: dropped event for a saturated subscriber", self.run_id
+            )
+
     def fan_out(self, event: dict) -> None:
         """Push one event dict to every live subscriber (never blocks)."""
         with self._lock:
             for sub in self._subscribers:
-                sub.put(event)
+                self._enqueue(sub, event)
 
     def attach(self) -> tuple[queue.Queue, bool]:
         """Attach a live subscriber; returns (queue, done_snapshot).
@@ -233,6 +262,17 @@ class RunManager:
             return events, live, True
         live, done = record.attach()
         return events, live, done
+
+    def detach(self, run_id: str, sub: queue.Queue) -> None:
+        """Unregister a live subscriber queue (client disconnected).
+
+        Called from the SSE route's `finally` block so navigating away
+        (Back / refresh / tab close) stops buffering events for a dead
+        consumer. No-op when the record was evicted or the run restarted.
+        """
+        record = self.get(str(run_id))
+        if record is not None:
+            record._detach(sub)
 
     # -- worker ------------------------------------------------------------
 

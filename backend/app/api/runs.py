@@ -16,9 +16,11 @@ Full `/v1/...` paths inline (RIP convention — routers mount unprefixed).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import queue
+import time
 from typing import Any
 from uuid import UUID
 
@@ -160,19 +162,37 @@ def run_events(
         raise HTTPException(status_code=404, detail="Run not found") from None
 
     async def stream():
-        for ev in events:
-            yield _frame(ev.seq, ev.event_type, run_id, ev.payload or {})
-        while True:
-            if await request.is_disconnected():
-                return
-            try:
-                item = live.get(timeout=15)
-            except queue.Empty:
-                yield ": heartbeat\n\n"
-                continue
-            if item is None:
-                return
-            yield _frame(item["seq"], item["type"], run_id, item.get("data") or {})
+        # The replay snapshot above is bounded; only the live tail loops.
+        # This generator is driven on the uvicorn event loop, so it must
+        # NEVER make a blocking call: `live.get(timeout=…)` froze the whole
+        # backend (incl. unrelated requests) for up to 15 s per silence gap
+        # and deferred disconnect detection (trace: Back during a live run).
+        # Instead poll with `get_nowait` + a short await, checking
+        # `is_disconnected` every iteration (~50 ms detection latency).
+        try:
+            for ev in events:
+                yield _frame(ev.seq, ev.event_type, run_id, ev.payload or {})
+            last_beat = time.monotonic()
+            while True:
+                if await request.is_disconnected():
+                    return
+                try:
+                    item = live.get_nowait()
+                except queue.Empty:
+                    if time.monotonic() - last_beat >= 15:
+                        last_beat = time.monotonic()
+                        yield ": heartbeat\n\n"
+                    else:
+                        await asyncio.sleep(0.05)
+                    continue
+                if item is None:
+                    return
+                last_beat = time.monotonic()
+                yield _frame(item["seq"], item["type"], run_id, item.get("data") or {})
+        finally:
+            # Client gone (Back / refresh / tab close): unregister the queue
+            # so the run worker stops buffering events for a dead consumer.
+            manager.detach(run_id, live)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
