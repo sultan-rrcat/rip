@@ -687,7 +687,16 @@ class ReActEngine:
         # rag.query is provably useless when the snapshot holds zero ready
         # files (same argument as the L2 empty-corpus short-circuit) — refuse
         # it once instead of burning iterations on "(no chunks retrieved)".
-        corpus_empty = get_corpus_state(notebook_context) in ("empty", "processing")
+        corpus_state = get_corpus_state(notebook_context)
+        corpus_empty = corpus_state in ("empty", "processing")
+        # "processing" is NOT the same failure as "empty": files exist and are
+        # mid-ingest, so the honest answer is "wait, it is still being
+        # indexed", not "there is nothing here". Trace 7ee779e2: a run on a
+        # `[processing]` file refused every rag.query, tripped the idle
+        # guard, and surfaced "no usable action was found" — which names
+        # neither the cause nor the fix. The L2 builders already distinguish
+        # the two (`build_no_docs_clarification(processing=True)`); match that.
+        corpus_processing = corpus_state == "processing"
         # Whether ANY files exist (code files included). Distinct from
         # corpus_empty, which reports code-only notebooks as "empty" because
         # they hold no embeddings — code.read still works there. Only a truly
@@ -1061,28 +1070,60 @@ class ReActEngine:
                     continue
                 if corpus_empty and executor == "rag.query":
                     if guard.record_idle():
+                        no_step_reason = (
+                            "the document is still being processed, so there "
+                            "are no chunks to read yet"
+                            if corpus_processing
+                            else "this notebook has no ready documents"
+                        )
                         iter_obs.update(
                             output={
                                 "status": "failed",
                                 "idle_guard": True,
-                                "idle_reason": "rag.query on empty corpus",
-                                "error": "rag.query on a notebook with no ready documents",
+                                "idle_reason": (
+                                    "rag.query while processing"
+                                    if corpus_processing
+                                    else "rag.query on empty corpus"
+                                ),
+                                "error": (
+                                    "rag.query on a document that is still "
+                                    "being processed"
+                                    if corpus_processing
+                                    else "rag.query on a notebook with no "
+                                    "ready documents"
+                                ),
                             }
                         )
                         break
                     scratchpad.append(
-                        "notebook has no ready documents — rag.query cannot "
-                        "return chunks; answer directly with is_final=true "
-                        "(e.g. greetings/small-talk) or recall numbers with "
-                        "reasoning."
+                        (
+                            "the notebook's document is STILL PROCESSING — it "
+                            "has no chunks to read yet, so rag.query cannot "
+                            "return anything. Do NOT retry it. Set "
+                            "is_final=true and tell the user to wait until "
+                            "processing finishes, then retry the request."
+                            if corpus_processing
+                            else "notebook has no ready documents — rag.query "
+                            "cannot return chunks; answer directly with "
+                            "is_final=true (e.g. greetings/small-talk) or "
+                            "recall numbers with reasoning."
+                        )
                     )
                     iter_obs.update(
                         output={
                             "status": "retry",
-                            "rejection_reason": "rag.query on empty corpus",
+                            "rejection_reason": (
+                                "rag.query while processing"
+                                if corpus_processing
+                                else "rag.query on empty corpus"
+                            ),
                             "thought": thought_in,
                             "executor": executor,
-                            "error": "rag.query refused: empty corpus",
+                            "error": (
+                                "rag.query refused: document still processing"
+                                if corpus_processing
+                                else "rag.query refused: empty corpus"
+                            ),
                         }
                     )
                     continue
@@ -1471,6 +1512,44 @@ class ReActEngine:
                 )
             ],
         )
+        if corpus_processing and not step_results:
+            # Files exist but none has finished ingesting: nothing to
+            # retrieve and nothing to answer yet. Return an honest
+            # clarification (the aggregator shows `clarification`
+            # verbatim) instead of a failed run — the L2 builders emit
+            # the same wait message via build_no_docs_clarification.
+            wait_text = (
+                "The document is still being processed, so there are no "
+                "chunks to read yet and I cannot answer this request. "
+                "Please wait until processing finishes, then send the "
+                "request again — the content will be available."
+            )
+            steps.append(
+                PlanStep(
+                    step_id="r0",
+                    agent_id="reasoning",
+                    input={"message": wait_text},
+                    expected_output_type="clarification",
+                )
+            )
+            step_results.append(
+                StepResult(
+                    step_id="r0",
+                    agent_id="reasoning",
+                    status=StepStatus.SUCCESS,
+                    output=wait_text,
+                )
+            )
+            return ReactResult(
+                Plan(
+                    plan_id=str(uuid.uuid4()),
+                    goal=request_text,
+                    steps=steps,
+                ),
+                ExecutionResult(
+                    trace_id=self._trace_id, step_results=step_results
+                ),
+            )
         if not step_results:
             # The loop broke before any step ran (idle guard, cancellation, or
             # a planner that never proposed anything usable). Trace c1bbae95

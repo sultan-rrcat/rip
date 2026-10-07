@@ -1043,6 +1043,68 @@ def test_react_synthesis_evidence_collapses_charts() -> None:
     assert "chunk text here" in _synthesis_evidence_line(text)
 
 
+def test_react_processing_file_yields_wait_not_failure() -> None:
+    # Trace 7ee779e2: the snapshot showed "[processing]", so corpus state is
+    # "processing" — not "empty". ReAct refused every rag.query, tripped the
+    # idle guard, and surfaced "no usable action was found", naming neither
+    # the cause nor the fix. Files that are mid-ingest must produce an honest
+    # wait clarification (what the L2 builders already do), not a failure.
+    from app.orchestration.react import run_react
+
+    processing = "1 file(s): Anomaly-Detection-Report.pdf [processing] id=abc"
+    provider = FakeLayeredProvider(
+        queued=[
+            {"thought": "read it", "executor": "rag.query",
+             "input": {"query": "benchmark comparison", "file_id": "abc",
+                       "mode": "overview"},
+             "is_final": False},
+            {"thought": "read again", "executor": "rag.query",
+             "input": {"query": "benchmark table metrics"},
+             "is_final": False},
+        ],
+    )
+    agents = get_default_agent_registry(provider)
+    tools = get_default_tool_registry(FakeRAG(), provider)
+    outcome = run_react(
+        "Analyze the document and plot the benchmark comparison result.",
+        provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context=processing,
+    )
+    # No step executed (the model never answered), yet the run ends as a
+    # successful clarification instead of a failure.
+    assert len(outcome.plan.steps) == 1
+    assert outcome.plan.steps[0].expected_output_type == "clarification"
+    result = outcome.result.step_results[0]
+    assert result.status.value == "success"
+    assert "still being processed" in result.output
+    # And no raw rag.query ever ran against the unready file.
+    assert not [s for s in outcome.plan.steps if s.tool_id == "rag.query"]
+
+
+def test_react_empty_notebook_still_fails_honestly() -> None:
+    # The processing fix must not swallow the genuinely-empty case: with no
+    # files at all there is nothing to wait for, so the honest failure stays.
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(
+        queued=[
+            {"thought": "read it", "executor": "rag.query",
+             "input": {"query": "benchmark"}, "is_final": False},
+            {"thought": "read again", "executor": "rag.query",
+             "input": {"query": "table"}, "is_final": False},
+        ],
+    )
+    agents = get_default_agent_registry(provider)
+    tools = get_default_tool_registry(FakeRAG(), provider)
+    outcome = run_react(
+        "plot the benchmark comparison", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="(no documents)",
+    )
+    assert outcome.result.step_results[0].status.value == "failure"
+
+
 def test_react_retrieval_observation_not_truncated_to_1500() -> None:
     # Trace 7720c817: a whole-file return (~19k chars, 14 chunks) was sliced
     # to 1500 chars for the scratchpad, so the model saw the cover page plus
