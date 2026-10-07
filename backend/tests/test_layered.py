@@ -1041,3 +1041,64 @@ def test_react_synthesis_evidence_collapses_charts() -> None:
         output="chunk text here",
     )
     assert "chunk text here" in _synthesis_evidence_line(text)
+
+
+def test_react_identical_retrieval_result_is_idle() -> None:
+    # Trace 7720c817: five rag.query calls with five DIFFERENT query strings
+    # all returned byte-identical chunks (the file only holds a cover page
+    # and a TOC). `seen_actions` keys on input text so none tripped it, and
+    # `failed_actions` only trips on failure — retrieval returning
+    # useless-but-successful chunks counted as progress to both, so 5 of 6
+    # iterations were burned on zero new evidence and the final synthesis
+    # prompt carried the same chunk four times.
+    from app.orchestration.react import run_react
+
+    class _FixedRAG:
+        """Same result regardless of query — the trace's exact shape."""
+
+        calls = 0
+
+        def retrieve_context(
+            self, notebook_id, query, top_k=4, file_id=None, file_name=None,
+            mode="specific",
+        ):
+            _FixedRAG.calls += 1
+            return {
+                "query": query,
+                "mode": mode,
+                "results": [
+                    {
+                        "content": "COVER PAGE ONLY. No benchmark table.",
+                        "source": "r.pdf",
+                        "section": "Cover",
+                        "rerank_score": 0.5,
+                    }
+                ],
+            }
+
+    provider = FakeLayeredProvider(
+        text="the document has no benchmark data",
+        queued=[
+            {"thought": "look", "executor": "rag.query",
+             "input": {"query": "benchmark results"}, "is_final": False},
+            {"thought": "look again", "executor": "rag.query",
+             "input": {"query": "benchmark comparison metrics"}, "is_final": False},
+            {"thought": "one more", "executor": "rag.query",
+             "input": {"query": "accuracy precision recall"}, "is_final": False},
+        ],
+    )
+    agents = get_default_agent_registry(provider)
+    tools = get_default_tool_registry(_FixedRAG(), provider)
+    outcome = run_react(
+        "plot the benchmark comparison", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="1 file(s): r.pdf [ready] id=abc",
+    )
+    # Only the first retrieval survives; the two repeats became idle turns and
+    # the guard stopped the loop before a third wasted execution was recorded.
+    rag_steps = [s for s in outcome.plan.steps if s.tool_id == "rag.query"]
+    assert [s.step_id for s in rag_steps] == ["r1"]
+    # And the repeated chunk is not pasted into the synthesis prompt.
+    synth = outcome.plan.steps[-1]
+    assert synth.step_id == "r-final"
+    assert synth.input["message"].count("COVER PAGE ONLY") == 1

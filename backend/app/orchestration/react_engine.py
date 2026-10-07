@@ -75,6 +75,11 @@ _TOOL_OUTPUT_TYPES = {
 #: for doc.convert — each burned a full iteration). Pre-flight validation
 #: appends these to the scratchpad WITHOUT executing, so the 6-step
 #: budget is preserved for real work.
+#: Executors whose output is pure retrieval — a byte-identical repeat is
+#: provably no new evidence. Tool outputs that are *meant* to repeat (e.g.
+#: doc.generate content, covered by `_doc_content_key`) are excluded.
+_RETRIEVAL_EXECUTORS = frozenset({"rag.query", "code.read"})
+
 _TOOL_INPUT_HINTS = {
     "rag.query": 'rag.query needs {"query": "..."} flat '
     '(not {"agent": {...}}); add "file_id" to scope to one file',
@@ -655,6 +660,15 @@ class ReActEngine:
         # doc.convert of a source upload to the same format can only
         # re-render the original — never the report just built.
         generated_formats: set[str] = set()
+        # Retrieval that returns the SAME text it already returned is not new
+        # evidence, however differently the query was worded. Trace 7720c817:
+        # five rag.query calls with five different query strings all returned
+        # byte-identical cover+TOC chunks and burned 5 of 6 iterations. Two
+        # existing guards missed it: `seen_actions` keys on INPUT text, and
+        # `failed_actions` only trips on failure — a retrieval that returns
+        # useless-but-successful chunks counts as progress to both. Key on the
+        # observation itself.
+        seen_observations: dict[str, str] = {}
         # Consecutive turns that produced no observation (provider errors,
         # unknown executors, empty answers). Caps garbage-loops against a
         # degraded model; any executed step or final answer resets it.
@@ -1225,6 +1239,47 @@ class ReActEngine:
                         }
                     )
                     continue
+                if is_tool and executor in _RETRIEVAL_EXECUTORS and outcome.output:
+                    prior_step = seen_observations.get(outcome.output)
+                    if prior_step is not None:
+                        # Same text as an earlier retrieval: no new evidence,
+                        # so this turn is idle rather than progress. The step
+                        # is dropped, which also stops the useless observation
+                        # from being pasted into the final synthesis prompt.
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "retrieval returned a result already seen",
+                                    "executor": executor,
+                                    "error": (
+                                        f"{executor} already returned this exact "
+                                        f"result at step {prior_step}"
+                                    ),
+                                }
+                            )
+                            break
+                        scratchpad.append(
+                            f"step {prior_step} ({executor}) already returned this "
+                            f"EXACT result — re-querying with different words "
+                            f"surfaced nothing new. Answer now with is_final=true "
+                            f"using what you have (and say honestly if the "
+                            f"documents do not contain what was asked)."
+                        )
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "rejection_reason": "retrieval repeated an identical result",
+                                "executor": executor,
+                                "error": (
+                                    f"repeat of the result already returned by "
+                                    f"step {prior_step}"
+                                ),
+                            }
+                        )
+                        continue
+                    seen_observations[outcome.output] = step_id
                 steps.append(mini.steps[0])
                 step_results.append(outcome)
                 guard.record_progress()  # an executed step is progress, even on tool failure
