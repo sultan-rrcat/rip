@@ -1043,6 +1043,98 @@ def test_react_synthesis_evidence_collapses_charts() -> None:
     assert "chunk text here" in _synthesis_evidence_line(text)
 
 
+def test_react_retrieval_observation_not_truncated_to_1500() -> None:
+    # Trace 7720c817: a whole-file return (~19k chars, 14 chunks) was sliced
+    # to 1500 chars for the scratchpad, so the model saw the cover page plus
+    # the start of the TOC and nothing else. The benchmark table sat ~12k
+    # chars in, so the run concluded the document held no data. The evidence
+    # must survive to the model, deep into the observation.
+    from app.orchestration.react import (
+        _RETRIEVAL_SCRATCHPAD_LIMIT,
+        run_react,
+    )
+
+    class _BigRAG:
+        def retrieve_context(
+            self, notebook_id, query, top_k=4, file_id=None, file_name=None,
+            mode="specific",
+        ):
+            # 14 chunks; the "benchmark table" lives deep in the dump.
+            body = "\n\n".join(
+                f"[{i} (r.pdf)] {'filler ' * 60}" for i in range(1, 14)
+            ) + "\n\n[14 (r.pdf)] BENCHMARK TABLE: kNN 30s, LOF 40s"
+            return {
+                "query": query, "mode": mode,
+                "results": [{
+                    "content": body, "source": "r.pdf",
+                    "section": "H1", "rerank_score": 0.9,
+                }],
+            }
+
+    provider = FakeLayeredProvider(
+        text="done",
+        queued=[
+            {"thought": "read it", "executor": "rag.query",
+             "input": {"query": "benchmark comparison"}, "is_final": False},
+            {"thought": "answer", "executor": "reasoning",
+             "input": {}, "is_final": True, "answer": "react final"},
+        ],
+    )
+    agents = get_default_agent_registry(provider)
+    tools = get_default_tool_registry(_BigRAG(), provider)
+    outcome = run_react(
+        "plot the benchmark comparison", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="1 file(s): r.pdf [ready] id=abc",
+    )
+    # The turn-2 prompt is the one that carries the observation.
+    turn2 = next(
+        m for m in provider.prompts
+        if any("step r1 (rag.query)" in str(x.get("content", "")) for x in m)
+    )
+    seen = str(turn2[-1]["content"])
+    assert _RETRIEVAL_SCRATCHPAD_LIMIT > 1500
+    assert "BENCHMARK TABLE" in seen, (
+        "evidence past the old 1500-char cut never reached the model"
+    )
+    # And the run still terminated on its own.
+    assert outcome.result.step_results
+
+
+def test_trim_scratchpad_drops_oldest_and_keeps_newest() -> None:
+    from app.orchestration.react import _trim_scratchpad
+
+    pad = ["a" * 30, "b" * 30, "c" * 30]
+    kept = _trim_scratchpad(pad, 70)
+    assert "".join(kept) == "b" * 30 + "c" * 30
+    # Never empty: a single oversized entry still survives.
+    assert _trim_scratchpad(["x" * 500], 10) == ["x" * 500]
+    assert _trim_scratchpad([], 10) == []
+
+
+def test_synthesis_evidence_line_keeps_full_retrieval() -> None:
+    from app.agents.base import StepStatus
+    from app.orchestration.react import _synthesis_evidence_line
+    from app.orchestration.results import StepResult
+
+    deep = "x" * 3000 + " BENCHMARK TABLE"
+    line = _synthesis_evidence_line(
+        StepResult(
+            step_id="r1", agent_id="rag.query", status=StepStatus.SUCCESS,
+            output=deep,
+        )
+    )
+    assert "BENCHMARK TABLE" in line
+    # Non-retrieval verdicts keep the short slice.
+    short = _synthesis_evidence_line(
+        StepResult(
+            step_id="r5", agent_id="doc.convert", status=StepStatus.SUCCESS,
+            output=deep,
+        )
+    )
+    assert "BENCHMARK TABLE" not in short
+
+
 def test_react_identical_retrieval_result_is_idle() -> None:
     # Trace 7720c817: five rag.query calls with five DIFFERENT query strings
     # all returned byte-identical chunks (the file only holds a cover page

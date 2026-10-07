@@ -320,6 +320,41 @@ def _is_empty_file_claim(output: str | None) -> bool:
 #: one large file cannot flood the ReAct prompt window.
 _CODE_READ_SCRATCHPAD_LIMIT = 8000
 
+#: Per-observation budget for retrieval tools. The old generic limit was
+#: 1500 chars, which silently hid almost all the evidence: a whole-file
+#: return (ADR-033) is ~19k chars, so the model saw the cover page plus the
+#: first stretch of the TOC and nothing after it. Trace 7720c817 retrieved
+#: all 14 chunks of an 18-page report — the benchmark table (Section 8.2)
+#: landed ~12k chars in — and the run concluded, honestly but wrongly, that
+#: the document held no benchmark data. 12k (~3k tokens) reaches deep into
+#: a typical document; the identical-retrieval guard keeps a second copy of
+#: the same chunks from ever landing in the scratchpad, so paying this
+#: budget once stays affordable.
+_RETRIEVAL_SCRATCHPAD_LIMIT = 12000
+
+#: Whole-scratchpad ceiling (chars). Observations are dropped oldest-first
+#: past this, so accumulating several large retrievals cannot push the
+#: ReAct prompt past the Ollama window. Newest evidence wins — it is what
+#: the next turn reasons over.
+_SCRATCHPAD_TOTAL_LIMIT = 40000
+
+
+def _trim_scratchpad(scratchpad: list[str], limit: int) -> list[str]:
+    """Drop the OLDEST scratchpad entries until the total fits `limit`.
+
+    Entries are whole observations; dropping one mid-line would hand the
+    model a chunk that starts and ends mid-sentence. Always keeps the last
+    entry, so the most recent observation survives even if it alone is
+    over budget (the per-observation caps already bound it).
+    """
+    if not scratchpad:
+        return scratchpad
+    kept = list(scratchpad)
+    total = sum(len(line) for line in kept)
+    while len(kept) > 1 and total > limit:
+        total -= len(kept.pop(0))
+    return kept
+
 
 def _remap_executor(executor: str, action_input: dict) -> str:
     """Recover a misnamed `coding` call the model filed under `code.read`.
@@ -468,7 +503,17 @@ def _synthesis_evidence_line(result, fingerprint: str = "") -> str:
         if fingerprint:
             return f"[{result.step_id} (plot.chart)] chart already generated: {fingerprint}"
         return f"[{result.step_id} (plot.chart)] chart already generated and shown in Artifacts"
-    return f"[{result.step_id} ({result.agent_id})]\n{(result.output or '')[:1500]}"
+    # Retrieval evidence gets the full observation budget (see
+    # _RETRIEVAL_SCRATCHPAD_LIMIT): a 1500-char slice of a whole-file return
+    # showed the model only a cover page and told it the document held no
+    # data (trace 7720c817). Non-retrieval steps keep the short slice — their
+    # value is a verdict, not a corpus.
+    limit = (
+        _RETRIEVAL_SCRATCHPAD_LIMIT
+        if result.agent_id in _RETRIEVAL_EXECUTORS
+        else 1500
+    )
+    return f"[{result.step_id} ({result.agent_id})]\n{(result.output or '')[:limit]}"
 
 
 #: Request keywords that need breadth (stratified sample), not topical rank.
@@ -708,7 +753,11 @@ class ReActEngine:
                         )
                     )
                     break
-                history = "\n".join(scratchpad) if scratchpad else "(no actions yet)"
+                history = (
+                    "\n".join(_trim_scratchpad(scratchpad, _SCRATCHPAD_TOTAL_LIMIT))
+                    if scratchpad
+                    else "(no actions yet)"
+                )
                 system_prompt = (
                     "You are a ReAct agent. Answer the user request one step at a time.\n"
                     f"Agents: {agent_ids}\nTools: {tool_ids}\n"
@@ -1295,6 +1344,10 @@ class ReActEngine:
                     elif is_tool and executor == "code.read":
                         observation = (outcome.output or "")[
                             :_CODE_READ_SCRATCHPAD_LIMIT
+                        ]
+                    elif is_tool and executor in _RETRIEVAL_EXECUTORS:
+                        observation = (outcome.output or "")[
+                            :_RETRIEVAL_SCRATCHPAD_LIMIT
                         ]
                     else:
                         observation = (outcome.output or "")[:1500]

@@ -12,6 +12,8 @@ from app.orchestration.react_engine import (
     _CODE_READ_SCRATCHPAD_LIMIT,
     _EMPTY_FILE_CLAIM_HINTS,
     _OVERVIEW_HINTS,
+    _RETRIEVAL_SCRATCHPAD_LIMIT,
+    _SCRATCHPAD_TOTAL_LIMIT,
     _TOOL_INPUT_HINTS,
     _TOOL_OUTPUT_TYPES,
     MAX_PLOT_CHARTS_PER_RUN,
@@ -33,6 +35,7 @@ from app.orchestration.react_engine import (
     _redundant_convert_hint,
     _remap_executor,
     _synthesis_evidence_line,
+    _trim_scratchpad,
     _validate_react_input,
     run_react,
 )
@@ -45,6 +48,8 @@ __all__ = [
     "_CODE_READ_SCRATCHPAD_LIMIT",
     "_EMPTY_FILE_CLAIM_HINTS",
     "_OVERVIEW_HINTS",
+    "_RETRIEVAL_SCRATCHPAD_LIMIT",
+    "_SCRATCHPAD_TOTAL_LIMIT",
     "_TOOL_INPUT_HINTS",
     "_TOOL_OUTPUT_TYPES",
     "ReActEngine",
@@ -63,6 +68,7 @@ __all__ = [
     "_redundant_convert_hint",
     "_remap_executor",
     "_synthesis_evidence_line",
+    "_trim_scratchpad",
     "_validate_react_input",
     "run_react",
 ]
