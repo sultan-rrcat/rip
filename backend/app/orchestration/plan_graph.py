@@ -301,19 +301,30 @@ def _run_step_body(
         if is_tool:
             assert step.tool_id is not None  # narrowed by is_tool
             tools = tool_registry or ToolRegistry()
-            tool_resp = _execute_tool(
-                tools,
-                step.tool_id,
-                resolved_input,
-                step_id=step.step_id,
-                trace_id=trace_id,
-                timeout_ms=timeout_ms,
-                cancel_event=cancel_event,
-            )
-            status = StepStatus.SUCCESS if tool_resp.ok else StepStatus.FAILURE
-            output = tool_resp.output
-            if output is None and tool_resp.data:
-                output = _json.dumps(tool_resp.data)[:4000]
+            with manual_span(
+                f"tool:{step.tool_id}",
+                as_type="span",
+                input=truncate(resolved_input, 2000),
+                metadata={"step_id": step.step_id, "attempt": attempt + 1},
+            ) as tool_obs:
+                tool_resp = _execute_tool(
+                    tools,
+                    step.tool_id,
+                    resolved_input,
+                    step_id=step.step_id,
+                    trace_id=trace_id,
+                    timeout_ms=timeout_ms,
+                    cancel_event=cancel_event,
+                )
+                status = StepStatus.SUCCESS if tool_resp.ok else StepStatus.FAILURE
+                output = tool_resp.output
+                if output is None and tool_resp.data:
+                    output = _json.dumps(tool_resp.data)[:4000]
+                tool_obs.update(output={
+                    "status": status.value,
+                    "output": truncate(output, 2000),
+                    "error": truncate(tool_resp.error, 500),
+                })
             # Keep the raw tool payload for SSE sources/artifacts downstream.
             # Only the final attempt's data is kept.
             tool_data = dict(tool_resp.data) if tool_resp.data else {}

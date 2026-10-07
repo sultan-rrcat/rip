@@ -781,19 +781,32 @@ class ReActEngine:
                         },
                     )
                 try:
-                    raw = self._provider.generate_structured(
-                        model=self._model,
-                        messages=messages,
-                        schema=REACT_SCHEMA,
-                        temperature=0,
-                        # Tight deadline: one small JSON step, not a long
-                        # generation. Under saturation the inherited budget
-                        # consumed the whole run timeout before any step ran
-                        # (trace 5f98fe9c) — idle turns must arrive fast so
-                        # the guard fails the run early instead.
-                        timeout_ms=settings.planner_timeout_ms,
-                        cancel_event=cancel_event,
-                    )
+                    with _manual_span(
+                        "react:planner",
+                        as_type="span",
+                        input={
+                            "iteration": iteration,
+                            "scratchpad": _truncate(history, 1000),
+                        },
+                    ) as planner_obs:
+                        raw = self._provider.generate_structured(
+                            model=self._model,
+                            messages=messages,
+                            schema=REACT_SCHEMA,
+                            temperature=0,
+                            # Tight deadline: one small JSON step, not a long
+                            # generation. Under saturation the inherited budget
+                            # consumed the whole run timeout before any step ran
+                            # (trace 5f98fe9c) — idle turns must arrive fast so
+                            # the guard fails the run early instead.
+                            timeout_ms=settings.planner_timeout_ms,
+                            cancel_event=cancel_event,
+                        )
+                        planner_obs.update(output={
+                            "thought": _truncate(str(raw.get("thought", "")), 300),
+                            "executor": raw.get("executor"),
+                            "is_final": bool(raw.get("is_final", False)),
+                        })
                 except Exception as e:  # noqa: BLE001 - failed iteration is an observation
                     if guard.record_idle():
                         # Provider itself is down — fail fast instead of burning the
@@ -801,6 +814,8 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "failed",
+                                "idle_guard": True,
+                                "idle_reason": "planner unavailable",
                                 "error": _truncate(
                                     f"react planner unavailable: {e}", 500
                                 ),
@@ -821,6 +836,7 @@ class ReActEngine:
                     iter_obs.update(
                         output={
                             "status": "retry",
+                            "rejection_reason": "planner error",
                             "error": _truncate(str(e), 500),
                         }
                     )
@@ -840,6 +856,8 @@ class ReActEngine:
                             iter_obs.update(
                                 output={
                                     "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "is_final with empty answer",
                                     "error": "is_final with empty answer",
                                 }
                             )
@@ -854,7 +872,11 @@ class ReActEngine:
                             "is_final=true, or set is_final=false and execute a "
                             "tool step (e.g. doc.generate with title+sections)."
                         )
-                        iter_obs.update(output={"status": "retry", "is_final": True})
+                        iter_obs.update(output={
+                            "status": "retry",
+                            "rejection_reason": "is_final with empty answer",
+                            "is_final": True,
+                        })
                         continue
                     step_id = f"r{iteration}"
                     steps.append(
@@ -890,6 +912,8 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "failed",
+                                "idle_guard": True,
+                                "idle_reason": "unknown executor",
                                 "error": _truncate(
                                     f"unknown executor {executor!r}", 500
                                 ),
@@ -902,6 +926,7 @@ class ReActEngine:
                     iter_obs.update(
                         output={
                             "status": "retry",
+                            "rejection_reason": "unknown executor",
                             "thought": thought_in,
                             "executor": executor,
                         }
@@ -928,6 +953,8 @@ class ReActEngine:
                             iter_obs.update(
                                 output={
                                     "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "validation failed",
                                     "error": _truncate(hint, 500),
                                 }
                             )
@@ -936,6 +963,7 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "retry",
+                                "rejection_reason": "validation failed",
                                 "thought": thought_in,
                                 "executor": executor,
                                 "error": _truncate(hint, 500),
@@ -950,6 +978,8 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "failed",
+                                "idle_guard": True,
+                                "idle_reason": "agent missing input.message",
                                 "error": f"agent {executor} missing input.message",
                             }
                         )
@@ -960,6 +990,7 @@ class ReActEngine:
                     iter_obs.update(
                         output={
                             "status": "retry",
+                            "rejection_reason": "agent missing input.message",
                             "thought": thought_in,
                             "executor": executor,
                         }
@@ -970,6 +1001,8 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "failed",
+                                "idle_guard": True,
+                                "idle_reason": "rag.query on empty corpus",
                                 "error": "rag.query on a notebook with no ready documents",
                             }
                         )
@@ -983,6 +1016,7 @@ class ReActEngine:
                     iter_obs.update(
                         output={
                             "status": "retry",
+                            "rejection_reason": "rag.query on empty corpus",
                             "thought": thought_in,
                             "executor": executor,
                             "error": "rag.query refused: empty corpus",
@@ -998,6 +1032,8 @@ class ReActEngine:
                             iter_obs.update(
                                 output={
                                     "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "redundant doc.convert",
                                     "error": "doc.convert refused: report already generated",
                                 }
                             )
@@ -1006,6 +1042,7 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "retry",
+                                "rejection_reason": "redundant doc.convert",
                                 "thought": thought_in,
                                 "executor": executor,
                                 "error": "doc.convert refused: redundant convert",
@@ -1018,6 +1055,8 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "failed",
+                                "idle_guard": True,
+                                "idle_reason": "repeat of failed action",
                                 "error": _truncate(
                                     f"{executor} already failed: {failed_actions[sig]}",
                                     500,
@@ -1032,6 +1071,7 @@ class ReActEngine:
                     iter_obs.update(
                         output={
                             "status": "retry",
+                            "rejection_reason": "repeat of failed action",
                             "thought": thought_in,
                             "executor": executor,
                             "error": _truncate(f"repeat of failed {executor}", 500),
@@ -1043,6 +1083,8 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "failed",
+                                "idle_guard": True,
+                                "idle_reason": "repeat of successful action",
                                 "error": _truncate(
                                     f"{executor} already did this exact step", 500
                                 ),
@@ -1057,6 +1099,7 @@ class ReActEngine:
                     iter_obs.update(
                         output={
                             "status": "retry",
+                            "rejection_reason": "repeat of successful action",
                             "thought": thought_in,
                             "executor": executor,
                             "error": _truncate(f"repeat of successful {executor}", 500),
@@ -1070,6 +1113,8 @@ class ReActEngine:
                             iter_obs.update(
                                 output={
                                     "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "chart data already plotted",
                                     "error": "chart data already plotted",
                                 }
                             )
@@ -1082,6 +1127,7 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "retry",
+                                "rejection_reason": "chart data already plotted",
                                 "thought": thought_in,
                                 "executor": executor,
                                 "error": "chart data already plotted",
@@ -1095,6 +1141,8 @@ class ReActEngine:
                             iter_obs.update(
                                 output={
                                     "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "doc.generate content already succeeded",
                                     "error": "doc.generate with this content already succeeded",
                                 }
                             )
@@ -1107,6 +1155,7 @@ class ReActEngine:
                         iter_obs.update(
                             output={
                                 "status": "retry",
+                                "rejection_reason": "doc.generate content already succeeded",
                                 "thought": thought_in,
                                 "executor": executor,
                                 "error": "repeat of successful doc.generate (content match)",
@@ -1204,6 +1253,8 @@ class ReActEngine:
                             iter_obs.update(
                                 output={
                                     "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "agent reported missing file content",
                                     "thought": thought_in,
                                     "executor": executor,
                                     "error": "agent reported missing file content",
