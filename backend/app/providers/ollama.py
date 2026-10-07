@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Iterator
 from typing import Any
 
@@ -38,6 +39,25 @@ from .base import ModelProvider
 from .streaming import ThinkFilter, strip_think
 
 logger = logging.getLogger("providers.ollama")
+
+
+def _is_cancelled(cancel_event: threading.Event | None) -> bool:
+    """True when the run's stop flag is set (cooperative cancel)."""
+    return cancel_event is not None and cancel_event.is_set()
+
+
+def _await_thread(thread: threading.Thread, cancel_event: threading.Event | None) -> None:
+    """Join a background HTTP thread, aborting promptly on cancel.
+
+    The orphaned thread keeps running to completion in the background
+    (side-effect free — a single HTTP call whose result is discarded), but
+    the worker thread unblocks within ~50ms so the run can unwind to the
+    `cancelled` terminal state instead of waiting out the HTTP timeout.
+    """
+    while thread.is_alive():
+        if _is_cancelled(cancel_event):
+            raise RuntimeError("run cancelled")
+        thread.join(timeout=0.05)
 
 
 class OllamaProvider(ModelProvider):
@@ -137,6 +157,41 @@ class OllamaProvider(ModelProvider):
             )
         return settings.ollama_default_model
 
+    def _post_cancellable(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> httpx.Response:
+        """Blocking POST that aborts promptly on cancel.
+
+        Runs the httpx call on a daemon thread and polls the cancel flag
+        every 50ms. On cancel the worker raises immediately; the orphaned
+        thread finishes harmlessly in the background (its response is
+        discarded). Without cancel this behaves exactly like client.post.
+        """
+        if _is_cancelled(cancel_event):
+            raise RuntimeError("run cancelled")
+        box: dict[str, Any] = {}
+
+        def _do() -> None:
+            try:
+                if timeout is None:
+                    box["response"] = self._client.post(url, json=json)
+                else:
+                    box["response"] = self._client.post(url, json=json, timeout=timeout)
+            except Exception as e:  # noqa: BLE001 - re-raised on the worker thread
+                box["error"] = e
+
+        worker = threading.Thread(target=_do, daemon=True)
+        worker.start()
+        _await_thread(worker, cancel_event)
+        if "error" in box:
+            raise box["error"]
+        return box["response"]
+
     def _chat(
         self,
         model: str,
@@ -145,6 +200,7 @@ class OllamaProvider(ModelProvider):
         temperature: float,
         max_tokens: int,
         response_format: dict[str, Any] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         self.ensure_ready()
         payload: dict[str, Any] = {
@@ -164,7 +220,11 @@ class OllamaProvider(ModelProvider):
 
         def _post(body: dict[str, Any]) -> httpx.Response:
             try:
-                return self._client.post("/v1/chat/completions", json=body)
+                return self._post_cancellable(
+                    "/v1/chat/completions", json=body, cancel_event=cancel_event
+                )
+            except RuntimeError:
+                raise
             except httpx.RequestError as e:
                 logger.error("Ollama request failed: %s", e)
                 raise RuntimeError(f"Ollama connection failure: {e}") from e
@@ -211,13 +271,22 @@ class OllamaProvider(ModelProvider):
             payload["response_format"] = response_format
         return payload
 
-    def _post_stream(self, payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    def _post_stream(
+        self,
+        payload: dict[str, Any],
+        cancel_event: threading.Event | None = None,
+    ) -> Iterator[dict[str, Any]]:
         """Yield parsed SSE data events for one streaming POST.
 
         Raises the same honest RuntimeErrors as _chat (connection failure,
         non-200 with status + body). A `data:` line that is not JSON is
         transport noise: logged and skipped, never fatal to the stream.
+        Checks `cancel_event` before every yielded line so the stop button
+        interrupts an in-flight generation instead of waiting for the
+        server to finish or the HTTP timeout to fire.
         """
+        if _is_cancelled(cancel_event):
+            raise RuntimeError("run cancelled")
         self.ensure_ready()
         try:
             with self._client.stream(
@@ -234,6 +303,12 @@ class OllamaProvider(ModelProvider):
                         f"Ollama error [status {response.status_code}]: {response.text}"
                     )
                 for line in response.iter_lines():
+                    if _is_cancelled(cancel_event):
+                        try:
+                            response.close()
+                        finally:
+                            pass
+                        raise RuntimeError("run cancelled")
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:"):].strip()
@@ -243,6 +318,8 @@ class OllamaProvider(ModelProvider):
                         yield json.loads(data)
                     except json.JSONDecodeError as e:
                         logger.warning("skipping malformed SSE chunk: %s", e)
+        except RuntimeError:
+            raise
         except httpx.RequestError as e:
             logger.error("Ollama request failed: %s", e)
             raise RuntimeError(f"Ollama connection failure: {e}") from e
@@ -255,13 +332,14 @@ class OllamaProvider(ModelProvider):
         temperature: float,
         max_tokens: int,
         response_format: dict[str, Any] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterator[dict[str, Any]]:
         payload = self._stream_payload(
             model, messages,
             temperature=temperature, max_tokens=max_tokens, response_format=response_format,
         )
         try:
-            yield from self._post_stream(payload)
+            yield from self._post_stream(payload, cancel_event=cancel_event)
         except RuntimeError as e:
             # Older servers reject unknown fields instead of ignoring them:
             # retry ONCE with each named field stripped (usage then stays
@@ -278,7 +356,7 @@ class OllamaProvider(ModelProvider):
                 payload = {k: v for k, v in payload.items() if k != "stream_options"}
             if "think" in payload and "stream_options" in payload:
                 raise
-            yield from self._post_stream(payload)
+            yield from self._post_stream(payload, cancel_event=cancel_event)
 
     @staticmethod
     def _delta_content(event: dict[str, Any]) -> str:
@@ -333,6 +411,7 @@ class OllamaProvider(ModelProvider):
         *,
         temperature=settings.default_temperature,
         max_tokens: int | None = settings.default_max_tokens,
+        cancel_event: threading.Event | None = None,
     ) -> str:
         data = self._chat(
             model,
@@ -340,6 +419,7 @@ class OllamaProvider(ModelProvider):
             temperature=temperature,
             # Never omit: an omitted max_tokens lets server defaults rule.
             max_tokens=max_tokens if max_tokens is not None else settings.default_max_tokens,
+            cancel_event=cancel_event,
         )
         self._record_usage(data)
         return self._content(data)
@@ -351,6 +431,7 @@ class OllamaProvider(ModelProvider):
         *,
         temperature=settings.default_temperature,
         max_tokens: int | None = settings.default_max_tokens,
+        cancel_event: threading.Event | None = None,
     ) -> Iterator[str]:
         # Reset first: usage is only meaningful if this stream reports it
         # (a stale value from a previous call would lie).
@@ -362,6 +443,7 @@ class OllamaProvider(ModelProvider):
             temperature=temperature,
             # Never omit: an omitted max_tokens lets server defaults rule.
             max_tokens=max_tokens if max_tokens is not None else settings.default_max_tokens,
+            cancel_event=cancel_event,
         ):
             if event.get("usage") is not None:
                 self._record_usage(event)
@@ -382,6 +464,7 @@ class OllamaProvider(ModelProvider):
         *,
         temperature: float = 0.0,
         timeout_ms: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         # Native /api/chat with the RAW schema as `format` — NOT the /v1
         # OpenAI wrapper. The compat layer's response_format mapping proved
@@ -408,9 +491,12 @@ class OllamaProvider(ModelProvider):
             timeout_ms / 1000.0 if timeout_ms is not None else None
         )
         try:
-            response = self._client.post(
-                "/api/chat", json=payload, timeout=request_timeout
+            response = self._post_cancellable(
+                "/api/chat", json=payload, timeout=request_timeout,
+                cancel_event=cancel_event,
             )
+        except RuntimeError:
+            raise
         except httpx.RequestError as e:
             logger.error("Ollama request failed: %s", e)
             raise RuntimeError(f"Ollama connection failure: {e}") from e

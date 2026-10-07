@@ -282,6 +282,7 @@ def _run_step_body(
             timeout_ms=timeout_ms,
             max_tokens=_step_max_tokens if isinstance(_step_max_tokens, int) else None,
             on_delta=on_delta,
+            cancel_event=cancel_event,
         )
     )
 
@@ -307,6 +308,7 @@ def _run_step_body(
                 step_id=step.step_id,
                 trace_id=trace_id,
                 timeout_ms=timeout_ms,
+                cancel_event=cancel_event,
             )
             status = StepStatus.SUCCESS if tool_resp.ok else StepStatus.FAILURE
             output = tool_resp.output
@@ -485,7 +487,8 @@ def _make_step_node(
         def _emit_delta(text: str) -> None:
             # Live-only deltas from an already-timed-out body would stream
             # into chat AFTER the failure was recorded — suppress them.
-            if expired.is_set():
+            # Same for a cancelled run: the stream is about to abort.
+            if expired.is_set() or is_cancelled(cancel_event):
                 return
             if on_event is not None:
                 on_event(

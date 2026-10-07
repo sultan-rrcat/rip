@@ -74,7 +74,11 @@ class ReasoningAgent(Agent):
             # low by the builder); otherwise the shared default.
             budget = request.max_tokens or settings.default_max_tokens
 
-            # 3. Call the provider (streaming when the caller wants deltas)
+            # 3. Call the provider (streaming when the caller wants deltas).
+            # The run's cancel_event rides along so the stop button
+            # interrupts an in-flight generation instead of waiting out
+            # the HTTP timeout.
+            cancel_event = request.cancel_event
             if request.on_delta is not None:
                 parts: list[str] = []
                 for chunk in self._provider.generate_stream(
@@ -82,6 +86,7 @@ class ReasoningAgent(Agent):
                     messages=messages,
                     temperature=settings.default_temperature,
                     max_tokens=budget,
+                    cancel_event=cancel_event,
                 ):
                     parts.append(chunk)
                     request.on_delta(chunk)
@@ -92,6 +97,7 @@ class ReasoningAgent(Agent):
                     messages=messages,
                     temperature=settings.default_temperature,
                     max_tokens=budget,
+                    cancel_event=cancel_event,
                 )
 
             # 4. Return success + output + confidence. Empty output is a

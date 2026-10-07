@@ -10,6 +10,7 @@ Query generation is performed inside rag.query, not by the router.
 from __future__ import annotations
 
 import logging
+import threading
 
 from pydantic import BaseModel
 
@@ -61,7 +62,12 @@ class Router:
         self._provider = provider
         self._model = model or settings.ollama_default_model
 
-    def route(self, request_text: str, context: str | None = None) -> RouterResult:
+    def route(
+        self,
+        request_text: str,
+        context: str | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> RouterResult:
         lines = "\n".join(
             f"- {intent.value}: {INTENT_DESCRIPTIONS[intent]}" for intent in Intent
         )
@@ -128,6 +134,7 @@ class Router:
                 # 600s run timeout on router + planner timeouts and did no
                 # work. Failing open to UNKNOWN fast leaves budget for ReAct.
                 timeout_ms=settings.router_timeout_ms,
+                cancel_event=cancel_event,
             )
         except Exception as e:  # noqa: BLE001 - fail-open to L3 ReAct
             logger.warning("router LLM failed, falling back to unknown: %s", e)

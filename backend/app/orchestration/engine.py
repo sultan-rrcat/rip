@@ -146,7 +146,8 @@ def _make_plan_node(
         ) as router_obs:
             try:
                 route = Router(planner.provider).route(
-                    state["request_text"], context=state.get("context")
+                    state["request_text"], context=state.get("context"),
+                    cancel_event=_cancel_event(config),
                 )
                 route_info = {
                     "layer": "L2-builder",

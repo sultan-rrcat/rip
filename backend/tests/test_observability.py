@@ -33,16 +33,16 @@ class _FakeProvider(ModelProvider):
     def last_usage(self):
         return self._usage
 
-    def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.calls.append(("generate", model))
         return "hello"
 
-    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.calls.append(("generate_stream", model))
         yield "hel"
         yield "lo"
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
         self.calls.append(("generate_structured", model))
         return {"goal": "g", "steps": []}
 

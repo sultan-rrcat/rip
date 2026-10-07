@@ -54,15 +54,15 @@ class FakeProvider(ModelProvider):
         self.queued = list(queued) if queued else None
         self.prompts: list = []
 
-    def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.models.append(model)
         return self.text
 
-    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.models.append(model)
         yield self.text
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
         self.models.append(model)
         self.prompts.append(messages)
         if self.queued:

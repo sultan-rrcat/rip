@@ -512,7 +512,8 @@ class RunManager:
         notebook_context = self._load_file_snapshot(record.notebook_id)
         try:
             memory, new_summary, new_count = build_memory_context(
-                self._provider, stored, messages, folded_count=folded
+                self._provider, stored, messages, folded_count=folded,
+                cancel_event=record.cancel_event,
             )
         except Exception:
             logger.exception("run %s: memory fold failed, continuing bare", record.run_id)

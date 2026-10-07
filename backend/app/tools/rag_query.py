@@ -281,6 +281,7 @@ class RagQueryTool(Tool):
                     ],
                     schema=schema,
                     temperature=0,
+                    cancel_event=request.cancel_event,
                 )
                 qs = raw_q.get("queries", []) if isinstance(raw_q, dict) else []
                 qs = [q.strip() for q in qs if isinstance(q, str) and q.strip()][:3]

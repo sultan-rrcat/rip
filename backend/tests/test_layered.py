@@ -50,15 +50,15 @@ class FakeLayeredProvider(ModelProvider):
         self.prompts: list = []
         self.structured_calls = 0
 
-    def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.models.append(model)
         return self.text
 
-    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.models.append(model)
         yield self.text
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
         self.models.append(model)
         self.prompts.append(messages)
         self.structured_calls += 1
@@ -503,7 +503,7 @@ def test_router_prompt_is_deliverable_first_for_code_output() -> None:
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
             seen.append(messages)
             return {"intent": "code", "confidence": 0.9}
 
@@ -554,7 +554,7 @@ def test_react_prompt_allows_parametric_numbers_without_docs() -> None:
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
             seen.append(messages)
             return {"thought": "done", "executor": "reasoning",
                     "input": {}, "is_final": True, "answer": "ok"}
@@ -573,7 +573,7 @@ def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
             seen.append(messages)
             return {"thought": "done", "executor": "reasoning",
                     "input": {}, "is_final": True, "answer": "ok"}

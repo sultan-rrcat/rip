@@ -10,6 +10,7 @@ failure, exactly like the agent contract.
 from __future__ import annotations
 
 import logging
+import threading
 
 from app.tools.base import (
     ToolRequest,
@@ -28,6 +29,7 @@ def execute_tool(
     step_id: str = "",
     trace_id: str = "",
     timeout_ms: int = 30000,
+    cancel_event: threading.Event | None = None,
 ) -> ToolResponse:
     tool = registry.get(tool_id)
     request = ToolRequest(
@@ -36,6 +38,7 @@ def execute_tool(
         trace_id=trace_id,
         input=dict(tool_input),
         timeout_ms=timeout_ms,
+        cancel_event=cancel_event,
     )
     try:
         response = tool.execute(request)

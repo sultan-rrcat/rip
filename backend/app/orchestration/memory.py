@@ -18,6 +18,7 @@ memory state — distinct from the SSE `summary` event (final answer text).
 from __future__ import annotations
 
 import logging
+import threading
 
 from pydantic import BaseModel, Field
 
@@ -60,7 +61,11 @@ def _format_turns(messages: list[dict]) -> str:
     return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
 
 
-def _summarize(provider: ModelProvider, text: str) -> str:
+def _summarize(
+    provider: ModelProvider,
+    text: str,
+    cancel_event: threading.Event | None = None,
+) -> str:
     prompt = (
         "You maintain a rolling summary of a conversation. Read the previous "
         "summary and the new messages, then produce an updated concise summary "
@@ -71,6 +76,7 @@ def _summarize(provider: ModelProvider, text: str) -> str:
         model=settings.ollama_default_model,
         messages=[{"role": "user", "content": prompt}],
         max_tokens=settings.summary_max_tokens,
+        cancel_event=cancel_event,
     )
 
 
@@ -82,6 +88,7 @@ def build_memory_context(
     window_size: int = WINDOW_SIZE,
     max_tokens: int | None = None,
     folded_count: int = 0,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[MemoryContext, str | None, int]:
     """Build the bounded context and the (possibly updated) rolling summary.
 
@@ -104,7 +111,7 @@ def build_memory_context(
             text = f"Previous summary:\n{new_summary}\n\nNew messages:\n{folded}"
         else:
             text = folded
-        new_summary = _summarize(provider, text)
+        new_summary = _summarize(provider, text, cancel_event)
         new_count = len(old)
         logger.info(
             "rolling summary folded %d newly aged-out turn(s) (total %d in summary)",

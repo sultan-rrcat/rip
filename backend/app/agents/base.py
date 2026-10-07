@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import Enum
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.classutils import is_abstract
 
@@ -17,6 +18,8 @@ class StepStatus(str, Enum):
 
 
 class DelegationRequest(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     step_id: str
     trace_id: str
     input: dict[str, Any]
@@ -31,6 +34,11 @@ class DelegationRequest(BaseModel):
     # them into the final output. Excluded from dumps — a callable is not
     # serializable and must never leak into logs or traces.
     on_delta: Callable[[str], None] | None = Field(default=None, exclude=True)
+    # Cooperative cancel flag for the in-flight LLM call. The plan graph
+    # sets this from the run's cancel_event; agents forward it to the
+    # provider so the stop button interrupts generation. Excluded from
+    # dumps — a threading primitive is not serializable.
+    cancel_event: threading.Event | None = Field(default=None, exclude=True)
 
 class DelegationResponse(BaseModel):
     step_id: str

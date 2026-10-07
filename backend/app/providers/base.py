@@ -13,6 +13,7 @@ Operations needed across the system:
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
@@ -27,8 +28,15 @@ class ModelProvider(ABC):
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> str:
-        """Return the model's text response to `messages` (OpenAI-style message list)."""
+        """Return the model's text response to `messages` (OpenAI-style message list).
+
+        `cancel_event` is the run's cooperative cancel flag: providers MUST
+        abort promptly (raising RuntimeError) when it is set, so the stop
+        button interrupts an in-flight LLM call instead of waiting for the
+        HTTP timeout. None = run without cancellation (tests, ad-hoc).
+        """
 
     def generate_stream(
         self,
@@ -37,6 +45,7 @@ class ModelProvider(ABC):
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> Iterator[str]:
         """Yield the model's text response as incremental text chunks.
 
@@ -49,7 +58,8 @@ class ModelProvider(ABC):
         that only implement generate() must keep instantiating.
         """
         yield self.generate(
-            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens
+            model=model, messages=messages, temperature=temperature,
+            max_tokens=max_tokens, cancel_event=cancel_event,
         )
 
     @abstractmethod
@@ -61,6 +71,7 @@ class ModelProvider(ABC):
         *,
         temperature: float = 0.0,
         timeout_ms: int | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         """Return a JSON object (as a Python dict) conforming to `schema`.
 
@@ -68,6 +79,7 @@ class ModelProvider(ABC):
         control-plane callers pass a tight deadline: router and ReAct planner
         emit tiny JSON, so inheriting the full generation budget let a saturated
         Ollama hold a run hostage for the whole ollama_timeout_ms window.
+        `cancel_event` aborts the call promptly (same contract as generate).
         """
 
     @abstractmethod

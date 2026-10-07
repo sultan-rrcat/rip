@@ -20,10 +20,11 @@ RIP port: no plugin system — inherit directly from Tool (ADR-017).
 
 from __future__ import annotations
 
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.classutils import is_abstract
 
@@ -37,11 +38,18 @@ EFFECT_CLASSES: tuple[str, ...] = ("read-only", "sandboxed", "side-effecting")
 
 
 class ToolRequest(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     tool_id: str
     step_id: str = ""
     trace_id: str = ""
     input: dict[str, Any] = Field(default_factory=dict)
     timeout_ms: int = 30000
+    # Cooperative cancel flag (same contract as DelegationRequest): the plan
+    # graph sets this from the run's cancel_event; LLM-backed tools (the
+    # rag.query sub-query planner) forward it to the provider. Excluded
+    # from dumps — a threading primitive is not serializable.
+    cancel_event: threading.Event | None = Field(default=None, exclude=True)
 
 
 class ToolResponse(BaseModel):

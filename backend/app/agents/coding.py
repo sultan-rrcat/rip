@@ -77,6 +77,7 @@ class CodingAgent(Agent):
             # (never the shared default — 2048 truncates test files).
             budget = request.max_tokens or settings.coding_max_tokens
 
+            cancel_event = request.cancel_event
             if request.on_delta is not None:
                 parts: list[str] = []
                 for chunk in self._provider.generate_stream(
@@ -84,6 +85,7 @@ class CodingAgent(Agent):
                     messages=messages,
                     temperature=settings.default_temperature,
                     max_tokens=budget,
+                    cancel_event=cancel_event,
                 ):
                     parts.append(chunk)
                     request.on_delta(chunk)
@@ -94,6 +96,7 @@ class CodingAgent(Agent):
                     messages=messages,
                     temperature=settings.default_temperature,
                     max_tokens=budget,
+                    cancel_event=cancel_event,
                 )
 
             # Empty output is a failure, not a blank answer: SUCCESS with ""

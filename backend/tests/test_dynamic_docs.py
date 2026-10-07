@@ -380,7 +380,7 @@ class _FakeProvider:
         self._payload = payload
         self.seen_messages = None
 
-    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None):
+    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None, cancel_event=None):
         self.seen_messages = messages
         return dict(self._payload)
 
@@ -407,10 +407,10 @@ class TestRouterDocAwareness:
         seen: list = []
 
         class _Probe(ModelProvider):
-            def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+            def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
                 return "ok"
 
-            def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+            def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
                 seen.append(messages)
                 return {"thought": "done", "executor": "reasoning",
                         "input": {}, "is_final": True, "answer": "ok"}
@@ -441,10 +441,10 @@ class TestRouterDocAwareness:
         seen: list = []
 
         class _Probe(ModelProvider):
-            def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+            def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
                 return "ok"
 
-            def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+            def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
                 seen.append(messages)
                 return {"thought": "done", "executor": "reasoning",
                         "input": {}, "is_final": True, "answer": "ok"}

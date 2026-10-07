@@ -62,6 +62,7 @@ class TracingProvider(ModelProvider):
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        cancel_event=None,
     ) -> str:
         params: dict[str, Any] = {"temperature": temperature}
         if max_tokens is not None:
@@ -76,6 +77,7 @@ class TracingProvider(ModelProvider):
             result = self._inner.generate(
                 model=model, messages=messages,
                 temperature=temperature, max_tokens=max_tokens,
+                cancel_event=cancel_event,
             )
             update_generation(
                 output=result,
@@ -93,6 +95,7 @@ class TracingProvider(ModelProvider):
         *,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        cancel_event=None,
     ) -> Iterator[str]:
         """Passthrough stream with ONE end-of-stream generation update.
 
@@ -123,6 +126,7 @@ class TracingProvider(ModelProvider):
                 for chunk in self._inner.generate_stream(
                     model=model, messages=messages,
                     temperature=temperature, max_tokens=max_tokens,
+                    cancel_event=cancel_event,
                 ):
                     chunks.append(chunk)
                     yield chunk
@@ -146,6 +150,7 @@ class TracingProvider(ModelProvider):
         *,
         temperature: float = 0.0,
         timeout_ms: int | None = None,
+        cancel_event=None,
     ) -> dict[str, Any]:
         update_generation(
             input=messages,
@@ -160,6 +165,7 @@ class TracingProvider(ModelProvider):
                 schema=schema,
                 temperature=temperature,
                 timeout_ms=timeout_ms,
+                cancel_event=cancel_event,
             )
             update_generation(
                 output=result,

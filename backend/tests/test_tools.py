@@ -80,7 +80,7 @@ class SpyProvider:
     def __init__(self):
         self.calls = 0
 
-    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None):
+    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None, cancel_event=None):
         self.calls += 1
         return {"queries": ["sub one"]}
 

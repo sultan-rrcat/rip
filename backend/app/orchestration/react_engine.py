@@ -792,6 +792,7 @@ class ReActEngine:
                         # (trace 5f98fe9c) — idle turns must arrive fast so
                         # the guard fails the run early instead.
                         timeout_ms=settings.planner_timeout_ms,
+                        cancel_event=cancel_event,
                     )
                 except Exception as e:  # noqa: BLE001 - failed iteration is an observation
                     if guard.record_idle():

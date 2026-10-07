@@ -232,6 +232,18 @@ def _wait_done(run_id, timeout=30.0):
     raise AssertionError(f"run {run_id} did not finish in {timeout}s")
 
 
+def _wait_event_types(run_id, wanted, timeout=30.0):
+    """Poll the persisted event log until `wanted` appears (worker-published
+    terminal events land after the row flips — see TestCancel)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        types = [e.event_type for e in store.list_events(run_id)]
+        if wanted in types:
+            return types
+        time.sleep(0.1)
+    raise AssertionError(f"run {run_id} published no {wanted!r} event in {timeout}s")
+
+
 def _frames(text):
     """Parse SSE text into [(id, data-dict)]."""
     out = []
@@ -423,8 +435,11 @@ class TestCancel:
             row = _wait_done(run_id)
             assert row.status == "cancelled"
             assert body["status"] == "cancelled"
-            types = [e.event_type for e in store.list_events(run_id)]
-            assert "cancelled" in types and "run_completed" not in types
+            # The cancel endpoint flips the row before the worker reacts:
+            # wait for the worker-published terminal event instead of
+            # racing list_events against the still-running worker thread.
+            types = _wait_event_types(run_id, "cancelled")
+            assert "run_completed" not in types
 
     def test_cancel_finished_run_already_done(self, client, notebook_id):
         run_id = client.post(

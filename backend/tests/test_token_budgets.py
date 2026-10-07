@@ -26,15 +26,15 @@ class _RecordingProvider(ModelProvider):
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.calls.append({"max_tokens": max_tokens})
         return "ok"
 
-    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None):
+    def generate_stream(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         self.calls.append({"max_tokens": max_tokens})
         yield "ok"
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
         return {}
 
     def embed(self, model: str, text: str) -> list[float]:
@@ -129,7 +129,7 @@ def test_empty_model_output_fails_honest() -> None:
     from app.agents.base import StepStatus
 
     class _EmptyProvider(_RecordingProvider):
-        def generate(self, model, messages, *, temperature=0.2, max_tokens=None):
+        def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
             self.calls.append({"max_tokens": max_tokens})
             return "   \n  "
 
