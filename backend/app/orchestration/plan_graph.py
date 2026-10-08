@@ -85,6 +85,16 @@ _MACHINE_OUTPUT_TYPES = frozenset({"chunks", "numbers"})
 # beyond the first only help flaky steps; honest failure follows.
 _DEFAULT_MAX_RETRIES = 2
 
+#: Retry guard: never launch an attempt that cannot plausibly finish inside
+#: the step wall-clock (trace b4301187: attempt 3 started with 11s left of a
+#: 300s budget, burned 132s of Ollama time, and its success was discarded
+#: past the deadline). A fresh attempt needs a substantial share of the
+#: budget — below this floor the last failure is reported immediately,
+#: failing fast instead of orphaning a late generation on the single
+#: Ollama server.
+_MIN_RETRY_BUDGET_FRACTION = 1 / 3
+_MIN_RETRY_REMAINING_MS = 10_000
+
 
 def _trunc(text: str | None, limit: int = 2000) -> str | None:
     if text is None or len(text) <= limit:
@@ -288,6 +298,7 @@ def _run_step_body(
 
     response = None
     tool_data: dict = {}
+    loop_start = time.monotonic()
     for attempt in range(max_retries + 1):
         if is_cancelled(cancel_event):
             return _cancelled_result(step)
@@ -298,6 +309,21 @@ def _run_step_body(
                 status=StepStatus.FAILURE,
                 error="step timed out",
             )
+        if attempt > 0:
+            # No doomed retries: a fresh attempt needs a substantial share
+            # of the wall clock (see _MIN_RETRY_BUDGET_FRACTION). Starting
+            # one in the tail only orphans Ollama work past the deadline.
+            elapsed_ms = (time.monotonic() - loop_start) * 1000
+            remaining_ms = timeout_ms - elapsed_ms
+            floor_ms = max(
+                timeout_ms * _MIN_RETRY_BUDGET_FRACTION, _MIN_RETRY_REMAINING_MS
+            )
+            if remaining_ms < floor_ms:
+                logger.warning(
+                    "step %s skipping retry attempt=%d: only %.0fms left of %dms",
+                    step.step_id, attempt + 1, remaining_ms, timeout_ms,
+                )
+                break
         if is_tool:
             assert step.tool_id is not None  # narrowed by is_tool
             tools = tool_registry or ToolRegistry()

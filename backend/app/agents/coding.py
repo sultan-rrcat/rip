@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import ClassVar
 
@@ -10,6 +11,17 @@ from app.core.config import settings
 from app.providers.base import ModelProvider
 
 logger = logging.getLogger("agents.coding")
+
+#: Time-to-first-visible-token guard for generation attempts. Ornith-class
+#: models intermittently burn a whole max_tokens budget (~145s at 4096)
+#: streaming think-only/empty content that the ThinkFilter strips to "".
+#: Aborting the attempt fast leaves retry budget inside the step
+#: wall-clock instead of orphaning a late success (trace b4301187: two
+#: ~145s empties, then attempt 3's success discarded past the 300s
+#: deadline). Once the first visible token arrives the guard is met —
+#: total time stays bounded by the outer wall clock.
+CODING_FIRST_VISIBLE_TIMEOUT_S = 60.0
+_WATCHDOG_POLL_S = 0.5
 
 #: Code-specialized voice: same execution shape as ReasoningAgent, but the
 #: system prompt is tuned for code generation / explanation. Generate-and-
@@ -78,26 +90,78 @@ class CodingAgent(Agent):
             budget = request.max_tokens or settings.coding_max_tokens
 
             cancel_event = request.cancel_event
-            if request.on_delta is not None:
-                parts: list[str] = []
-                for chunk in self._provider.generate_stream(
-                    model=settings.ollama_default_model,
-                    messages=messages,
-                    temperature=settings.default_temperature,
-                    max_tokens=budget,
-                    cancel_event=cancel_event,
-                ):
-                    parts.append(chunk)
-                    request.on_delta(chunk)
-                output_text = "".join(parts)
-            else:
-                output_text = self._provider.generate(
-                    model=settings.ollama_default_model,
-                    messages=messages,
-                    temperature=settings.default_temperature,
-                    max_tokens=budget,
-                    cancel_event=cancel_event,
-                )
+            # Watchdog: abort attempts that stream nothing visible (think-only
+            # burn). The provider only accepts one cancel event, so a local
+            # event ORs user-cancel with the first-visible timeout. Provider
+            # stream paths poll it promptly (httpx per-line / 50ms), bounding
+            # the waste to the grace period instead of a full max_tokens run.
+            stop = threading.Event()
+            state = {"visible": False, "quiet_timeout": False}
+            started = time.monotonic()
+
+            def _watch() -> None:
+                while not stop.is_set():
+                    if cancel_event is not None and cancel_event.is_set():
+                        stop.set()
+                        return
+                    if not state["visible"] and (
+                        time.monotonic() - started
+                    ) > CODING_FIRST_VISIBLE_TIMEOUT_S:
+                        state["quiet_timeout"] = True
+                        stop.set()
+                        return
+                    time.sleep(_WATCHDOG_POLL_S)
+
+            watch = threading.Thread(target=_watch, daemon=True)
+            watch.start()
+            try:
+                if request.on_delta is not None:
+                    parts: list[str] = []
+                    for chunk in self._provider.generate_stream(
+                        model=settings.ollama_default_model,
+                        messages=messages,
+                        temperature=settings.default_temperature,
+                        max_tokens=budget,
+                        cancel_event=stop,
+                    ):
+                        state["visible"] = True
+                        parts.append(chunk)
+                        request.on_delta(chunk)
+                    output_text = "".join(parts)
+                else:
+                    output_text = self._provider.generate(
+                        model=settings.ollama_default_model,
+                        messages=messages,
+                        temperature=settings.default_temperature,
+                        max_tokens=budget,
+                        cancel_event=stop,
+                    )
+            except RuntimeError:
+                if state["quiet_timeout"]:
+                    logger.warning(
+                        "coding no visible output within %.0fs step=%s",
+                        CODING_FIRST_VISIBLE_TIMEOUT_S, request.step_id,
+                    )
+                    result = DelegationResponse(
+                        step_id=request.step_id,
+                        status=StepStatus.FAILURE,
+                        output=None,
+                        confidence=constants.CONFIDENCE_LOW,
+                        error=(
+                            "Execution failed: model streamed no visible "
+                            f"output within {CODING_FIRST_VISIBLE_TIMEOUT_S:.0f}s"
+                        ),
+                    )
+                    duration_ms = (time.perf_counter() - start) * 1000
+                    logger.info(
+                        "coding done step=%s status=%s duration_ms=%.0f",
+                        request.step_id, result.status.value, duration_ms,
+                    )
+                    return result
+                raise
+            finally:
+                stop.set()
+                watch.join(timeout=5.0)
 
             # Empty output is a failure, not a blank answer: SUCCESS with ""
             # renders as an empty chat bubble (and skips the retry loop),
