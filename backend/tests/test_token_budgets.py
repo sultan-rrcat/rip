@@ -34,7 +34,7 @@ class _RecordingProvider(ModelProvider):
         self.calls.append({"max_tokens": max_tokens})
         yield "ok"
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
         return {}
 
     def embed(self, model: str, text: str) -> list[float]:
@@ -173,3 +173,70 @@ def test_empty_model_output_fails_honest() -> None:
         assert resp.status is StepStatus.FAILURE
         assert resp.output is None
         assert resp.error
+
+
+class _StructuredBudgetProvider(ModelProvider):
+    """Records generate_structured kwargs; returns router/planner shapes."""
+
+    def __init__(self) -> None:
+        self.structured_calls: list[dict] = []
+
+    def generate(self, model, messages, *, temperature=0.2, max_tokens=None,
+                 cancel_event=None):
+        return "ok"
+
+    def generate_stream(self, model, messages, *, temperature=0.2,
+                        max_tokens=None, cancel_event=None):
+        yield "ok"
+
+    def generate_structured(self, model, messages, schema, *, temperature=0.0,
+                            timeout_ms=None, cancel_event=None,
+                            max_tokens=None):
+        self.structured_calls.append({"max_tokens": max_tokens})
+        return {"intent": "chat", "queries": ["q"], "quotes": []}
+
+    def embed(self, model: str, text: str) -> list[float]:
+        raise NotImplementedError("test fake")
+
+    def list_available_models(self) -> list[dict]:
+        return [{"id": "fake"}]
+
+
+def test_router_structured_budget_is_tight() -> None:
+    # One enum word of JSON must not inherit the 2048 shared default:
+    # thinking burns the same num_predict budget as the answer.
+    from app.orchestration.router import ROUTER_MAX_TOKENS, Router
+
+    assert ROUTER_MAX_TOKENS == 256
+    provider = _StructuredBudgetProvider()
+    Router(provider).route("hello there friend, how are you doing today?")
+    assert provider.structured_calls
+    assert all(
+        c["max_tokens"] == ROUTER_MAX_TOKENS for c in provider.structured_calls
+    )
+
+
+def test_rag_subquery_planner_budget_is_tight() -> None:
+    from app.tools.base import ToolRequest
+    from app.tools.rag_query import _SUBQUERY_MAX_TOKENS, RagQueryTool
+
+    assert _SUBQUERY_MAX_TOKENS == 256
+
+    class _Rag:
+        def retrieve_context(self, notebook_id, query, top_k=4,
+                             file_id=None, file_name=None, mode="specific"):
+            return {"results": []}
+
+    provider = _StructuredBudgetProvider()
+    resp = RagQueryTool(rag=_Rag(), provider=provider).execute(
+        ToolRequest(
+            tool_id="rag.query", step_id="1", trace_id="t",
+            input={"notebook_id": "nb-1", "query": "q"},
+        )
+    )
+    assert resp.ok
+    assert provider.structured_calls
+    assert all(
+        c["max_tokens"] == _SUBQUERY_MAX_TOKENS
+        for c in provider.structured_calls
+    )

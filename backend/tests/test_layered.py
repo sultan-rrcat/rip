@@ -58,7 +58,7 @@ class FakeLayeredProvider(ModelProvider):
         self.models.append(model)
         yield self.text
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
         self.models.append(model)
         self.prompts.append(messages)
         self.structured_calls += 1
@@ -566,7 +566,7 @@ def test_router_prompt_is_ordered_rule_list_without_trace() -> None:
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
             seen.append(messages)
             return {"intent": "code"}
 
@@ -624,7 +624,7 @@ def test_react_prompt_allows_parametric_numbers_without_docs() -> None:
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
             seen.append(messages)
             return {"thought": "done", "executor": "reasoning",
                     "input": {}, "is_final": True, "answer": "ok"}
@@ -643,7 +643,7 @@ def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
     seen: list = []
 
     class _ProbeProvider(FakeLayeredProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
             seen.append(messages)
             return {"thought": "done", "executor": "reasoning",
                     "input": {}, "is_final": True, "answer": "ok"}
@@ -1260,7 +1260,7 @@ def test_react_large_retrieval_filtered_by_tool_default() -> None:
             super().__init__(*args, **kwargs)
             self.filter_calls = 0
 
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
             if "quotes" in (schema.get("properties") or {}):
                 self.filter_calls += 1
                 return {"quotes": [keep]}

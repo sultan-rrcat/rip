@@ -128,7 +128,7 @@ def _validator() -> PlanValidator:
         def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
             return "ok"
 
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
             return {}
 
         def embed(self, model: str, text: str) -> list[float]:

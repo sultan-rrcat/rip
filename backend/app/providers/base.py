@@ -72,6 +72,7 @@ class ModelProvider(ABC):
         temperature: float = 0.0,
         timeout_ms: int | None = None,
         cancel_event: threading.Event | None = None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Return a JSON object (as a Python dict) conforming to `schema`.
 
@@ -80,6 +81,10 @@ class ModelProvider(ABC):
         emit tiny JSON, so inheriting the full generation budget let a saturated
         Ollama hold a run hostage for the whole ollama_timeout_ms window.
         `cancel_event` aborts the call promptly (same contract as generate).
+        `max_tokens` caps generated tokens for THIS call (None = provider
+        default): with thinking models the chain-of-thought burns the same
+        budget as the answer, so tiny outputs (intent, sub-queries) carry a
+        tight cap while variable-length ones (filter quotes) ride the default.
         """
 
     @abstractmethod

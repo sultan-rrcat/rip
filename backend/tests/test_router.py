@@ -28,7 +28,7 @@ class FakeRouterProvider(ModelProvider):
     def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         raise NotImplementedError("router uses generate_structured")
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
         self.calls += 1
         self.messages = messages
         self.timeouts.append(timeout_ms)

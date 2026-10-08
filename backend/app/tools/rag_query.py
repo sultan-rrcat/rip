@@ -35,6 +35,11 @@ _DEFAULT_TOP_K = 4
 #: {{id}} placeholders) pass `verbatim: true` to skip filtering entirely.
 _FILTER_THRESHOLD_CHARS = 12000
 
+#: Output cap for the sub-query planner: 1-3 short queries. Thinking burns
+#: the same num_predict budget as the answer, so the shared 2048 default
+#: would let a think-burn run 8x longer than the output needs.
+_SUBQUERY_MAX_TOKENS = 256
+
 #: Narrow schema for the relevance filter: a flat list of verbatim quotes.
 #: Structured output (not free text) so the tool can map each quote back to
 #: its source result by substring match — anything paraphrased matches
@@ -424,6 +429,7 @@ class RagQueryTool(Tool):
                     schema=schema,
                     temperature=0,
                     cancel_event=request.cancel_event,
+                    max_tokens=_SUBQUERY_MAX_TOKENS,
                 )
                 qs = raw_q.get("queries", []) if isinstance(raw_q, dict) else []
                 qs = [q.strip() for q in qs if isinstance(q, str) and q.strip()][:3]

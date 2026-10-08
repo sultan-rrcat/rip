@@ -80,7 +80,7 @@ class SpyProvider:
     def __init__(self):
         self.calls = 0
 
-    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None, cancel_event=None):
+    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None, cancel_event=None, max_tokens=None):
         self.calls += 1
         return {"queries": ["sub one"]}
 
@@ -327,7 +327,7 @@ class FilterProvider:
         self.filter_calls = 0
         self.seen_timeout_ms: list = []
 
-    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None, cancel_event=None):
+    def generate_structured(self, model, messages, schema, temperature=0, timeout_ms=None, cancel_event=None, max_tokens=None):
         if "quotes" in (schema.get("properties") or {}):
             self.filter_calls += 1
             self.seen_timeout_ms.append(timeout_ms)

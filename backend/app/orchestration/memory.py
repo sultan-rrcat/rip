@@ -29,6 +29,16 @@ logger = logging.getLogger("orchestration.memory")
 
 WINDOW_SIZE = 10
 
+#: Narrow schema for the rolling summary: a single bullet-text field.
+#: Structured output rides the native endpoint where think=False is
+#: honored, so the 512-token summary budget is spent on the summary
+#: instead of chain-of-thought.
+_SUMMARY_SCHEMA: dict = {
+    "type": "object",
+    "properties": {"summary": {"type": "string"}},
+    "required": ["summary"],
+}
+
 
 def _default_budget_tokens() -> int:
     """Context-window-derived budget (read live so tests can override settings)."""
@@ -66,12 +76,37 @@ def _summarize(
     text: str,
     cancel_event: threading.Event | None = None,
 ) -> str:
+    # Native structured call (think=False is honored there — verified live:
+    # no thinking field, direct answer): the summary is extraction work,
+    # so chain-of-thought would only burn the 512-token budget. Any
+    # failure (or a payload without the summary key, e.g. legacy test
+    # doubles) falls back to the compat generate() path — same prompt,
+    # same cap — so this never regresses.
     prompt = (
         "You maintain a rolling summary of a conversation. Read the previous "
         "summary and the new messages, then produce an updated concise summary "
         "in bullet points preserving key facts, decisions, and the current topic.\n\n"
         f"{text}"
+        '\n\nReturn ONLY a JSON object like {"summary": "..."} '
+        "with the bullet summary as the summary value."
     )
+    try:
+        result = provider.generate_structured(
+            model=settings.ollama_default_model,
+            messages=[{"role": "user", "content": prompt}],
+            schema=_SUMMARY_SCHEMA,
+            max_tokens=settings.summary_max_tokens,
+            timeout_ms=settings.planner_timeout_ms,
+            cancel_event=cancel_event,
+        )
+        summary = result.get("summary") if isinstance(result, dict) else None
+        if isinstance(summary, str) and summary.strip():
+            return summary
+        logger.warning("summary structured call returned no summary, "
+                       "falling back to generate()")
+    except Exception as e:  # noqa: BLE001 - summary must never fail the run
+        logger.warning("summary structured call failed (%s), "
+                       "falling back to generate()", e)
     return provider.generate(
         model=settings.ollama_default_model,
         messages=[{"role": "user", "content": prompt}],

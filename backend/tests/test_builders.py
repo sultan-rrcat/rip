@@ -22,7 +22,7 @@ class _FakeProvider(ModelProvider):
     def generate(self, model, messages, *, temperature=0.2, max_tokens=None, cancel_event=None):
         return "ok"
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
         return {"goal": "g", "steps": []}
 
     def embed(self, model: str, text: str) -> list[float]:
@@ -427,7 +427,7 @@ def test_react_prompt_carries_zero_file_plot_rule() -> None:
     seen: list = []
 
     class _CaptureProvider(_FakeProvider):
-        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+        def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
             seen.append(messages)
             return {
                 "thought": "done",

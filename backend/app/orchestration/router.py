@@ -46,6 +46,12 @@ ROUTER_SCHEMA: dict = {
     "required": ["intent"],
 }
 
+#: Output cap for the router call: one enum word of JSON. With thinking
+#: models the chain-of-thought burns the same num_predict budget as the
+#: answer, so the shared 2048 default would let a think-burn ride the
+#: full 20s deadline for ~10 tokens of output.
+ROUTER_MAX_TOKENS = 256
+
 #: Formats doc.convert accepts; anything else means "format unstated".
 _CONVERT_FORMATS = frozenset({"md", "docx", "pdf"})
 
@@ -307,6 +313,11 @@ class Router:
                 # work. Failing open to UNKNOWN fast leaves budget for ReAct.
                 timeout_ms=settings.router_timeout_ms,
                 cancel_event=cancel_event,
+                # Tiny output (one enum word): cap tightly so a think-burn
+                # fails fast instead of riding the deadline (see
+                # ROUTER_MAX_TOKENS). Native endpoint honors think=False,
+                # so this is belt-and-braces.
+                max_tokens=ROUTER_MAX_TOKENS,
             )
         except Exception as e:  # noqa: BLE001 - fail-open to L3 ReAct
             logger.warning("router LLM failed, falling back to unknown: %s", e)

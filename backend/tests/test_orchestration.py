@@ -62,7 +62,7 @@ class FakeProvider(ModelProvider):
         self.models.append(model)
         yield self.text
 
-    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None):
+    def generate_structured(self, model, messages, schema, *, temperature=0.0, timeout_ms=None, cancel_event=None, max_tokens=None):
         self.models.append(model)
         self.prompts.append(messages)
         if self.queued:
@@ -756,7 +756,9 @@ class TestMemory:
         msgs = [{"role": "user", "content": f"m{i}"} for i in range(12)]
         ctx, summary, count = build_memory_context(provider, None, msgs)
         assert summary == "rolled" and count == 2
-        assert provider.models == [settings.ollama_default_model]
+        # Structured no-think attempt first, compat fallback second —
+        # both on the default model.
+        assert provider.models == [settings.ollama_default_model] * 2
         assert "rolled" in ctx.as_prompt()
 
     def test_fold_dedups_by_count(self):
@@ -772,6 +774,31 @@ class TestMemory:
             max_tokens=150,  # 4x100T -> trims to the single newest 100T turn
         )
         assert ctx.truncated and len(ctx.recent) == 1
+
+    def test_fold_prefers_structured_no_think_path(self):
+        # 12 msgs age 2 out of the window; the structured call returns the
+        # summary directly (native endpoint, think=False honored).
+        provider = FakeProvider(queued=[{"summary": "rolled-json"}])
+        msgs = [{"role": "user", "content": f"m{i}"} for i in range(12)]
+        ctx, summary, count = build_memory_context(provider, None, msgs)
+        assert summary == "rolled-json" and count == 2
+        assert "rolled-json" in ctx.as_prompt()
+
+    def test_fold_falls_back_to_generate_without_summary_key(self):
+        # Legacy doubles returning a payload without "summary" (or raising)
+        # must not break the fold — the compat generate() path applies.
+        provider = FakeProvider(text="rolled")
+        msgs = [{"role": "user", "content": f"m{i}"} for i in range(12)]
+        _, summary, count = build_memory_context(provider, None, msgs)
+        assert summary == "rolled" and count == 2
+
+        class _FailingStructured(FakeProvider):
+            def generate_structured(self, *a, **k):
+                raise RuntimeError("native endpoint down")
+
+        failing = _FailingStructured(text="rolled-fallback")
+        _, summary, count = build_memory_context(failing, None, msgs)
+        assert summary == "rolled-fallback" and count == 2
 
     def test_estimate_tokens(self):
         assert estimate_tokens("") == 0
