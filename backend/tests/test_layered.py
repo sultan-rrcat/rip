@@ -254,6 +254,37 @@ def test_react_executes_complete_dag_per_iteration() -> None:
     assert provider.structured_calls == 1
 
 
+def test_react_infers_generic_tool_executor() -> None:
+    from app.orchestration.react_engine import _coerce_dag_steps
+
+    agents = {"coding", "reasoning"}
+    tools = {"code.read", "rag.query", "notebook.inspect"}
+    prepared, hint = _coerce_dag_steps(
+        {"thought": "t", "is_final": False, "steps": [
+            {"executor": "tool", "input": {"file_id": "abc"}}]},
+        1, agents, tools,
+    )
+    assert hint is None and prepared is not None
+    assert prepared[0].get("tool_id") == "code.read"
+
+
+def test_react_is_final_with_steps_executes_when_answer_empty() -> None:
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(text="done", queued=[
+        {"thought": "inspect+read", "is_final": True, "steps": [
+            {"executor": "notebook.inspect", "input": {}},
+        ]},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "improve its look", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="1 file(s): Home.tsx [ready:code] id=abc",
+    )
+    assert any(s.tool_id == "notebook.inspect" for s in outcome.plan.steps)
+
+
 def test_react_rejects_unknown_executor_then_recovers() -> None:
     from app.orchestration.react import run_react
 

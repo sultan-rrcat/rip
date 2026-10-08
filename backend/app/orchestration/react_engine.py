@@ -305,6 +305,31 @@ def _output_type(executor: str, is_final: bool) -> str:
     return _TOOL_OUTPUT_TYPES.get(executor, "text")
 
 
+def _infer_generic_executor(action_input: dict) -> str | None:
+    """Infer a concrete executor when the model emits generic "tool"/"agent".
+
+    Trace b0636676 iter-2: {"executor": "tool", "input": {"file_id": ...}}
+    burned both idle turns. Shape alone is unambiguous here (file_id only
+    matches code.read), so recover instead of idling.
+    """
+    keys = set(action_input or {})
+    if "sections" in keys and "title" in keys:
+        return "doc.generate"
+    if "chart_type" in keys:
+        return "plot.chart"
+    if "query" in keys:
+        return "rag.query"
+    if "target_format" in keys:
+        return "doc.convert"
+    if "file_id" in keys or "file_name" in keys:
+        return "code.read"
+    if "message" in keys:
+        return "reasoning"
+    if not keys:
+        return "notebook.inspect"
+    return None
+
+
 def _coerce_dag_steps(
     raw: dict,
     iteration: int,
@@ -368,6 +393,10 @@ def _coerce_dag_steps(
         executor = str(rs.get("executor", "") or "").strip()
         if not executor:
             return None, f"step {idx} is missing executor"
+        if executor.lower() in ("tool", "agent", "function"):
+            inferred = _infer_generic_executor(rs.get("input", {}) or {})
+            if inferred is not None:
+                executor = inferred
         if executor not in known_agents and executor not in known_tools:
             return None, f"UNKNOWN_EXECUTOR:{executor}"
         action_input = rs.get("input", {}) or {}
@@ -742,7 +771,7 @@ def _build_react_system_prompt(
         "One COMPLETE DAG per turn (1-5 steps); if it fails you get the next iteration to repair it.\n"
         f"Agents: {agent_ids}\nTools: {tool_ids}\n"
         "Shape (mandatory, never violated):\n"
-        '- each steps[] element is {"step_id": "1", "executor": "<agent|tool>", "input": {...}, '
+        '- each steps[] element is {"step_id": "1", "executor": "<one of coding, reasoning, code.read, doc.convert, doc.generate, notebook.inspect, plot.chart, rag.query>", "input": {...}, '
         '"depends_on": ["1"], "expected_output_type": "answer|text|chunks|numbers|chart|document"}. '
         'Legacy single-step {"executor","input"} is still accepted as a 1-step DAG.\n'
         '- input is a FLAT object, never nested under \'agent\'. WRONG: {"agent": {"message": "..."}}. RIGHT: {"query": "..."}.\n'
@@ -1047,86 +1076,93 @@ class ReActEngine:
                 thought_in = _truncate(str(raw.get("thought", "")), 300)
                 if is_final:
                     if isinstance(raw.get("steps"), list) and raw.get("steps"):
-                        # Contradictory turn: is_final=true cannot also carry
-                        # steps[] to execute. The steps are dropped when we
-                        # prioritize is_final (trace iter-1 wasted a full DAG).
-                        if guard.record_idle():
-                            iter_obs.update(
-                                output={
-                                    "status": "failed",
-                                    "idle_guard": True,
-                                    "idle_reason": "is_final with steps",
-                                    "error": "is_final with steps",
-                                }
+                        if not str(raw.get("answer") or "").strip():
+                            # Lenient: model meant to execute (trace b0636676
+                            # iter-1 had a correct inspect+read DAG but set
+                            # is_final=true). Drop the flag, execute below.
+                            is_final = False
+                        else:
+                            # Contradictory turn: is_final=true cannot also carry
+                            # steps[] to execute. The steps are dropped when we
+                            # prioritize is_final (trace iter-1 wasted a full DAG).
+                            if guard.record_idle():
+                                iter_obs.update(
+                                    output={
+                                        "status": "failed",
+                                        "idle_guard": True,
+                                        "idle_reason": "is_final with steps",
+                                        "error": "is_final with steps",
+                                    }
+                                )
+                                no_step_reason = (
+                                    "the assistant marked itself finished while also "
+                                    "proposing steps to execute"
+                                )
+                                break
+                            scratchpad.append(
+                                "is_final=true must not carry steps[]; set is_final=false "
+                                "to execute the DAG, or is_final=true with answer only "
+                                "and no steps."
                             )
-                            no_step_reason = (
-                                "the assistant marked itself finished while also "
-                                "proposing steps to execute"
+                            iter_obs.update(output={
+                                "status": "retry",
+                                "rejection_reason": "is_final with steps",
+                                "is_final": True,
+                            })
+                            continue
+                    if is_final:
+                        answer = raw.get("answer") or ""
+                        if not str(answer).strip():
+                            raw_input = raw.get("input", {}) or {}
+                            answer = _fallback_answer_text(
+                                dict(raw_input) if isinstance(raw_input, dict) else {}
                             )
-                            break
-                        scratchpad.append(
-                            "is_final=true must not carry steps[]; set is_final=false "
-                            "to execute the DAG, or is_final=true with answer only "
-                            "and no steps."
+                        if not str(answer).strip():
+                            if guard.record_idle():
+                                iter_obs.update(
+                                    output={
+                                        "status": "failed",
+                                        "idle_guard": True,
+                                        "idle_reason": "is_final with empty answer",
+                                        "error": "is_final with empty answer",
+                                    }
+                                )
+                                no_step_reason = (
+                                    "the assistant kept marking itself finished "
+                                    "without producing an answer"
+                                )
+                                break
+                            scratchpad.append(
+                                "is_final was true but answer was empty. Either put the "
+                                "final answer text in the 'answer' field with "
+                                "is_final=true, or set is_final=false and execute a "
+                                "tool step (e.g. doc.generate with title+sections)."
+                            )
+                            iter_obs.update(output={
+                                "status": "retry",
+                                "rejection_reason": "is_final with empty answer",
+                                "is_final": True,
+                            })
+                            continue
+                        # The planner's own answer is NOT the deliverable: it
+                        # was framed alongside internal thought/executor
+                        # reasoning, which biases it (hallucinated structure,
+                        # leaked steps). Capture it as a hint — the always-on
+                        # synthesis call below phrases the final answer from the
+                        # loop's observations.
+                        final_hint_answer = str(answer)
+                        guard.record_progress()
+                        iter_obs.update(
+                            output={
+                                "status": "success",
+                                "thought": thought_in,
+                                "executor": "reasoning",
+                                "is_final": True,
+                                "answer": _truncate(str(answer), 2000),
+                                "final_via": "synthesis",
+                            }
                         )
-                        iter_obs.update(output={
-                            "status": "retry",
-                            "rejection_reason": "is_final with steps",
-                            "is_final": True,
-                        })
-                        continue
-                    answer = raw.get("answer") or ""
-                    if not str(answer).strip():
-                        raw_input = raw.get("input", {}) or {}
-                        answer = _fallback_answer_text(
-                            dict(raw_input) if isinstance(raw_input, dict) else {}
-                        )
-                    if not str(answer).strip():
-                        if guard.record_idle():
-                            iter_obs.update(
-                                output={
-                                    "status": "failed",
-                                    "idle_guard": True,
-                                    "idle_reason": "is_final with empty answer",
-                                    "error": "is_final with empty answer",
-                                }
-                            )
-                            no_step_reason = (
-                                "the assistant kept marking itself finished "
-                                "without producing an answer"
-                            )
-                            break
-                        scratchpad.append(
-                            "is_final was true but answer was empty. Either put the "
-                            "final answer text in the 'answer' field with "
-                            "is_final=true, or set is_final=false and execute a "
-                            "tool step (e.g. doc.generate with title+sections)."
-                        )
-                        iter_obs.update(output={
-                            "status": "retry",
-                            "rejection_reason": "is_final with empty answer",
-                            "is_final": True,
-                        })
-                        continue
-                    # The planner's own answer is NOT the deliverable: it
-                    # was framed alongside internal thought/executor
-                    # reasoning, which biases it (hallucinated structure,
-                    # leaked steps). Capture it as a hint — the always-on
-                    # synthesis call below phrases the final answer from the
-                    # loop's observations.
-                    final_hint_answer = str(answer)
-                    guard.record_progress()
-                    iter_obs.update(
-                        output={
-                            "status": "success",
-                            "thought": thought_in,
-                            "executor": "reasoning",
-                            "is_final": True,
-                            "answer": _truncate(str(answer), 2000),
-                            "final_via": "synthesis",
-                        }
-                    )
-                    break
+                        break
                 # --- Multi-step DAG per iteration (preferred) ---
                 # If the planner emitted steps[], execute the COMPLETE DAG in
                 # this iteration. Any validation/execution failure is recorded
