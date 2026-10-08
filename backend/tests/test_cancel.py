@@ -5,9 +5,13 @@ step/iteration boundaries but never reached the blocking Ollama HTTP calls,
 so an in-flight generation ran to the 300s HTTP timeout before the run
 could unwind to `cancelled`. These tests pin the wiring — every provider
 call made on behalf of a run carries the run's cancel_event.
+
+Trace d9b9a296 extension: a step wall-clock timeout must also abort the
+in-flight generation — no generation may outlive its step's deadline.
 """
 from __future__ import annotations
 
+import contextvars
 import threading
 import time
 
@@ -34,7 +38,7 @@ class _RecordingProvider:
         yield "ok"
 
     def generate_structured(self, model, messages, schema, *, temperature=0.0,
-                            timeout_ms=None, cancel_event=None):
+                            timeout_ms=None, cancel_event=None, max_tokens=None):
         self.seen.append(cancel_event)
         return dict(self.structured)
 
@@ -93,7 +97,37 @@ class TestCancelForwarding:
             )
         )
         assert resp.output == "ok"
-        assert provider.seen == [event]
+        # CodingAgent ORs run-cancel with its quiet-stream guard, so the
+        # provider sees a derived watchdog event, not the run event
+        # itself — but exactly one must be forwarded, never None.
+        assert len(provider.seen) == 1
+        assert provider.seen[0] is not None
+
+    def test_coding_aborts_when_run_cancelled(self):
+        from app.agents.base import StepStatus
+        from app.agents.coding import CodingAgent
+
+        class _HonoringProvider(_RecordingProvider):
+            def generate(self, model, messages, *, temperature=0.2,
+                         max_tokens=None, cancel_event=None):
+                self.seen.append(cancel_event)
+                for _ in range(100):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RuntimeError("run cancelled")
+                    time.sleep(0.02)
+                return "ok"
+
+        provider = _HonoringProvider()
+        event = _event()
+        event.set()
+        resp = CodingAgent(provider).execute(
+            DelegationRequest(
+                step_id="1", trace_id="t", input={"message": "write fizzbuzz"},
+                cancel_event=event,
+            )
+        )
+        assert resp.status is StepStatus.FAILURE
+        assert "run cancelled" in (resp.error or "")
 
     def test_rag_query_planner_forwards_cancel_event(self):
         from app.tools.base import ToolRequest
@@ -196,3 +230,142 @@ class TestCancellableBlockingCall:
             assert str(e) == "run cancelled"
         else:  # pragma: no cover - must raise
             raise AssertionError("expected RuntimeError")
+
+
+class TestStepTimeoutAbortsGeneration:
+    """Trace d9b9a296: step timeout must cancel the in-flight generation."""
+
+    def test_no_generation_outlives_step_deadline(self):
+        from app.agents.coding import CodingAgent
+        from app.agents.registry import AgentRegistry
+        from app.orchestration.plan import PlanStep
+        from app.orchestration.plan_graph import (
+            _invoke_with_wall_clock,
+            _run_step_body,
+        )
+
+        class _HangingProvider:
+            """Blocks until cancelled, then aborts promptly."""
+
+            def __init__(self):
+                self.end_time: float | None = None
+                self.seen = None
+
+            def _await(self, cancel_event, duration=30.0):
+                end = time.monotonic() + duration
+                while time.monotonic() < end:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise RuntimeError("run cancelled")
+                    time.sleep(0.02)
+
+            def generate(self, model, messages, *, temperature=0.2,
+                         max_tokens=None, cancel_event=None):
+                self.seen = cancel_event
+                try:
+                    self._await(cancel_event)
+                    return "late success (must be discarded)"
+                finally:
+                    self.end_time = time.monotonic()
+
+            def generate_stream(self, model, messages, *, temperature=0.2,
+                                max_tokens=None, cancel_event=None):
+                self.seen = cancel_event
+                try:
+                    self._await(cancel_event)
+                    yield "late success (must be discarded)"
+                finally:
+                    self.end_time = time.monotonic()
+
+            def generate_structured(self, *a, **k):
+                raise NotImplementedError("test fake")
+
+            def embed(self, model, text):
+                raise NotImplementedError("test fake")
+
+            def list_available_models(self):
+                return [{"id": "fake"}]
+
+        provider = _HangingProvider()
+        registry = AgentRegistry()
+        registry.register(CodingAgent(provider))
+        step = PlanStep(
+            step_id="1", agent_id="coding", input={"message": "write it"},
+            expected_output_type="text",
+        )
+        expired = threading.Event()
+        abort = threading.Event()
+        run_cancel = threading.Event()  # never set: only the timeout fires
+
+        def body():
+            return _run_step_body(
+                step, "t", {"message": "write it"}, registry,
+                0, 30_000, run_cancel, None, None, expired, abort,
+            )
+
+        start = time.monotonic()
+        result = _invoke_with_wall_clock(
+            step, contextvars.copy_context(), body,
+            timeout_ms=300, cancel_event=run_cancel,
+            expired=expired, abort_event=abort,
+        )
+        wall_elapsed = time.monotonic() - start
+        assert result.error == "step timed out"
+        assert expired.is_set()
+        assert abort.is_set()
+        # CodingAgent wraps the step abort in its own watchdog event, so
+        # the provider never sees `abort` itself — but the wrapper must
+        # have fired as a result of the timeout.
+        assert provider.seen is not None
+        # The wall clock already fired; the orphaned generation must now
+        # finish promptly (bounded wait — a regression hangs the full
+        # 30s provider budget instead).
+        deadline = time.monotonic() + 5.0
+        while provider.end_time is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert provider.end_time is not None, "orphaned generation never aborted"
+        assert provider.seen.is_set()
+        # Generation must end promptly after the deadline, not run to
+        # its 30s HTTP budget.
+        assert provider.end_time is not None
+        assert provider.end_time - start < 3.0, (
+            provider.end_time - start, wall_elapsed
+        )
+
+    def test_output_limit_failure_does_not_retry(self):
+        from app.agents.base import Agent, DelegationResponse, StepStatus
+        from app.agents.registry import AgentRegistry
+        from app.orchestration.plan import PlanStep
+        from app.orchestration.plan_graph import _run_step_body
+
+        class _TruncatedAgent(Agent):
+            agent_id = "truncated"
+            name = "Truncated"
+            description = "always hits output limit"
+
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self, request) -> DelegationResponse:
+                self.calls += 1
+                return DelegationResponse(
+                    step_id=request.step_id,
+                    status=StepStatus.FAILURE,
+                    error=(
+                        "Execution failed: model hit its output limit "
+                        "before answering (finish_reason=length, no visible text)"
+                    ),
+                )
+
+        registry = AgentRegistry()
+        agent = _TruncatedAgent()
+        registry.register(agent)
+        result = _run_step_body(
+            PlanStep(step_id="1", agent_id="truncated",
+                     input={"message": "do it"},
+                     expected_output_type="text"),
+            "t", {"message": "do it"}, registry,
+            2, 120_000, None, None, None, threading.Event(), threading.Event(),
+        )
+        assert result.status.value == "failure"
+        assert "output limit" in (result.error or "")
+        assert agent.calls == 1, agent.calls

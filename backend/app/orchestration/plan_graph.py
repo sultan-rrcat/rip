@@ -202,6 +202,7 @@ def _invoke_with_wall_clock(
     timeout_ms: int,
     cancel_event: threading.Event | None = None,
     expired: threading.Event | None = None,
+    abort_event: threading.Event | None = None,
 ) -> StepResult:
     """Run one step's full body under a wall-clock deadline.
 
@@ -212,7 +213,10 @@ def _invoke_with_wall_clock(
     Cooperative cancel: checked before submit and again on result.
     On timeout `expired` is set so the orphaned background body stays
     side-effect free (no span updates, no late deltas/events — the span
-    lifecycle lives in the node thread, not the body).
+    lifecycle lives in the node thread, not the body). `abort_event`, when
+    given, is also set on timeout so the in-flight provider stream
+    (which only sees its cancel_event) aborts promptly instead of
+    streaming past the deadline.
     """
     if is_cancelled(cancel_event):
         return _cancelled_result(step)
@@ -223,6 +227,8 @@ def _invoke_with_wall_clock(
     except FuturesTimeoutError:
         if expired is not None:
             expired.set()
+        if abort_event is not None:
+            abort_event.set()
         return StepResult(
             step_id=step.step_id,
             agent_id=step.executor_id,
@@ -260,6 +266,7 @@ def _run_step_body(
     on_delta: Callable[[str], None] | None = None,
     tool_registry: ToolRegistry | None = None,
     expired: threading.Event | None = None,
+    abort_event: threading.Event | None = None,
 ) -> StepResult:
     """Delegation + status-driven retry loop.
 
@@ -269,6 +276,11 @@ def _run_step_body(
     carries the executor identity — agent_id or tool_id).
     `expired` aborts the orphaned background body between attempts after
     the wall clock already reported a timeout (sparing the Ollama server).
+    `abort_event` is the provider-facing cancel flag (run-cancel OR
+    expiry); when given it is forwarded to DelegationRequest/tool
+    executor so an in-flight generation aborts promptly on timeout.
+    Control-flow checks still use `cancel_event` (run) + `expired`
+    separately so timeout vs cancelled errors stay distinct.
     """
     import json as _json
 
@@ -282,6 +294,10 @@ def _run_step_body(
     # prompts/logs as input data — it rides the typed field. Non-int
     # values (LLM-invented) are dropped in favor of the agent default.
     _step_max_tokens = resolved_input.pop("max_tokens", None) if not is_tool else None
+    # Provider-facing cancel: aborts in-flight generation on run-cancel OR
+    # wall-clock expiry. Control flow above/below still distinguishes the
+    # two via cancel_event/expired separately.
+    provider_cancel = abort_event if abort_event is not None else cancel_event
     agent_request = (
         None
         if is_tool
@@ -292,7 +308,7 @@ def _run_step_body(
             timeout_ms=timeout_ms,
             max_tokens=_step_max_tokens if isinstance(_step_max_tokens, int) else None,
             on_delta=on_delta,
-            cancel_event=cancel_event,
+            cancel_event=provider_cancel,
         )
     )
 
@@ -340,7 +356,7 @@ def _run_step_body(
                     step_id=step.step_id,
                     trace_id=trace_id,
                     timeout_ms=timeout_ms,
-                    cancel_event=cancel_event,
+                    cancel_event=provider_cancel,
                 )
                 status = StepStatus.SUCCESS if tool_resp.ok else StepStatus.FAILURE
                 output = tool_resp.output
@@ -374,6 +390,16 @@ def _run_step_body(
             attempt + 1,
             response.status.value,
         )
+        # Truncation with no visible text is deterministic for this budget:
+        # retrying with identical max_tokens just burns another full
+        # generation. Fail fast instead.
+        if response.error and "output limit before answering" in response.error:
+            logger.warning(
+                "step %s not retrying output-limit failure (identical "
+                "parameters would repeat it)",
+                step.step_id,
+            )
+            break
 
     if response is None:  # safeguard
         return StepResult(
@@ -520,6 +546,23 @@ def _make_step_node(
 
         step_timeout = _step_timeout_ms(step, timeout_ms)
         expired = threading.Event()
+        # Provider-facing abort: run-cancel OR wall-clock expiry. The
+        # provider only sees one cancel_event, so this ORs both — the
+        # node thread sets it on expiry (via _invoke_with_wall_clock)
+        # and the forwarder sets it on run-cancel. Control flow keeps
+        # expired/run-cancel separate for distinct error messages.
+        step_abort = threading.Event()
+        stop_fwd = threading.Event()
+
+        def _forward_abort() -> None:
+            while not stop_fwd.is_set():
+                if expired.is_set() or is_cancelled(cancel_event):
+                    step_abort.set()
+                    return
+                stop_fwd.wait(0.05)
+
+        _fwd_thread = threading.Thread(target=_forward_abort, daemon=True)
+        _fwd_thread.start()
 
         def _emit_delta(text: str) -> None:
             # Live-only deltas from an already-timed-out body would stream
@@ -548,7 +591,7 @@ def _make_step_node(
                 )
             return _run_step_body(
                 step, trace_id, resolved_input, registry, max_retries, step_timeout,
-                cancel_event, delta_sink, tool_registry, expired,
+                cancel_event, delta_sink, tool_registry, expired, step_abort,
             )
 
         # Span lifecycle lives HERE in the node thread (not the background
@@ -567,14 +610,21 @@ def _make_step_node(
             trace_context=parent_span_ctx,
         ) as step_obs:
             run_ctx = contextvars.copy_context()
-            result = _invoke_with_wall_clock(
-                step, run_ctx, body, step_timeout, cancel_event, expired
-            )
-            step_obs.update(output={
-                "status": result.status.value,
-                "output": truncate(result.output, 2000),
-                "error": truncate(result.error, 500),
-            })
+            try:
+                result = _invoke_with_wall_clock(
+                    step, run_ctx, body, step_timeout, cancel_event, expired,
+                    step_abort,
+                )
+                step_obs.update(output={
+                    "status": result.status.value,
+                    "output": truncate(result.output, 2000),
+                    "error": truncate(result.error, 500),
+                })
+            finally:
+                stop_fwd.set()
+                if expired.is_set():
+                    step_abort.set()
+                _fwd_thread.join(timeout=1.0)
         if on_event is not None:
             on_event(
                 {

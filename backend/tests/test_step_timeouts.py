@@ -61,7 +61,8 @@ class SilentStreamProvider(ModelProvider):
         raise NotImplementedError("test fake")
 
     def generate_structured(self, model, messages, schema, *, temperature=0.0,
-                            timeout_ms=None, cancel_event=None):
+                            timeout_ms=None, cancel_event=None,
+                            max_tokens=None):
         raise NotImplementedError("test fake")
 
     def list_available_models(self) -> list[dict]:

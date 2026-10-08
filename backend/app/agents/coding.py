@@ -41,6 +41,28 @@ CODING_SYSTEM_PROMPT = (
 )
 
 
+def _provider_finish_reason(provider: ModelProvider) -> str | None:
+    """Finish reason of the provider's last generation, if exposed."""
+    reason = getattr(provider, "last_finish_reason", None)
+    if callable(reason):
+        try:
+            reason = reason()
+        except Exception:  # noqa: BLE001 - tracing must never break runs
+            return None
+    return reason if isinstance(reason, str) else None
+
+
+def _provider_reasoning_chars(provider: ModelProvider) -> int:
+    """Reasoning chars streamed with the provider's last generation."""
+    chars = getattr(provider, "last_reasoning_chars", None)
+    if callable(chars):
+        try:
+            chars = chars()
+        except Exception:  # noqa: BLE001 - tracing must never break runs
+            return 0
+    return chars if isinstance(chars, int) else 0
+
+
 class CodingAgent(Agent):
     agent_id = "coding"
     name = "Coding Agent"
@@ -138,9 +160,12 @@ class CodingAgent(Agent):
                     )
             except RuntimeError:
                 if state["quiet_timeout"]:
+                    reasoning_chars = _provider_reasoning_chars(self._provider)
                     logger.warning(
-                        "coding no visible output within %.0fs step=%s",
+                        "coding no visible output within %.0fs step=%s "
+                        "(reasoning_chars=%d)",
                         CODING_FIRST_VISIBLE_TIMEOUT_S, request.step_id,
+                        reasoning_chars,
                     )
                     result = DelegationResponse(
                         step_id=request.step_id,
@@ -150,6 +175,11 @@ class CodingAgent(Agent):
                         error=(
                             "Execution failed: model streamed no visible "
                             f"output within {CODING_FIRST_VISIBLE_TIMEOUT_S:.0f}s"
+                            + (
+                                f" ({reasoning_chars} thinking chars streamed, "
+                                "budget burned in chain-of-thought)"
+                                if reasoning_chars else ""
+                            )
                         ),
                     )
                     duration_ms = (time.perf_counter() - start) * 1000
@@ -167,14 +197,39 @@ class CodingAgent(Agent):
             # renders as an empty chat bubble (and skips the retry loop),
             # while FAILURE retries honestly and surfaces the error.
             if not (output_text or "").strip():
-                logger.warning("coding empty output step=%s", request.step_id)
-                result = DelegationResponse(
-                    step_id=request.step_id,
-                    status=StepStatus.FAILURE,
-                    output=None,
-                    confidence=constants.CONFIDENCE_LOW,
-                    error="Execution failed: model returned no text",
-                )
+                finish_reason = _provider_finish_reason(self._provider)
+                reasoning_chars = _provider_reasoning_chars(self._provider)
+                if finish_reason == "length":
+                    logger.warning(
+                        "coding output limit with no visible text step=%s "
+                        "(reasoning_chars=%d)",
+                        request.step_id, reasoning_chars,
+                    )
+                    result = DelegationResponse(
+                        step_id=request.step_id,
+                        status=StepStatus.FAILURE,
+                        output=None,
+                        confidence=constants.CONFIDENCE_LOW,
+                        error=(
+                            "Execution failed: model hit its output limit "
+                            "before answering (finish_reason=length, no "
+                            "visible text"
+                            + (
+                                f", {reasoning_chars} thinking chars streamed"
+                                if reasoning_chars else ""
+                            )
+                            + ")"
+                        ),
+                    )
+                else:
+                    logger.warning("coding empty output step=%s", request.step_id)
+                    result = DelegationResponse(
+                        step_id=request.step_id,
+                        status=StepStatus.FAILURE,
+                        output=None,
+                        confidence=constants.CONFIDENCE_LOW,
+                        error="Execution failed: model returned no text",
+                    )
             else:
                 result = DelegationResponse(
                     step_id=request.step_id,
