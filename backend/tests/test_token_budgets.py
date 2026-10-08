@@ -90,6 +90,39 @@ def test_code_builder_budget_generous(tmp_path, monkeypatch) -> None:
     _validator(_RecordingProvider()).validate(plan)
 
 
+def test_code_review_budget_uses_shared_default(tmp_path, monkeypatch) -> None:
+    # Review/explain is input-heavy but output-short: cap at the shared
+    # default so "review the python code" cannot burn the 300s wall-clock.
+    from app.orchestration.builders import _coding_budget_for
+
+    assert _coding_budget_for("review the python code") == settings.default_max_tokens
+    assert _coding_budget_for("explain validator.py") == settings.default_max_tokens
+    assert _coding_budget_for("write a test") == settings.coding_max_tokens
+    assert settings.coding_max_tokens == 4096
+
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    nb = "nb1"
+    (tmp_path / nb).mkdir()
+    fid = "11111111-1111-1111-1111-111111111111"
+    (tmp_path / nb / (fid + ".py")).write_text("x = 1\n")
+    snap = f"1 file(s): app.py [ready:code] id={fid}"
+    route = RouterResult(intent=Intent.CODE, confidence=0.9, file_hint="")
+    plan = build("review the python code", route, snap, nb)
+    assert plan is not None and len(plan.steps) == 1
+    assert plan.steps[0].input["max_tokens"] == settings.default_max_tokens
+
+
+def test_code_vague_ask_with_many_files_clarifies() -> None:
+    route = RouterResult(intent=Intent.CODE, confidence=0.9, file_hint="")
+    snap = (
+        "2 file(s): a.py [ready:code] id=11111111-1111-1111-1111-111111111111; "
+        "b.py [ready:code] id=22222222-2222-2222-2222-222222222222"
+    )
+    plan = build("review the python code", route, snap, "nb1")
+    assert plan is not None and len(plan.steps) == 1
+    assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
+
+
 def test_coding_agent_default_is_coding_budget() -> None:
     provider = _RecordingProvider()
     resp = CodingAgent(provider).execute(

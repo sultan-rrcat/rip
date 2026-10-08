@@ -41,6 +41,13 @@ _CODE_MAX_BYTES_TOTAL = 64 * 1024
 
 #: Snapshot file_ids are DB UUIDs; the builder never trusts anything else
 #: for a disk path (no path separators reach open()).
+#: Review-like asks (read-only) reuse the shared default budget — only
+#: generation (write/create/new test/page) needs the generous coding budget,
+#: which is still bounded to finish inside the agent wall-clock.
+_REVIEW_RE = re.compile(
+    r"\b(review|explain|describe|summariz\w*|what\s+does|how\s+does|walk\s*through)\b",
+    re.IGNORECASE,
+)
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -719,6 +726,15 @@ def _read_code_file(notebook_id: str, name: str, file_id: str) -> str | None:
         return None
 
 
+def _coding_budget_for(request_text: str) -> int:
+    """Output budget for a CODE step: generous only for generation."""
+    from app.core.config import settings as _settings
+
+    if _REVIEW_RE.search(request_text or ""):
+        return _settings.default_max_tokens
+    return _settings.coding_max_tokens
+
+
 def build_code(
     request_text: str,
     file_hint: str = "",
@@ -734,6 +750,30 @@ def build_code(
     (write new code from scratch) — not a missing-file situation.
     """
     targets = _resolve_code_targets(file_hint, notebook_context)
+    if not (file_hint or "").strip() and len(_ready_code(notebook_context)) > 1:
+        # Vague ask ("review the python code") with several candidates:
+        # inlining all of them blew the 300s wall-clock (validator.py trace).
+        # Ask which file instead of reviewing everything.
+        names = ", ".join(n for n, _ in _ready_code(notebook_context)[:5])
+        detail = (
+            f"There are several code files ({names}). Ask the user to name "
+            "the file to review, or clarify whether to review all of them"
+        )
+        return Plan(
+            plan_id=str(uuid.uuid4()),
+            goal=request_text,
+            steps=[
+                PlanStep(
+                    step_id="1",
+                    agent_id="coding",
+                    input={
+                        "message": f"{detail}. Request: {request_text}",
+                        "max_tokens": settings.default_max_tokens,
+                    },
+                    expected_output_type="clarification",
+                )
+            ],
+        )
     if not targets:
         if (file_hint or "").strip():
             # User named a file that resolves to nothing: honest
@@ -766,7 +806,7 @@ def build_code(
                     agent_id="coding",
                     input={
                         "message": f"Request: {request_text}",
-                        "max_tokens": settings.coding_max_tokens,
+                        "max_tokens": _coding_budget_for(request_text),
                     },
                     expected_output_type="answer",
                 )
@@ -801,12 +841,12 @@ def build_code(
                 step_id="1",
                 agent_id="coding",
                 input={
-                    # Test scripts + file echoes are long: generous budget so
-                    # output is cut by content, never by the token cap.
+                    # Generation gets headroom so output is cut by content,
+                    # never by the token cap; reviews reuse the shared default.
                     "message": (
                         f"Request: {request_text}\n\n{files_block}"
                     ),
-                    "max_tokens": settings.coding_max_tokens,
+                    "max_tokens": _coding_budget_for(request_text),
                 },
                 expected_output_type="answer",
             )

@@ -135,10 +135,12 @@ class Settings(BaseSettings):
     default_timeout_ms: int = 120000
     # Per-task output budgets (both ride the same Ollama window — they cap
     # generated tokens only, they do not extend ollama_context_window).
-    # Coding steps inline whole files + emit test scripts, so they get headroom;
-    # chat is greetings/small-talk and stays cheap. Builders set these as
-    # per-step max_tokens; any step may override via input max_tokens.
-    coding_max_tokens: int = 32768
+    # Coding generation gets headroom over the shared default, but stays
+    # bounded: 32768 never finished inside the 300s agent wall-clock on the
+    # 9b host model (trace: "review the python code" timed out at exactly
+    # 300s). 4096 fits ~160s at ~25 tok/s with prompt-processing headroom.
+    # Review/explain asks reuse the shared default (see _coding_budget_for).
+    coding_max_tokens: int = 4096
     chat_max_tokens: int = 1024
 
     # Control-plane call deadlines. The L1 router and the L3 ReAct planner emit
