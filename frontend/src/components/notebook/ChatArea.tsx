@@ -19,6 +19,103 @@ interface ChatAreaProps {
 }
 
 const markdownComponents: Components = {
+  // Headings: Tailwind preflight resets h1-h6 to inherit (same size/weight
+  // as body text), so without explicit classes every heading renders at the
+  // parent's text-xs size. Give each level a distinct type scale.
+  h1({ children }) {
+    return (
+      <h1 className="mt-4 mb-2 text-xl font-bold leading-tight text-gray-900">
+        {children}
+      </h1>
+    )
+  },
+  h2({ children }) {
+    return (
+      <h2 className="mt-4 mb-2 text-lg font-bold leading-tight text-gray-900">
+        {children}
+      </h2>
+    )
+  },
+  h3({ children }) {
+    return (
+      <h3 className="mt-3 mb-1.5 text-base font-semibold leading-snug text-gray-900">
+        {children}
+      </h3>
+    )
+  },
+  h4({ children }) {
+    return (
+      <h4 className="mt-3 mb-1 text-sm font-semibold leading-snug text-gray-900">
+        {children}
+      </h4>
+    )
+  },
+  h5({ children }) {
+    return (
+      <h5 className="mt-2 mb-1 text-sm font-semibold text-gray-800">
+        {children}
+      </h5>
+    )
+  },
+  h6({ children }) {
+    return (
+      <h6 className="mt-2 mb-1 text-xs font-semibold uppercase tracking-wide text-gray-700">
+        {children}
+      </h6>
+    )
+  },
+  p({ children }) {
+    return <p className="my-2 text-sm leading-relaxed">{children}</p>
+  },
+  a({ children, href }) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="text-blue-600 underline underline-offset-2 hover:text-blue-800"
+      >
+        {children}
+      </a>
+    )
+  },
+  // Lists: preflight also strips bullets/numbers and margins.
+  ul({ children }) {
+    return <ul className="my-2 ml-5 list-disc space-y-1 text-sm">{children}</ul>
+  },
+  ol({ children }) {
+    return (
+      <ol className="my-2 ml-5 list-decimal space-y-1 text-sm">{children}</ol>
+    )
+  },
+  li({ children }) {
+    return <li className="leading-relaxed">{children}</li>
+  },
+  blockquote({ children }) {
+    return (
+      <blockquote className="my-2 border-l-4 border-gray-300 pl-3 italic text-gray-600">
+        {children}
+      </blockquote>
+    )
+  },
+  hr() {
+    return <hr className="my-4 border-gray-200" />
+  },
+  strong({ children }) {
+    return (
+      <strong className="font-semibold text-gray-800">{children}</strong>
+    )
+  },
+  // Fenced blocks render as <pre><code class="language-*">. The inner code
+  // branch below handles highlighting; reset the outer <pre> so the
+  // highlighter's own box is the visible frame (no double margins).
+  pre({ children }) {
+    return (
+      <pre className="my-3 overflow-x-auto rounded-lg text-[13px] [&>div]:!m-0">
+        {children}
+      </pre>
+    )
+  },
   // Custom renderer for code blocks (fenced blocks carry a language-* class;
   // inline code never does, so the class presence is the discriminator)
   code(props) {
@@ -32,12 +129,17 @@ const markdownComponents: Components = {
         style={oneLight as { [key: string]: CSSProperties }}
         language={match[1]}
         PreTag="div"
+        customStyle={{ margin: 0, fontSize: '13px' }}
         {...rest}
       >
         {String(children).replace(/\n$/, '')}
       </SyntaxHighlighter>
     ) : (
-      <code className={className}>{children}</code>
+      <code
+        className={`rounded bg-gray-200 px-1 py-0.5 font-mono text-[0.85em] text-gray-800 ${className ?? ''}`}
+      >
+        {children}
+      </code>
     )
   },
   // Ensure tables look good with Tailwind
@@ -193,7 +295,7 @@ function AssistantMessage({
       {/* content */}
       <div className="flex-1 space-y-1">
         <p className="text-xs font-small text-gray-300">Assistant</p>
-        <div className="text-xs text-gray-600 leading-relaxed max-w-2xl border border-gray-200 p-4 rounded-xl rounded-tl-none bg-gray-100">
+        <div className="text-sm text-gray-600 leading-relaxed max-w-2xl border border-gray-200 p-4 rounded-xl rounded-tl-none bg-gray-100">
           {children ? (
             children
           ) : (
