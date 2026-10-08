@@ -163,7 +163,7 @@ class Aggregator:
         # L2 builder plans use numeric step_ids ("1","2") and keep the
         # existing multi-SHOW behavior so chart placeholders aren't dropped.
         if step_meta and all(
-            re.fullmatch(r"r\d+|r-final|r0", sid or "") for sid in step_meta
+            re.fullmatch(r"r\d+(?:_\d+)?|r-final|r0", sid or "") for sid in step_meta
         ):
             last = ordered_successful[-1] if ordered_successful else None
             if last is not None:
@@ -172,7 +172,7 @@ class Aggregator:
                     (last_meta.expected_output_type or "text").lower()
                     if last_meta else "text"
                 )
-                if last_eot in ("answer", "summary", "text"):
+                if last_eot in ("answer", "summary", "text", "document", "chart"):
                     shown_ids = {r.step_id for r in shown}
                     if last.step_id in shown_ids:
                         shown = [last]

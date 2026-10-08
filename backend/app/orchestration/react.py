@@ -16,6 +16,7 @@ from app.orchestration.react_engine import (
     _SCRATCHPAD_TOTAL_LIMIT,
     _TOOL_INPUT_HINTS,
     _TOOL_OUTPUT_TYPES,
+    MAX_DAG_STEPS_PER_ITERATION,
     MAX_PLOT_CHARTS_PER_RUN,
     MAX_REACT_ITERATIONS,
     REACT_SCHEMA,
@@ -24,6 +25,7 @@ from app.orchestration.react_engine import (
     _action_signature,
     _chart_observation,
     _code_read_hint,
+    _coerce_dag_steps,
     _default_doc_format,
     _default_react_mode,
     _doc_content_key,
@@ -41,6 +43,7 @@ from app.orchestration.react_engine import (
 )
 
 __all__ = [
+    "MAX_DAG_STEPS_PER_ITERATION",
     "MAX_PLOT_CHARTS_PER_RUN",
     "MAX_REACT_ITERATIONS",
     "REACT_SCHEMA",
@@ -57,6 +60,7 @@ __all__ = [
     "_action_signature",
     "_chart_observation",
     "_code_read_hint",
+    "_coerce_dag_steps",
     "_default_doc_format",
     "_default_react_mode",
     "_doc_content_key",

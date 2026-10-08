@@ -221,6 +221,39 @@ def test_react_answers_after_tool_observation() -> None:
     assert "{{" not in str([s.input for s in outcome.plan.steps])
 
 
+def test_react_executes_complete_dag_per_iteration() -> None:
+    # Multi-step support: one iteration emits reasoning draft + doc.generate
+    # with depends_on wiring; failure repairs next iteration.
+    from app.orchestration.react import run_react
+
+    provider = FakeLayeredProvider(text="email ready", queued=[
+        {"thought": "draft + render", "is_final": False, "steps": [
+            {"step_id": "1", "executor": "reasoning",
+             "input": {"message": "Draft leave email"},
+             "expected_output_type": "text"},
+            {"step_id": "2", "executor": "doc.generate",
+             "input": {"title": "Leave Email",
+                       "sections": [{"heading": "Email", "body": "Dear X"}],
+                       "target_format": "pdf"},
+             "depends_on": ["1"], "expected_output_type": "document"},
+        ]},
+        {"thought": "done", "executor": "reasoning",
+         "input": {}, "is_final": True, "answer": "email ready"},
+    ])
+    agents, tools = _react_orchestrator(provider)
+    outcome = run_react(
+        "write the email in pdf format", provider, agents, tools,
+        trace_id="t", notebook_id="nb-1",
+        notebook_context="(no documents)",
+    )
+    ids = [s.step_id for s in outcome.plan.steps]
+    # r1_1 + r1_2 executed in iteration 1, terminal doc fast-path breaks
+    # without planner-final or r-final synthesis.
+    assert "r1_1" in ids and "r1_2" in ids
+    assert "r-final" not in ids
+    assert provider.structured_calls == 1
+
+
 def test_react_rejects_unknown_executor_then_recovers() -> None:
     from app.orchestration.react import run_react
 

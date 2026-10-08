@@ -312,6 +312,21 @@ class Router:
             if intent in (Intent.CONVERT_ONE, Intent.CONVERT_ALL)
             else ""
         )
+        if intent in (Intent.CONVERT_ONE, Intent.CONVERT_ALL) and (
+            not file_hint or not target_format
+        ):
+            # Slot-guard: a convert without a resolvable source and an
+            # explicit md/docx/pdf target is a model hallucination (e.g.
+            # "write an email in pdf format" — new content, no file).
+            # Fail open to UNKNOWN so ReAct drafts + doc.generate
+            # instead of a builder miss with convert-biased plan_error.
+            return RouterResult(
+                intent=Intent.UNKNOWN,
+                confidence=0.0,
+                routed_by="llm",
+                file_hint=file_hint,
+                target_format=target_format,
+            )
         if intent is Intent.UNKNOWN:
             return RouterResult(
                 intent=intent,

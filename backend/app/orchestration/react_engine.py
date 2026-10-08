@@ -1,9 +1,16 @@
 """L3 ReAct engine — general fallback when no L2 deterministic builder applies.
 
-Unlike upfront DAG planning, ReAct interleaves thought → action → observation:
-each iteration proposes exactly ONE step, executes it immediately, and appends
-the observation to the scratchpad. No placeholder wiring is ever emitted, so
-the ecd93eb4 ungrounded-fan-in class cannot occur — inputs are inlined.
+ReAct interleaves thought → DAG → observations: each iteration proposes
+one COMPLETE DAG (1-5 steps via `steps[]`; legacy single-step
+`executor`/`input` is accepted as a 1-step DAG), executes it immediately
+via `run_plan_graph`, and appends per-step observations to the scratchpad.
+A failed DAG is repaired in full on the next iteration — no resumption.
+
+Dataflow uses `depends_on` + `{{id}}` placeholders (validated by
+`Plan.from_model` auto-wire + `PlanValidator`; `is_final:true` must not
+carry `steps[]`). Terminal fast-path: a fully-successful DAG that already
+delivered `doc.generate` breaks without an extra planner "done" turn, and
+synthesis is skipped so the artifact summary stays verbatim and concise.
 
 Bounded: max 6 iterations, cooperative cancel, per-step timeouts inherited
 from run_plan_graph. Returns a (Plan, ExecutionResult) pair so the standard
@@ -40,6 +47,7 @@ from app.orchestration.idle_guard import IdleGuard
 from app.orchestration.plan import Plan, PlanStep
 from app.orchestration.plan_graph import run_plan_graph
 from app.orchestration.results import ExecutionResult, StepResult
+from app.orchestration.validator import PlanValidator
 from app.providers.base import ModelProvider
 from app.tools.registry import ToolRegistry
 
@@ -52,13 +60,35 @@ REACT_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "thought": {"type": "string"},
+        # Legacy single-step shape (compat): executor + input.
         "executor": {"type": "string"},
         "input": {"type": "object"},
+        # Multi-step DAG shape (preferred): complete DAG per iteration.
+        # If steps is present and non-empty it wins over executor/input.
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step_id": {"type": "string"},
+                    "executor": {"type": "string"},
+                    "input": {"type": "object"},
+                    "depends_on": {"type": "array", "items": {"type": "string"}},
+                    "expected_output_type": {"type": "string"},
+                },
+                "required": ["executor", "input"],
+            },
+        },
         "is_final": {"type": "boolean"},
         "answer": {"type": "string"},
     },
-    "required": ["thought", "executor", "is_final"],
+    "required": ["thought", "is_final"],
 }
+
+#: Max steps in one ReAct DAG iteration. Bounds the structured-output
+#: size for the small planner model and the single-Ollama execution cost.
+#: 6 iterations × 5 steps = 30 executions worst case, still bounded.
+MAX_DAG_STEPS_PER_ITERATION = 5
 
 _TOOL_OUTPUT_TYPES = {
     "rag.query": "chunks",
@@ -273,6 +303,99 @@ def _output_type(executor: str, is_final: bool) -> str:
     if is_final:
         return "answer"
     return _TOOL_OUTPUT_TYPES.get(executor, "text")
+
+
+def _coerce_dag_steps(
+    raw: dict,
+    iteration: int,
+    known_agents: set[str],
+    known_tools: set[str],
+) -> tuple[list[dict] | None, str | None]:
+    """Coerce one ReAct planner turn into DAG step dicts for Plan.from_model.
+
+    Returns (prepared_steps, None) on shape-ok, or (None, hint) when the
+    turn is malformed and must become an idle turn without executing.
+    Supports the legacy single-step shape (executor+input) by wrapping it
+    as a 1-step DAG so existing callers/tests keep passing.
+
+    Each prepared step is a Plan.from_model-ready dict:
+    {step_id, agent_id|tool_id, input, depends_on, expected_output_type}.
+    Executor remapping (code.read→coding), rag mode defaulting and doc
+    format defaulting are applied here; request-text defaulting for
+    doc.generate needs the caller to pass request_text — handled by the
+    caller after coercion via _default_doc_format per doc.generate step.
+    """
+    raw_steps = raw.get("steps")
+    if raw_steps is None:
+        # Legacy compat: single executor/input turn.
+        executor = str(raw.get("executor", "") or "").strip()
+        if not executor:
+            return None, "turn proposed no steps and no executor"
+        raw_input = raw.get("input", {}) or {}
+        if not isinstance(raw_input, dict):
+            return None, "step input must be an object"
+        raw_steps = [
+            {
+                "step_id": f"r{iteration}",
+                "executor": executor,
+                "input": raw_input,
+            }
+        ]
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return None, "turn proposed an empty steps array"
+    if len(raw_steps) > MAX_DAG_STEPS_PER_ITERATION:
+        return (
+            None,
+            (
+                f"turn proposed {len(raw_steps)} steps "
+                f"(max {MAX_DAG_STEPS_PER_ITERATION}); split across iterations"
+            ),
+        )
+    # First pass: assign deterministic step ids, keep raw→assigned map so
+    # numeric/custom depends_on refs ("1", "step_1") still resolve.
+    id_map: dict[str, str] = {}
+    for idx, rs in enumerate(raw_steps, start=1):
+        if not isinstance(rs, dict):
+            return None, f"step {idx} is not an object"
+        raw_id = str(rs.get("step_id") or str(idx)).strip() or str(idx)
+        assigned = f"r{iteration}_{idx}" if len(raw_steps) > 1 else f"r{iteration}"
+        id_map[raw_id] = assigned
+        id_map[str(idx)] = assigned
+    prepared: list[dict] = []
+    for idx, rs in enumerate(raw_steps, start=1):
+        if not isinstance(rs, dict):
+            return None, f"step {idx} is not an object"
+        executor = str(rs.get("executor", "") or "").strip()
+        if not executor:
+            return None, f"step {idx} is missing executor"
+        if executor not in known_agents and executor not in known_tools:
+            return None, f"UNKNOWN_EXECUTOR:{executor}"
+        action_input = rs.get("input", {}) or {}
+        if not isinstance(action_input, dict):
+            return None, f"step {idx} input must be an object"
+        action_input = _normalize_react_input(executor, dict(action_input))
+        executor = _remap_executor(executor, action_input)
+        if executor not in known_agents and executor not in known_tools:
+            return None, f"UNKNOWN_EXECUTOR:{executor}"
+        raw_id = str(rs.get("step_id") or str(idx)).strip() or str(idx)
+        step_id = id_map.get(raw_id, f"r{iteration}_{idx}")
+        depends_on: list[str] = []
+        raw_deps = rs.get("depends_on", []) or []
+        if not isinstance(raw_deps, list):
+            return None, f"step {idx} depends_on must be an array"
+        for dep in raw_deps:
+            depends_on.append(id_map.get(str(dep), str(dep)))
+        eot = rs.get("expected_output_type") or _output_type(executor, False)
+        is_tool = executor in known_tools
+        step_dict: dict = {
+            "step_id": step_id,
+            ("tool_id" if is_tool else "agent_id"): executor,
+            "input": action_input,
+            "depends_on": depends_on,
+            "expected_output_type": str(eot),
+        }
+        prepared.append(step_dict)
+    return prepared, None
 
 
 #: Fields the ReAct model may (wrongly) put the final answer into when it
@@ -615,25 +738,31 @@ def _build_react_system_prompt(
     """
     return (
         "You are a ReAct agent. Output EXACTLY one JSON object per turn: "
-        '{"thought","executor","input","is_final","answer"}. '
-        "One step per turn.\n"
+        '{"thought","steps","is_final","answer"}. '
+        "One COMPLETE DAG per turn (1-5 steps); if it fails you get the next iteration to repair it.\n"
         f"Agents: {agent_ids}\nTools: {tool_ids}\n"
         "Shape (mandatory, never violated):\n"
+        '- each steps[] element is {"step_id": "1", "executor": "<agent|tool>", "input": {...}, '
+        '"depends_on": ["1"], "expected_output_type": "answer|text|chunks|numbers|chart|document"}. '
+        'Legacy single-step {"executor","input"} is still accepted as a 1-step DAG.\n'
         '- input is a FLAT object, never nested under \'agent\'. WRONG: {"agent": {"message": "..."}}. RIGHT: {"query": "..."}.\n'
-        '- agent executor REQUIRES {"message": "<full task text>"} with observations inlined verbatim — never reference steps by number. A turn with an agent executor but no input.message is INVALID.\n'
-        "- tool executor REQUIRES its flat fields: "
+        '- agent step REQUIRES {"message": "<full task text>"} with observations inlined verbatim — never reference steps by number. A turn with an agent step but no input.message is INVALID.\n'
+        "- tool step REQUIRES its flat fields: "
         'rag.query {"query": "...", "file_id": "..."}, '
         'plot.chart {"chart_type": "bar", "labels": [...], "values": [...], "title": "<metric>: A vs B"}, '
         'doc.convert {"file_id": "...", "target_format": "md|docx|pdf"}, '
         'doc.generate {"title": "...", "sections": [{"heading": ..., "body": ...}], "target_format": "md|docx|pdf"}, '
         "notebook.inspect {}, "
         'code.read {"file_id": "..."} or {"file_name": "..."}.\n'
+        '- wire dataflow with depends_on + {{id}} placeholders: downstream input must contain {{1}} for depends_on ["1"]. '
+        "A step with depends_on but no placeholder, or a placeholder with no edge, is INVALID.\n"
         "Decide in order, stop at the first match:\n"
-        "1. Greeting/small talk with no task: is_final=true, answer directly, no tool.\n"
+        "1. Greeting/small talk with no task: is_final=true, answer directly, no steps.\n"
         "2. Empty notebook (snapshot shows no documents/files): NEVER rag.query/code.read/doc.convert — they return nothing. "
         "For write/create/generate/draft asks (email/letter/report in pdf/docx/md): "
-        "first a reasoning step with {\"message\": \"Draft <deliverable> for: <request>. Use [brackets] for unknown details (name/date/recipient).\"}, "
-        "then doc.generate with {\"title\", \"sections\": [{\"heading\",\"body\": full draft verbatim}], \"target_format\": pdf/docx/md from the request}. "
+        'emit ONE DAG with 2 steps: step 1 reasoning {"message": "Draft <deliverable> for: <request>. Use [brackets] for unknown details (name/date/recipient)."}, '
+        'step 2 doc.generate {"title", "sections": [{"heading","body": full draft verbatim}], "target_format": pdf/docx/md from the request} '
+        'with depends_on ["1"] — do NOT emit the draft alone and wait; the DAG must contain both steps. '
         "Draft with placeholders FIRST — never ask clarifying questions INSTEAD of drafting; put follow-ups in the final answer.\n"
         "3. CODE tasks (write/test/explain/review/debug code): notebook.inspect once, then code.read each needed file, "
         "then ONE coding step with file content inlined verbatim in {\"message\": \"...\"}. "
@@ -763,6 +892,14 @@ class ReActEngine:
         # doc.convert of a source upload to the same format can only
         # re-render the original — never the report just built.
         generated_formats: set[str] = set()
+        # Empty-notebook doc ask (trace fdb555bf: "write the email in pdf
+        # format" looped 4x reasoning, never doc.generate, then claimed
+        # inability). The prompt already orders draft → doc.generate, but
+        # every reasoning success resets the idle guard, so stalling looks
+        # like progress. Track consecutive agent successes to steer back.
+        lowered_req = (request_text or "").lower()
+        doc_wanted = any(fmt in lowered_req for fmt in ("pdf", "docx", "md"))
+        consecutive_reasoning = 0
         # Retrieval that returns the SAME text it already returned is not new
         # evidence, however differently the query was worded. Trace 7720c817:
         # five rag.query calls with five different query strings all returned
@@ -909,6 +1046,35 @@ class ReActEngine:
                 is_final = bool(raw.get("is_final", False))
                 thought_in = _truncate(str(raw.get("thought", "")), 300)
                 if is_final:
+                    if isinstance(raw.get("steps"), list) and raw.get("steps"):
+                        # Contradictory turn: is_final=true cannot also carry
+                        # steps[] to execute. The steps are dropped when we
+                        # prioritize is_final (trace iter-1 wasted a full DAG).
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "is_final with steps",
+                                    "error": "is_final with steps",
+                                }
+                            )
+                            no_step_reason = (
+                                "the assistant marked itself finished while also "
+                                "proposing steps to execute"
+                            )
+                            break
+                        scratchpad.append(
+                            "is_final=true must not carry steps[]; set is_final=false "
+                            "to execute the DAG, or is_final=true with answer only "
+                            "and no steps."
+                        )
+                        iter_obs.update(output={
+                            "status": "retry",
+                            "rejection_reason": "is_final with steps",
+                            "is_final": True,
+                        })
+                        continue
                     answer = raw.get("answer") or ""
                     if not str(answer).strip():
                         raw_input = raw.get("input", {}) or {}
@@ -961,6 +1127,323 @@ class ReActEngine:
                         }
                     )
                     break
+                # --- Multi-step DAG per iteration (preferred) ---
+                # If the planner emitted steps[], execute the COMPLETE DAG in
+                # this iteration. Any validation/execution failure is recorded
+                # as observations and the NEXT iteration repairs with a new DAG.
+                # Legacy single-step (executor/input, no steps[]) falls through
+                # to the original path below so existing callers keep working.
+                raw_dag = raw.get("steps")
+                if isinstance(raw_dag, list) and raw_dag:
+                    dag_error: str | None = None
+                    prepared, coerce_hint = _coerce_dag_steps(
+                        raw, iteration, known_agents, known_tools
+                    )
+                    if prepared is None:
+                        dag_error = coerce_hint or "malformed steps array"
+                        if dag_error.startswith("UNKNOWN_EXECUTOR:"):
+                            bad = dag_error.split(":", 1)[1]
+                            if guard.record_idle():
+                                iter_obs.update(
+                                    output={
+                                        "status": "failed",
+                                        "idle_guard": True,
+                                        "idle_reason": "unknown executor",
+                                        "error": _truncate(f"unknown executor {bad!r}", 500),
+                                    }
+                                )
+                                break
+                            scratchpad.append(
+                                f"unknown executor {bad!r}; use one of {agent_ids + tool_ids}."
+                            )
+                            iter_obs.update(
+                                output={
+                                    "status": "retry",
+                                    "rejection_reason": "unknown executor",
+                                    "thought": thought_in,
+                                    "executor": bad,
+                                }
+                            )
+                            continue
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "malformed DAG",
+                                    "error": _truncate(dag_error, 500),
+                                }
+                            )
+                            break
+                        scratchpad.append(f"{dag_error}; retry with a corrected DAG.")
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "rejection_reason": "malformed DAG",
+                                "thought": thought_in,
+                                "error": _truncate(dag_error, 500),
+                            }
+                        )
+                        continue
+                    # Per-step defaults + pre-flight (fail whole DAG fast).
+                    for ps in prepared:
+                        ex = ps.get("tool_id") or ps.get("agent_id") or ""
+                        if ex == "rag.query":
+                            ps["input"] = _default_react_mode(request_text, ps["input"])
+                        if ex == "doc.generate":
+                            ps["input"] = _default_doc_format(request_text, ps["input"])
+                    preflight_hint: str | None = None
+                    preflight_exec = ""
+                    for ps in prepared:
+                        ex = ps.get("tool_id") or ps.get("agent_id") or ""
+                        inp = ps.get("input", {}) or {}
+                        if ex in known_agents and not str(inp.get("message", "")).strip():
+                            preflight_hint = (
+                                f"agent {ex} needs input.message; retry with it"
+                            )
+                            preflight_exec = ex
+                            break
+                        if ex in known_tools:
+                            hint = _validate_react_input(ex, inp, has_files=has_files)
+                            if hint is not None:
+                                preflight_hint = f"{hint}; retry with corrected flat input"
+                                preflight_exec = ex
+                                break
+                        if corpus_empty and ex == "rag.query":
+                            preflight_hint = "rag.query refused: empty corpus"
+                            preflight_exec = ex
+                            break
+                        if ex == "doc.convert":
+                            dup = _redundant_convert_hint(inp, generated_formats, source_ids)
+                            if dup is not None:
+                                preflight_hint = dup
+                                preflight_exec = ex
+                                break
+                        sig = _action_signature(ex, inp)
+                        if sig in failed_actions:
+                            preflight_hint = (
+                                f"{ex} already failed ({failed_actions[sig]}); "
+                                "propose a different DAG"
+                            )
+                            preflight_exec = ex
+                            break
+                        if sig in seen_actions:
+                            preflight_hint = (
+                                f"{ex} with these exact inputs already succeeded; "
+                                "propose a different DAG"
+                            )
+                            preflight_exec = ex
+                            break
+                    if preflight_hint is not None:
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "DAG pre-flight failed",
+                                    "error": _truncate(preflight_hint, 500),
+                                }
+                            )
+                            break
+                        scratchpad.append(preflight_hint)
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "rejection_reason": "DAG pre-flight failed",
+                                "thought": thought_in,
+                                "executor": preflight_exec,
+                                "error": _truncate(preflight_hint, 500),
+                            }
+                        )
+                        continue
+                    try:
+                        dag_plan = Plan.from_model(
+                            plan_id=f"react-{iteration}",
+                            goal=request_text,
+                            raw_steps=prepared,
+                        )
+                        PlanValidator(self._agents, self._tools).validate(dag_plan)
+                    except Exception as e:  # noqa: BLE001 - validation is an observation
+                        if guard.record_idle():
+                            iter_obs.update(
+                                output={
+                                    "status": "failed",
+                                    "idle_guard": True,
+                                    "idle_reason": "DAG validation failed",
+                                    "error": _truncate(str(e), 500),
+                                }
+                            )
+                            break
+                        scratchpad.append(
+                            f"DAG validation failed: {e}; retry with depends_on + "
+                            "{{id}} placeholders fixed."
+                        )
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "rejection_reason": "DAG validation failed",
+                                "thought": thought_in,
+                                "error": _truncate(str(e), 500),
+                            }
+                        )
+                        continue
+                    guard.record_progress()
+                    step_parent = _get_trace_context()
+                    try:
+                        exec_result = run_plan_graph(
+                            dag_plan,
+                            self._agents,
+                            tool_registry=self._tools,
+                            trace_id=self._trace_id,
+                            notebook_id=notebook_id,
+                            context=None,
+                            fallback_message=request_text,
+                            timeout_ms=timeout_ms or settings.default_timeout_ms,
+                            on_event=_loop_on_event if on_event is not None else None,
+                            cancel_event=cancel_event,
+                            parent_span_ctx=step_parent,
+                        )
+                    except Exception as e:  # noqa: BLE001 - execution error is an observation
+                        scratchpad.append(
+                            f"iteration {iteration} DAG raised {e}; repair it next iteration."
+                        )
+                        iter_obs.update(
+                            output={
+                                "status": "retry",
+                                "thought": thought_in,
+                                "executors": [s.executor_id for s in dag_plan.steps],
+                                "error": _truncate(str(e), 500),
+                            }
+                        )
+                        continue
+                    outcomes = list(exec_result.step_results or [])
+                    if not outcomes:
+                        scratchpad.append(
+                            f"iteration {iteration} DAG produced nothing; try another DAG."
+                        )
+                        iter_obs.update(
+                            output={"status": "retry", "thought": thought_in}
+                        )
+                        continue
+                    thought = str(raw.get("thought", ""))[:300]
+                    for outcome in outcomes:
+                        ex = outcome.agent_id
+                        sid = outcome.step_id
+                        steps.append(
+                            next(s for s in dag_plan.steps if s.step_id == sid)
+                        )
+                        step_results.append(outcome)
+                        seen_actions.add(
+                            _action_signature(
+                                ex,
+                                next(
+                                    s.input
+                                    for s in dag_plan.steps
+                                    if s.step_id == sid
+                                ),
+                            )
+                        )
+                        if outcome.status is StepStatus.SUCCESS:
+                            if ex in _RETRIEVAL_EXECUTORS and outcome.output:
+                                if outcome.output in seen_observations:
+                                    continue
+                                seen_observations[outcome.output] = sid
+                            if ex == "plot.chart":
+                                for s in dag_plan.steps:
+                                    if s.step_id == sid:
+                                        dk = _plot_data_key(s.input)
+                                        if dk is not None:
+                                            plotted_data.add(dk)
+                                        chart_fingerprints[sid] = _chart_observation(s.input)
+                                        break
+                            if ex == "doc.generate":
+                                for s in dag_plan.steps:
+                                    if s.step_id == sid:
+                                        ck = _doc_content_key(s.input)
+                                        if ck is not None:
+                                            seen_doc_content.add(ck)
+                                        gt = str(s.input.get("target_format") or "md").strip().lower()
+                                        if gt in ("md", "docx", "pdf"):
+                                            generated_formats.add(gt)
+                                        break
+                            if ex == "rag.query" or ex == "code.read":
+                                lim = (
+                                    _RETRIEVAL_SCRATCHPAD_LIMIT
+                                    if ex in _RETRIEVAL_EXECUTORS
+                                    else _CODE_READ_SCRATCHPAD_LIMIT
+                                )
+                                obs = (outcome.output or "")[:lim]
+                            elif ex == "plot.chart":
+                                obs = chart_fingerprints.get(sid, "chart generated")
+                            else:
+                                obs = (outcome.output or "")[:1500]
+                            scratchpad.append(
+                                f"step {sid} ({ex}) thought: {thought} observation: {obs}"
+                            )
+                        else:
+                            failed_actions[
+                                _action_signature(
+                                    ex,
+                                    next(
+                                        s.input
+                                        for s in dag_plan.steps
+                                        if s.step_id == sid
+                                    ),
+                                )
+                            ] = outcome.error or "unknown error"
+                            scratchpad.append(
+                                f"step {sid} ({ex}) failed: {outcome.error}; "
+                                f"repair the DAG next iteration."
+                            )
+                    guard.record_progress()
+                    consecutive_reasoning = 0
+                    failed_in_dag = [o for o in outcomes if o.status is not StepStatus.SUCCESS]
+                    iter_obs.update(
+                        output={
+                            "status": "success" if not failed_in_dag else "partial",
+                            "thought": thought_in,
+                            "executors": [o.agent_id for o in outcomes],
+                            "observation": _truncate(
+                                "; ".join(
+                                    f"{o.step_id}:{o.status.value}" for o in outcomes
+                                ),
+                                500,
+                            ),
+                        }
+                    )
+                    # DAG executed (fully or partially) — next iteration repairs
+                    # failures or finishes. Do not fall through to legacy path.
+                    # Terminal fast-path: a fully-successful DAG that already
+                    # delivered the requested document needs no extra planner
+                    # "done" turn — break now and let the aggregator show the
+                    # artifact verbatim (saves 1 LLM call, avoids iter-3).
+                    if not failed_in_dag and any(
+                        o.agent_id == "doc.generate" for o in outcomes
+                    ):
+                        break
+                    continue
+                executor = str(raw.get("executor", "") or "").strip()
+                if not executor and raw.get("steps") is not None:
+                    # Explicit empty steps[] with no legacy executor.
+                    if guard.record_idle():
+                        iter_obs.update(
+                            output={
+                                "status": "failed",
+                                "idle_guard": True,
+                                "idle_reason": "empty DAG",
+                                "error": "turn proposed an empty steps array",
+                            }
+                        )
+                        break
+                    scratchpad.append("turn proposed an empty steps array; propose a DAG.")
+                    iter_obs.update(
+                        output={
+                            "status": "retry",
+                            "rejection_reason": "empty DAG",
+                            "thought": thought_in,
+                        }
+                    )
+                    continue
                 if executor not in known_agents and executor not in known_tools:
                     if guard.record_idle():
                         iter_obs.update(
@@ -1447,12 +1930,47 @@ class ReActEngine:
                             "ORIGINAL uploads); answer now with is_final=true."
                         )
                     if is_tool and executor == "doc.convert":
+                        consecutive_reasoning = 0
                         scratchpad.append(
                             "document converted successfully — use it as the final "
                             "answer, do not run doc.convert again and do not "
                             "rebuild the same content with doc.generate either."
                         )
+                    if is_tool and executor == "doc.generate":
+                        consecutive_reasoning = 0
+                    elif not is_tool:
+                        consecutive_reasoning += 1
+                        has_doc = any(
+                            r.agent_id == "doc.generate"
+                            and r.status is StepStatus.SUCCESS
+                            for r in step_results
+                        )
+                        if (
+                            corpus_empty
+                            and doc_wanted
+                            and not has_doc
+                        ):
+                            scratchpad.append(
+                                "draft captured — NEXT STEP MUST be doc.generate with "
+                                '{"title", "sections": [{"heading", "body": full draft verbatim}], '
+                                '"target_format": pdf/docx/md from the request}. '
+                                "Do not draft again with reasoning."
+                            )
+                            # Stalling on repeated drafts, not progress.
+                            if consecutive_reasoning >= 2 and guard.record_idle():
+                                iter_obs.update(
+                                    output={
+                                        "status": "failed",
+                                        "idle_guard": True,
+                                        "idle_reason": "repeated reasoning without doc.generate",
+                                        "error": "repeated drafts without producing the document",
+                                    }
+                                )
+                                break
+                    else:
+                        consecutive_reasoning = 0
                 else:
+                    consecutive_reasoning = 0
                     failed_actions[sig] = outcome.error or "unknown error"
                     scratchpad.append(
                         f"step {step_id} ({executor}) failed: {outcome.error}; try another."
@@ -1465,14 +1983,21 @@ class ReActEngine:
                             "error": _truncate(outcome.error, 500),
                         }
                     )
-        # ALWAYS synthesize the user-facing answer outside the loop: the
-        # planner's is_final answer is framed amid internal reasoning (which
-        # biases/hallucinates it), so it is demoted to a hint. The loop
-        # gathers observations; one fresh, grounded call phrases the answer.
-        # This also streams the only prose deltas — internal steps emit none.
+        # Synthesis is skipped when the loop already delivered a terminal
+        # document: the artifact IS the answer (concise, verbatim). An extra
+        # reasoning call only rephrases it, adds tables/notes, and reintroduces
+        # the false "paste into Word to get PDF" claim even though the PDF
+        # bytes already travel via the artifacts event.
+        has_terminal_doc = any(
+            r.agent_id == "doc.generate" and r.status is StepStatus.SUCCESS
+            for r in step_results
+        )
+        all_ok = bool(step_results) and all(
+            r.status is StepStatus.SUCCESS for r in step_results
+        )
         synth = None
         cancelled = cancel_event is not None and cancel_event.is_set()
-        if not cancelled:
+        if not cancelled and not (has_terminal_doc and all_ok):
             synth = self._synthesize_final_answer(
                 request_text,
                 step_results,
@@ -1678,6 +2203,52 @@ class ReActEngine:
                         f"content beyond the draft.\n\n"
                         f"Request: {request_text}\n\nDraft:\n{hint_answer}"
                     )
+                elif any(
+                    fmt in lowered_request for fmt in ("pdf", "docx", "md")
+                ):
+                    has_doc = any(
+                        (r.agent_id or "").lower() == "doc.generate"
+                        and r.status is StepStatus.SUCCESS
+                        for r in successes
+                    )
+                    has_chart = any(
+                        (r.agent_id or "").lower() == "plot.chart"
+                        for r in successes
+                    )
+                    if not has_doc and not has_chart:
+                        # No artifact was produced (e.g. empty-notebook draft
+                        # loop that never called doc.generate). Do not claim
+                        # inability and do not claim the file exists — surface
+                        # the drafted content verbatim.
+                        synth_message = (
+                            f"Synthesize the final answer to the request using ONLY "
+                            f"these observations. No document/chart artifact was "
+                            f"produced in this run, so do NOT claim one exists and "
+                            f"do NOT claim inability to produce one — the tool "
+                            f"exists but was not called. Present the drafted content "
+                            f"below verbatim in clear Markdown (direct answer first, "
+                            f"then detail); never expose step ids or internal "
+                            f"machinery. "
+                            f"Request: {request_text}\n\nObservations:\n{evidence}"
+                        )
+                    else:
+                        synth_message = (
+                            f"Synthesize the final answer to the request using ONLY "
+                            f"these observations. Cover every document below. "
+                            f"Charts are already rendered in Artifacts — describe "
+                            f"each chart's takeaway and give a summary table, but "
+                            f"NEVER redraw charts as ASCII/text blocks. The "
+                            f"document/chart is already produced; just describe "
+                            f"it and summarize, do not rebuild it. If the "
+                            f"observations show no usable content, say honestly "
+                            f"what was tried and which file is needed — never "
+                            f"invent content. Write like a world-class assistant: "
+                            f"lead with the direct answer, then supporting detail in "
+                            f"clear Markdown (short headings, bullets, numbered "
+                            f"steps, or a table when it helps); never expose step "
+                            f"ids or internal machinery. "
+                            f"Request: {request_text}\n\nObservations:\n{evidence}"
+                        )
                 else:
                     synth_message = (
                         f"Synthesize the final answer to the request using ONLY "

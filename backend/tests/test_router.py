@@ -156,7 +156,9 @@ def test_convert_slots_parsed_from_text_not_llm() -> None:
 def test_convert_slots_default_empty_and_bad_format_dropped() -> None:
     provider = FakeRouterProvider({"intent": "convert_all"})
     result = Router(provider).route("convert all documents to exe somehow here")
-    assert result.intent is Intent.CONVERT_ALL
+    # Slot-guard: no valid md/docx/pdf target → UNKNOWN (ReAct clarifies)
+    # instead of a convert label that can only miss in the builder.
+    assert result.intent is Intent.UNKNOWN
     assert result.file_hint == "*"
     assert result.target_format == ""  # not a doc.convert format
 
