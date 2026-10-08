@@ -179,10 +179,13 @@ def _build_system_prompt() -> str:
         "not by you.\n"
         f"Intents:\n{lines}\n"
         "Classify by DELIVERABLE, in order, stop at the first match:\n"
-        "1. code: deliverable is SOURCE CODE or program text "
-        "(write/generate/create html/css/js/ts/python/app/script/page/site/"
-        "landing/UI/component/function/class/test, or debug/refactor/review/"
-        "explain/test code). Chart/plot/table/compare words do NOT override "
+        "1. code: deliverable is SOURCE CODE or program text. Requires an "
+        "explicit software signal: a programming language, code file (e.g. "
+        ".py/.js/.ts), traceback/error, function/class/test/refactor, or "
+        "greenfield build (script/app/page/site/component). Review/explain/"
+        "summarize/critique of DOCUMENT content (plan/report/checklist/"
+        "architecture/findings, snippet on page N) is NOT code — it is "
+        "summarize/qa_single. Chart/plot/table/compare words do NOT override "
         "this when code is requested. Pictures/photos/illustrations with no "
         "code requested are unknown.\n"
         "2. convert_all: deliverable is a reformatted ORIGINAL uploaded file set "
@@ -200,13 +203,18 @@ def _build_system_prompt() -> str:
         "data, with or without compare words).\n"
         "6. compare_multi: text comparing/contrasting/ranking 2+ docs/topics, "
         "no chart.\n"
-        "7. summarize: text summary/abstract/overview of docs, no chart, no "
+        "7. summarize: text summary/abstract/overview/review/critique of docs "
+        "(e.g. 'review the plan in the doc'), no chart, no "
         "questions.\n"
         "8. quiz: questions/quiz/MCQs/flashcards from docs.\n"
         "9. qa_single: one factual question answered from docs.\n"
-        "10. chat: greeting/thanks/small-talk/farewell, no document question, "
-        "no task.\n"
+        "10. chat: pure greeting/thanks/small-talk/farewell ONLY, no document "
+        "question, no task. A greeting plus any task routes to the task, "
+        "never chat (e.g. 'hello, summarize this doc' is summarize).\n"
         "11. unknown: anything else or ambiguous.\n"
+        "Follow-ups: a formatting-only fragment (table/bullets) inherits the "
+        "prior intent unless it adds a new chart/convert/code/quiz verb. "
+        "Always classify the COMBINED intent.\n"
         'Return {"intent": "<one of the values above>"}.'
     )
 
@@ -279,8 +287,11 @@ class Router:
                 1,
                 {"role": "system", "content": (
                     "Conversation context (recent turns, oldest first). The "
-                    "request may be a follow-up to it — classify the combined "
-                    "intent:\n" + context
+                    "request may be a follow-up to it — classify the COMBINED "
+                    "intent. A formatting-only fragment (table/bullets) "
+                    "inherits the prior intent unless it adds a new "
+                    "chart/convert/code/quiz verb. A greeting plus any task "
+                    "routes to the task, never chat.\n" + context
                 )},
             )
         try:

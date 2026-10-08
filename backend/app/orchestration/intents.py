@@ -35,13 +35,13 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
     Intent.CHAT: "greeting, thanks, or small talk with no document question",
     Intent.QA_SINGLE: "one factual question answered from documents",
     Intent.COMPARE_MULTI: "compare, contrast, or rank two or more documents/topics (no chart requested)",
-    Intent.SUMMARIZE: "summarize documents without chart",
+    Intent.SUMMARIZE: "summary/abstract/overview/review/critique of documents without chart",
     Intent.SUMMARIZE_PLOT: "summarize/compare AND draw/plot/chart the numbers — any plot/draw/chart/show-as-graph ask belongs here, even when the request also says compare",
     Intent.PLOT_STANDALONE: "draw a chart from numbers given in the message",
     Intent.CONVERT_ONE: "re-render one ORIGINAL uploaded file to md/docx/pdf via convert/export/save-as (requires a named source file; write/create/generate/draft new content such as an email/letter/report in pdf is NOT convert)",
     Intent.CONVERT_ALL: "re-render all ORIGINAL uploaded files to md/docx/pdf via convert/export/save-as (requires all/every/each; new content is NOT convert)",
     Intent.QUIZ: "generate questions, quiz, or MCQs from documents",
-    Intent.CODE: "any software task: write new code from scratch in any language (including HTML/CSS/JS web pages, sites, apps, scripts), or explain, review, debug, test, or modify uploaded code files",
+    Intent.CODE: "software task with an explicit signal (language, code file e.g. .py/.js, traceback, function/class/test): write new code from scratch, or explain/review/debug/test/modify uploaded CODE files. Review/explain of document text (plan/report/checklist/architecture) is NOT code",
     Intent.UNKNOWN: "anything else or unclear",
 }
 
