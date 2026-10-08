@@ -51,6 +51,30 @@ class TracingProvider(ModelProvider):
             return {k: int(v) for k, v in usage.items() if isinstance(v, (int, float))}
         return None
 
+    def _inner_finish_reason(self) -> str | None:
+        inner = self._inner
+        reason = getattr(inner, "last_finish_reason", None)
+        if callable(reason):
+            reason = reason()
+        return reason if isinstance(reason, str) else None
+
+    def _inner_reasoning_chars(self) -> int | None:
+        inner = self._inner
+        chars = getattr(inner, "last_reasoning_chars", None)
+        if callable(chars):
+            chars = chars()
+        return chars if isinstance(chars, int) and chars else None
+
+    def _result_metadata(self) -> dict[str, str] | None:
+        meta: dict[str, str] = {}
+        reason = self._inner_finish_reason()
+        if reason:
+            meta["finish_reason"] = reason
+        chars = self._inner_reasoning_chars()
+        if chars:
+            meta["reasoning_chars"] = str(chars)
+        return meta or None
+
     @observe(
         name="llm.generate", as_type="generation",
         capture_input=False, capture_output=False,
@@ -82,6 +106,7 @@ class TracingProvider(ModelProvider):
             update_generation(
                 output=result,
                 usage_details=self._inner_usage(),
+                metadata=self._result_metadata(),
             )
             return result
         except Exception as e:  # pragma: no cover - defensive surrogate
@@ -136,6 +161,7 @@ class TracingProvider(ModelProvider):
             gen.update(
                 output="".join(chunks),
                 usage_details=self._inner_usage(),
+                metadata=self._result_metadata(),
             )
 
     @observe(
@@ -151,11 +177,15 @@ class TracingProvider(ModelProvider):
         temperature: float = 0.0,
         timeout_ms: int | None = None,
         cancel_event=None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
+        params: dict[str, Any] = {"temperature": temperature}
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
         update_generation(
             input=messages,
             model=self._inner.served_model(model),
-            model_parameters={"temperature": temperature},
+            model_parameters=params,
             metadata={"output_schema": True, "requested_model": model},
         )
         try:
@@ -166,10 +196,12 @@ class TracingProvider(ModelProvider):
                 temperature=temperature,
                 timeout_ms=timeout_ms,
                 cancel_event=cancel_event,
+                max_tokens=max_tokens,
             )
             update_generation(
                 output=result,
                 usage_details=self._inner_usage(),
+                metadata=self._result_metadata(),
             )
             return result
         except Exception as e:  # pragma: no cover - defensive surrogate

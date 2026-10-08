@@ -72,6 +72,11 @@ class OllamaProvider(ModelProvider):
             trust_env=False,
         )
         self._last_usage: dict[str, int] | None = None
+        self._last_finish_reason: str | None = None
+        # Reasoning (chain-of-thought) chars streamed alongside the last
+        # generation (delta.reasoning, never yielded). Lets callers tell a
+        # think-burn (large reasoning, no visible text) from true silence.
+        self._last_reasoning_chars: int = 0
         self._available: set[str] = set()
         self._warned: set[str] = set()
         self._reachable = False
@@ -137,6 +142,16 @@ class OllamaProvider(ModelProvider):
     def last_usage(self) -> dict[str, int] | None:
         """Token usage from the most recent generation."""
         return self._last_usage
+
+    @property
+    def last_finish_reason(self) -> str | None:
+        """Finish reason (stop/length/...) from the most recent generation."""
+        return self._last_finish_reason
+
+    @property
+    def last_reasoning_chars(self) -> int:
+        """Reasoning chars streamed with the most recent generation."""
+        return self._last_reasoning_chars
 
     def _resolve_model(self, requested: str) -> str:
         """Honor per-request names the server actually has; everything else
@@ -367,6 +382,65 @@ class OllamaProvider(ModelProvider):
             return ""
 
     @staticmethod
+    def _delta_reasoning(event: dict[str, Any]) -> str:
+        """Chain-of-thought text of one stream event, or "" when absent.
+
+        Thinking models on the OpenAI-compat endpoint stream reasoning in
+        `delta.reasoning` (separate from `delta.content`, which stays ""
+        while the model thinks). Never yielded to callers — counted for
+        observability so a think-burn is distinguishable from true silence.
+        """
+        try:
+            delta = event["choices"][0]["delta"]
+        except (KeyError, IndexError, AttributeError, TypeError):
+            return ""
+        if not isinstance(delta, dict):
+            return ""
+        for key in ("reasoning", "reasoning_content", "thinking"):
+            val = delta.get(key)
+            if isinstance(val, str) and val:
+                return val
+        return ""
+
+    @staticmethod
+    def _message_reasoning(data: dict[str, Any]) -> str:
+        """Reasoning text of a non-stream response, or "" when absent."""
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError):
+            return ""
+        if not isinstance(message, dict):
+            return ""
+        for key in ("reasoning", "reasoning_content", "thinking"):
+            val = message.get(key)
+            if isinstance(val, str) and val:
+                return val
+        return ""
+
+    @staticmethod
+    def _finish_reason(event_or_data: dict[str, Any]) -> str | None:
+        """Finish reason for one stream event or one non-stream response."""
+        try:
+            choice = event_or_data["choices"][0]
+        except (KeyError, IndexError, TypeError):
+            return None
+        if not isinstance(choice, dict):
+            return None
+        for key in ("finish_reason", "done_reason", "done"):
+            val = choice.get(key)
+            if isinstance(val, str) and val:
+                return val
+            if key == "done" and val is True:
+                return "stop"
+        # Native /api/chat shape uses top-level `done_reason`.
+        done_reason = event_or_data.get("done_reason")
+        if isinstance(done_reason, str) and done_reason:
+            return done_reason
+        if event_or_data.get("done") is True:
+            return "stop"
+        return None
+
+    @staticmethod
     def _content(data: dict[str, Any]) -> str:
         try:
             content = data["choices"][0]["message"]["content"].strip()
@@ -422,6 +496,8 @@ class OllamaProvider(ModelProvider):
             cancel_event=cancel_event,
         )
         self._record_usage(data)
+        self._last_finish_reason = self._finish_reason(data)
+        self._last_reasoning_chars = len(self._message_reasoning(data))
         return self._content(data)
 
     def generate_stream(
@@ -436,6 +512,8 @@ class OllamaProvider(ModelProvider):
         # Reset first: usage is only meaningful if this stream reports it
         # (a stale value from a previous call would lie).
         self._last_usage = None
+        self._last_finish_reason = None
+        self._last_reasoning_chars = 0
         think = ThinkFilter()
         for event in self._chat_stream(
             model,
@@ -447,6 +525,12 @@ class OllamaProvider(ModelProvider):
         ):
             if event.get("usage") is not None:
                 self._record_usage(event)
+            reason = self._finish_reason(event)
+            if reason:
+                self._last_finish_reason = reason
+            reasoning = self._delta_reasoning(event)
+            if reasoning:
+                self._last_reasoning_chars += len(reasoning)
             visible = think.feed(self._delta_content(event))
             if visible:
                 yield visible
@@ -465,6 +549,7 @@ class OllamaProvider(ModelProvider):
         temperature: float = 0.0,
         timeout_ms: int | None = None,
         cancel_event: threading.Event | None = None,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         # Native /api/chat with the RAW schema as `format` — NOT the /v1
         # OpenAI wrapper. The compat layer's response_format mapping proved
@@ -473,6 +558,8 @@ class OllamaProvider(ModelProvider):
         # (2026-09-13 probes). think=False explicit: this tag rejects
         # think:true ("does not support thinking").
         self.ensure_ready()
+        self._last_reasoning_chars = 0
+        self._last_finish_reason = None
         payload: dict[str, Any] = {
             "model": self._resolve_model(model),
             "messages": messages,
@@ -480,7 +567,13 @@ class OllamaProvider(ModelProvider):
             "format": schema,
             "options": {
                 "temperature": temperature,
-                "num_predict": settings.default_max_tokens,
+                # Per-call output cap (None = shared default): thinking
+                # burns the same num_predict budget as the answer, so tiny
+                # control-plane outputs carry tight caps (router 256).
+                "num_predict": (
+                    max_tokens if max_tokens is not None
+                    else settings.default_max_tokens
+                ),
             },
             "think": False,
         }
@@ -527,6 +620,8 @@ class OllamaProvider(ModelProvider):
             }
         else:
             self._last_usage = None
+        self._last_finish_reason = self._finish_reason(data)
+        self._last_reasoning_chars = len(self._message_reasoning(data))
         try:
             content = data["message"]["content"].strip()
         except (KeyError, AttributeError, TypeError) as e:
