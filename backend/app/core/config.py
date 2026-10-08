@@ -81,7 +81,7 @@ class Settings(BaseSettings):
 
     # PDF ingestion: selected loader runs first, the other is fallback.
     # RAG_PDF_LOADER=docling | opendataloader (default docling).
-    rag_pdf_loader: Literal["docling", "opendataloader"] = "docling"
+    rag_pdf_loader: Literal["docling", "opendataloader"] = "opendataloader"
 
     @field_validator("rag_pdf_loader", mode="before")
     @classmethod
