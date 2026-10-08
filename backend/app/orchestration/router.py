@@ -11,9 +11,12 @@ Order of operations in Router.route():
      patterns (pure greetings, explicit convert + format, numbers-in-message
      chart, self-contained-HTML code marker, explicit quiz ask). On hit,
      no LLM call is spent (routed_by="rule").
-  2. Otherwise one LLM call with the ordered rule prompt
-     (_build_system_prompt): numbered stop-at-first-match list, no anecdotes,
-     no trace IDs. Output schema is intent-only.
+  2. Otherwise one LLM call with the deliverable-based prompt
+     (_build_system_prompt): what the user wants back decides, with
+     explicit tie-break priorities for overlapping patterns; no anecdotes,
+     no trace IDs. Output schema is intent-only. A short corpus hint
+     (empty/processing/ready, never full chunk text) may be appended so
+     the router does not invent files it cannot see.
   3. Slots filled by _extract_target_format/_extract_file_hint over the raw
      request text, then validated downstream (builders resolve file_hint
      against the notebook snapshot; unknown names fall to ReAct).
@@ -175,20 +178,94 @@ def _rule_pre_filter(request_text: str) -> Intent | None:
     return None
 
 
-def _build_system_prompt() -> str:
+def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
+    """Tiny corpus hint so the router does not invent unseen files.
+
+    Returns a short state summary (empty/processing/ready/code-only) or
+    None when the snapshot is missing (DB failure — database is ground
+    truth, so the router classifies blind as before). Names are included
+    truncated: they disambiguate convert_one ("that PDF") from convert_all
+    and, critically, expose code extensions (.py/.js/...) so a
+    "read all the files" ask over code files routes to CODE, not
+    summarize — without pasting chunk text into the routing call.
+
+    Code-only notebooks report "empty" from get_corpus_state (no
+    embeddings to retrieve), but must NOT render as "no documents
+    uploaded": the files exist, they are just code.
+    """
+    if notebook_context is None:
+        return None
+    try:
+        from app.orchestration.corpus import (
+            _ready_code,
+            _ready_files,
+            _snapshot_files,
+            get_corpus_state,
+        )
+    except Exception:  # noqa: BLE001 - hint is best-effort, never fatal
+        return None
+    try:
+        state = get_corpus_state(notebook_context)
+        code = _ready_code(notebook_context)
+    except Exception:  # noqa: BLE001 - malformed snapshot classifies blind
+        return None
+    code_names = ", ".join(n for n, _ in code[:5])[:200]
+    code_suffix = (
+        f" Plus {len(code)} ready code file(s)."
+        + (f" Code names: {code_names}." if code_names else "")
+        if code
+        else ""
+    )
+    if state == "empty":
+        if code:
+            return (
+                f"Notebook file state: CODE-ONLY — no searchable documents, "
+                f"but {len(code)} ready code file(s) present."
+                + (f" Names: {code_names}." if code_names else "")
+                + " A request to read/review/explain/debug/identify issues "
+                "in THOSE files is a CODE task, not summarize."
+            )
+        return "Notebook file state: EMPTY — no documents uploaded yet."
+    if state == "processing":
+        return (
+            "Notebook file state: PROCESSING — files exist but none is "
+            "ready yet (still uploading/processing/errored)."
+            + code_suffix
+        )
+    if state == "ready":
+        try:
+            ready = _ready_files(notebook_context)
+            total = len(_snapshot_files(notebook_context))
+        except Exception:  # noqa: BLE001 - counts are cosmetic
+            ready, total = [], 0
+        names = ", ".join(n for n, _ in ready[:5])[:200]
+        extra = f", total files: {total}" if total != len(ready) else ""
+        return (
+            f"Notebook file state: READY — {len(ready)} ready "
+            f"document(s){extra}."
+            + (f" Names: {names}." if names else "")
+            + code_suffix
+        )
+    return None
+
+
+def _build_system_prompt(corpus_hint: str | None = None) -> str:
     lines = "\n".join(
         f"- {intent.value}: {INTENT_DESCRIPTIONS[intent]}" for intent in Intent
     )
-    return (
+    prompt = (
         "You are an intent router. Output EXACTLY one JSON object, no prose. "
         "Query generation for document retrieval is performed inside rag.query, "
         "not by you.\n"
         f"Intents:\n{lines}\n"
-        "Classify by DELIVERABLE, in order, stop at the first match:\n"
+        "Decide by DELIVERABLE — what the user wants back:\n"
         "1. code: deliverable is SOURCE CODE or program text. Requires an "
         "explicit software signal: a programming language, code file (e.g. "
         ".py/.js/.ts), traceback/error, function/class/test/refactor, or "
-        "greenfield build (script/app/page/site/component). Review/explain/"
+        "greenfield build (script/app/page/site/component). The notebook "
+        "file list itself counts as the signal: when it names ready code "
+        "files and the request asks to read/review/explain/debug those "
+        "files, that IS code. Review/explain/"
         "summarize/critique of DOCUMENT content (plan/report/checklist/"
         "architecture/findings, snippet on page N) is NOT code — it is "
         "summarize/qa_single. Chart/plot/table/compare words do NOT override "
@@ -218,11 +295,27 @@ def _build_system_prompt() -> str:
         "question, no task. A greeting plus any task routes to the task, "
         "never chat (e.g. 'hello, summarize this doc' is summarize).\n"
         "11. unknown: anything else or ambiguous.\n"
+        "Tie-breaks (only when two patterns genuinely overlap): prefer the "
+        "more specific deliverable — code over chart over compare/quiz over "
+        "qa_single/summarize over chat. A chart verb plus document data "
+        "is summarize_plot even when the request also says compare; a chart "
+        "verb plus literal numbers in the message is plot_standalone; "
+        "review/explain of document prose is summarize/qa_single, never code; "
+        "review/explain of notebook code files is code, never summarize.\n"
         "Follow-ups: a formatting-only fragment (table/bullets) inherits the "
         "prior intent unless it adds a new chart/convert/code/quiz verb. "
         "Always classify the COMBINED intent.\n"
         'Return {"intent": "<one of the values above>"}.'
     )
+    if corpus_hint:
+        prompt += (
+            "\nNotebook context (do NOT change the deliverable because of "
+            "it; use it only to avoid inventing files): "
+            + corpus_hint
+            + " Never invent a file name or id — convert intents still "
+            "require the verb plus the file named in the request text."
+        )
+    return prompt
 
 
 class RouterResult(BaseModel):
@@ -258,6 +351,7 @@ class Router:
         request_text: str,
         context: str | None = None,
         cancel_event: threading.Event | None = None,
+        notebook_context: str | None = None,
     ) -> RouterResult:
         if cancel_event is not None and cancel_event.is_set():
             raise RuntimeError("run cancelled")
@@ -280,7 +374,7 @@ class Router:
                 ),
             )
 
-        system_prompt = _build_system_prompt()
+        system_prompt = _build_system_prompt(_corpus_hint_for_router(notebook_context))
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": request_text},

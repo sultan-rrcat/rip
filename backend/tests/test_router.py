@@ -119,7 +119,8 @@ def test_prompt_disambiguates_plot_vs_compare() -> None:
     system = provider.messages[0]["content"]
     assert "summarize_plot" in system
     assert "no chart" in system
-    assert "stop at the first match" in system
+    assert "Tie-breaks" in system
+    assert "stop at the first match" not in system
     assert "c1bbae95" not in system  # no trace anecdotes in the prompt
 
 
@@ -273,3 +274,43 @@ def test_prompt_excludes_generate_from_convert() -> None:
     system = provider.messages[0]["content"]
     assert "Write/create/generate/draft NEW content" in system
     assert "is NOT convert" in system
+
+
+CODE_ONLY_SNAPSHOT = (
+    "3 file(s): agents.py [ready:code] id=bd29941a-f89e-4c9a-a8f3-08e38e9a0d9d; "
+    "admin.py [ready:code] id=921af3f2-80f2-4da8-9a73-4f699af66033; "
+    "approvals.py [ready:code] id=ab101bcd-66b7-461c-95ab-4347daf2f568"
+)
+
+
+def test_code_only_snapshot_hints_code_not_empty() -> None:
+    # Trace 2e288df9: three [ready:code] files rendered as
+    # "EMPTY — no documents uploaded", so "read all the files" routed to
+    # summarize and answered "no documents". Code files exist — they are
+    # just not searchable documents.
+    from app.orchestration.router import _corpus_hint_for_router
+
+    hint = _corpus_hint_for_router(CODE_ONLY_SNAPSHOT)
+    assert hint is not None
+    assert "CODE-ONLY" in hint
+    assert "EMPTY — no documents uploaded" not in hint
+    assert "agents.py" in hint
+
+    assert _corpus_hint_for_router("(no documents)") == (
+        "Notebook file state: EMPTY — no documents uploaded yet."
+    )
+    assert _corpus_hint_for_router(None) is None
+
+
+def test_router_prompt_names_code_files_for_code_routing() -> None:
+    # The file list itself is the software signal: the prompt must carry
+    # the .py names plus the rule that reviewing those files IS code.
+    provider = FakeRouterProvider({"intent": "code"})
+    result = Router(provider).route(
+        "Read all the files and identify issues",
+        notebook_context=CODE_ONLY_SNAPSHOT,
+    )
+    assert result.intent is Intent.CODE
+    system = provider.messages[0]["content"]
+    assert "agents.py" in system
+    assert "notebook" in system.lower() and "code" in system.lower()

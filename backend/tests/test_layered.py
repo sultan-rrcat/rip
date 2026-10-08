@@ -559,8 +559,8 @@ HTML_CHART_REQUEST = (
 
 def test_router_prompt_is_ordered_rule_list_without_trace() -> None:
     # The self-contained-HTML class is now a rule pre-filter hit (no LLM).
-    # The LLM prompt itself must stay an ordered stop-at-first-match list
-    # with code above chart, and carry no trace anecdotes.
+    # The LLM prompt itself must stay a deliverable-based list with code
+    # above chart, explicit tie-breaks, and no trace anecdotes.
     from app.orchestration.router import Router
 
     seen: list = []
@@ -579,7 +579,8 @@ def test_router_prompt_is_ordered_rule_list_without_trace() -> None:
         "write a python function that plots accuracy from the reports"
     )
     system = seen[0][0]["content"]
-    assert "stop at the first match" in system
+    assert "Tie-breaks" in system
+    assert "stop at the first match" not in system
     assert "SOURCE CODE" in system
     assert "c1bbae95" not in system
 

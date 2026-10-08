@@ -141,13 +141,17 @@ def _make_plan_node(
         with manual_span(
             "router",
             as_type="span",
-            input={"request": truncate(state["request_text"], 2000)},
+            input={
+                "request": truncate(state["request_text"], 2000),
+                "notebook_context": truncate(state.get("notebook_context"), 500),
+            },
             trace_context=run_ctx,
         ) as router_obs:
             try:
                 route = Router(planner.provider).route(
                     state["request_text"], context=state.get("context"),
                     cancel_event=_cancel_event(config),
+                    notebook_context=state.get("notebook_context"),
                 )
                 route_info = {
                     "layer": "L2-builder",

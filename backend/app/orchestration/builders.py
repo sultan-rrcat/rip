@@ -135,22 +135,46 @@ def build_qa_no_docs(request_text: str) -> Plan:
     )
 
 
-def build_no_docs_clarification(request_text: str, *, processing: bool = False) -> Plan:
+def build_no_docs_clarification(
+    request_text: str,
+    *,
+    processing: bool = False,
+    intent: Intent | None = None,
+) -> Plan:
     """Ask the user to upload/wait — nothing exists to summarize/compare.
 
     expected_output_type="clarification" so the single terminal step is
     returned verbatim as the answer (no retrieval to ground anything else).
+    The message names the requested deliverable so an empty-notebook
+    summarize/compare/quiz/plot does not collapse to one generic line
+    (e.g. "Read all the files and identify issues" with no files).
     """
+    what = {
+        Intent.SUMMARIZE: "summarize",
+        Intent.COMPARE_MULTI: "compare",
+        Intent.QUIZ: "quiz",
+        Intent.SUMMARIZE_PLOT: "summarize and plot",
+        Intent.QA_SINGLE: "answer",
+        Intent.CONVERT_ONE: "convert",
+        Intent.CONVERT_ALL: "convert",
+    }.get(intent) if intent is not None else None
     if processing:
         detail = (
             "The notebook's files are not ready yet (still uploading, "
             "processing, or errored). Ask the user to wait until "
             "processing finishes and then retry"
+            + (f" the {what} request" if what else "")
         )
     else:
         detail = (
             "There are no ready documents in this notebook. Ask the user "
             "to upload documents or clarify how to proceed without them"
+            + (
+                f" (they asked to {what} document content, so name that "
+                "the notebook is empty)"
+                if what and what not in ("answer", "convert")
+                else ""
+            )
         )
     return Plan(
         plan_id=str(uuid.uuid4()),
@@ -894,13 +918,16 @@ def build(
         if state == "empty":
             return build_qa_no_docs(request_text)
         if state == "processing":
-            return build_no_docs_clarification(request_text, processing=True)
+            return build_no_docs_clarification(
+                request_text, processing=True, intent=route.intent
+            )
         return build_qa_single(request_text, request_text)
     if route.intent is Intent.COMPARE_MULTI:
         state = _corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
-                request_text, processing=(state == "processing")
+                request_text, processing=(state == "processing"),
+                intent=route.intent,
             )
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
@@ -910,7 +937,8 @@ def build(
         state = _corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
-                request_text, processing=(state == "processing")
+                request_text, processing=(state == "processing"),
+                intent=route.intent,
             )
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
@@ -920,7 +948,8 @@ def build(
         state = _corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
-                request_text, processing=(state == "processing")
+                request_text, processing=(state == "processing"),
+                intent=route.intent,
             )
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
@@ -932,7 +961,8 @@ def build(
         state = _corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
-                request_text, processing=(state == "processing")
+                request_text, processing=(state == "processing"),
+                intent=route.intent,
             )
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
