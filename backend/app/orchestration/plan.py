@@ -13,6 +13,8 @@ import re
 
 from pydantic import BaseModel, Field
 
+from app.orchestration.placeholder import placeholders_outside_code
+
 logger = logging.getLogger("orchestration.plan")
 
 
@@ -199,24 +201,6 @@ class Plan(BaseModel):
                     "as TOP-LEVEL keys"
                 )
         raw_ids = {r.get("step_id") or "step" for r in raw_steps}
-        _PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
-        _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
-
-        def _refs_in(value: object) -> set[str]:
-            found: set[str] = set()
-            if isinstance(value, str):
-                # Fenced code carries literal source text (L2 CODE builder
-                # inlines whole files) — never auto-wire from it.
-                found.update(
-                    _PLACEHOLDER_RE.findall(_FENCED_CODE_RE.sub("", value))
-                )
-            elif isinstance(value, dict):
-                for v in value.values():
-                    found.update(_refs_in(v))
-            elif isinstance(value, list):
-                for v in value:
-                    found.update(_refs_in(v))
-            return found
 
         def canon_dep(dep: str) -> str:
             if dep in raw_ids:
@@ -268,7 +252,7 @@ class Plan(BaseModel):
             # philosophy as hoist/dedup above: add missing edges, leave
             # genuinely unknown refs for the Validator to reject.
             if isinstance(step.get("input"), dict):
-                for ref in _refs_in(step["input"]):
+                for ref in placeholders_outside_code(step["input"]):
                     target = canon_dep(ref)
                     wired = resolved.get(target, target)
                     if (wired in raw_ids or wired in used) and wired not in step["depends_on"]:

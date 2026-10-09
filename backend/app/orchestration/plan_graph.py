@@ -73,7 +73,7 @@ _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
 #: L2 CODE builder — placeholder resolution must not rewrite source text
 #: inside them (trace 987e6ceb: plan_graph.py's own {{id}} patterns would
 #: otherwise resolve to "(no chunks retrieved)" before the coding agent
-#: ever sees the file).
+#: ever sees the file). Captured variant for split() (preserves delimiters).
 _FENCED_CODE_SPLIT = re.compile(r"(```.*?```)", re.DOTALL)
 
 #: Machine outputs that never need conversation context even when terminal

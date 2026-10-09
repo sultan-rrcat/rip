@@ -293,6 +293,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-046: Consolidate the fenced-code regex into a shared placeholder module
+
+- **Status:** Accepted (2026-10-10)
+- **Context:** The same fenced-code stripping + placeholder-collection logic appeared in four modules (`validator.py`, `plan.py`, `plan_graph.py`, `aggregator.py`), each with its own copy of the fenced-code regex. A change to the regex (e.g. to handle nested fences or different fence markers) had to be made in four places.
+- **Decision:** Extract a single `placeholder.py` module with the canonical `FENCED_CODE` and `PLACEHOLDER` regexes, plus `strip_fenced_code()`, `placeholders_outside_code()`, and `has_unresolved_placeholder()` helpers. All four modules import from this single source of truth. `plan_graph.py` keeps a captured variant (`_FENCED_CODE_SPLIT`) for its `split()` call, but the regex pattern is documented as derived from the shared module.
+- **Consequences:** The fenced-code policy changes once, not four times. The shared module is independently testable — `test_placeholder.py` covers 23 tests. All 286 tests pass (263 existing + 23 new).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

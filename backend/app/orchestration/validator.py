@@ -15,6 +15,7 @@ import re
 
 from app.agents.registry import AgentRegistry
 from app.core.config import settings
+from app.orchestration.placeholder import placeholders_outside_code, strip_fenced_code
 from app.orchestration.plan import Plan
 from app.tools.registry import ToolRegistry
 
@@ -25,32 +26,9 @@ logger = logging.getLogger("orchestration.validator")
 #: execution graph).
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_-]+)\s*\}\}")
 
-#: Fenced code blocks (```...```) carry literal file content inlined by the
-#: L2 CODE builder — `{{...}}` patterns inside them are source text (Jinja
-#: templates, f-string docs, placeholder examples), never DAG wiring. Trace
-#: 987e6ceb: plan_graph.py's own source contains {{2}}/{{id}}/{{step_id}}
-#: and the validator rejected the whole plan as ungrounded. All placeholder
-#: scans strip fenced spans first.
-_FENCED_CODE = re.compile(r"```.*?```", re.DOTALL)
-
-
-def _strip_fenced_code(text: str) -> str:
-    """Remove fenced code spans so literal `{{...}}` text is not wired."""
-    return _FENCED_CODE.sub("", text)
-
-
 def _placeholders_outside_code(value: object) -> set[str]:
     """Collect {{id}} refs found OUTSIDE fenced code blocks."""
-    found: set[str] = set()
-    if isinstance(value, str):
-        found.update(_PLACEHOLDER.findall(_strip_fenced_code(value)))
-    elif isinstance(value, dict):
-        for v in value.values():
-            found.update(_placeholders_outside_code(v))
-    elif isinstance(value, list):
-        for v in value:
-            found.update(_placeholders_outside_code(v))
-    return found
+    return placeholders_outside_code(value)
 
 #: Prose signal of an ungrounded fan-in (trace ecd93eb4): the message talks
 #: about retrieved chunks / numbered steps without a {{id}} placeholder.
@@ -456,7 +434,7 @@ class PlanValidator:
             # Fenced code is literal source text (L2 CODE builder inlines
             # whole files): neither placeholder scans nor prose-ref scans
             # apply inside it.
-            body_outside_code = _strip_fenced_code(body)
+            body_outside_code = strip_fenced_code(body)
             if _PLACEHOLDER.search(body_outside_code):
                 continue  # structurally grounded; other checks own the edges
             if _PROSE_STEP_REF.search(body_outside_code):

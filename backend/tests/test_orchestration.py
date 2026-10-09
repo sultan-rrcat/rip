@@ -1598,7 +1598,7 @@ class TestFencedCodePlaceholders:
         assert out == "Result is hello and ```python\nx = '{{1}}'\n```"
 
     def test_aggregator_keeps_code_output_with_fenced_placeholders(self) -> None:
-        from app.orchestration.aggregator import _has_unresolved_placeholder
+        from app.orchestration.placeholder import has_unresolved_placeholder
 
-        assert not _has_unresolved_placeholder("```jinja\n{{ variable }}\n```")
-        assert _has_unresolved_placeholder("see {{1}} now")
+        assert not has_unresolved_placeholder("```jinja\n{{ variable }}\n```")
+        assert has_unresolved_placeholder("see {{1}} now")

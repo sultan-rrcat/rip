@@ -65,6 +65,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 5-tool set, direct execution (no approval gate) |
 | `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py` | The five tools |
 | `orchestration/plan.py`, `results.py` | Plan DAG models, step/execution results |
+| `orchestration/placeholder.py` | Shared placeholder + fenced-code scanning (single source of truth for both regexes) |
 | `orchestration/router.py` | L1 intent router — sole dispatcher, one `generate_structured` call (`{intent, confidence}`; `<0.6` → `unknown` → ReAct; failures fail open to ReAct) |
 | `orchestration/intents.py` | `Intent` enum + `ROUTER_CONFIDENCE_THRESHOLD=0.6` + `DETERMINISTIC_INTENTS` (10 builder intents) |
 | `orchestration/builders.py` | L2 deterministic builders — code-built DAGs for `chat/qa_single/compare_multi/summarize/summarize_plot/plot_standalone/quiz/convert_one/convert_all/code` (`_PER_FILE_TOP_K=4`, `>5` files → ReAct) |
