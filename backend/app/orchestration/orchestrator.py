@@ -31,6 +31,7 @@ from app.orchestration.aggregator import Aggregator
 from app.orchestration.engine import OrchestrationState, build_orchestration_graph
 from app.orchestration.plan import Plan
 from app.orchestration.planner import Planner
+from app.orchestration.react_fallback import ReactFallback
 from app.orchestration.results import StepResult
 from app.orchestration.validator import PlanValidator
 from app.tools.registry import ToolRegistry
@@ -81,6 +82,12 @@ class Orchestrator:
             registry,
             aggregator,
             tool_registry=self._tool_registry,
+        )
+        self._react_fallback = ReactFallback(
+            planner.provider,
+            registry,
+            self._tool_registry,
+            aggregator,
         )
 
     def run(
@@ -142,83 +149,21 @@ class Orchestrator:
             if cancel_event is not None and cancel_event.is_set():
                 logger.warning("orchestration aborted: %s", final["plan_error"])
                 raise OrchestrationError(final["plan_error"])
-            # When ReAct runs but still fails, the actionable message is
-            # its aggregation summary (e.g. "Step r1 (code.read) failed: …"),
-            # not the routing label that sent it there.
-            react_summary: str | None = None
-            try:
-                from app.observability.langfuse import (
-                    get_trace_context as _get_tc,
-                )
-                from app.observability.langfuse import (
-                    manual_span as _manual_span,
-                )
-                from app.observability.langfuse import (
-                    truncate as _truncate,
-                )
-                from app.orchestration.react_engine import run_react
-
-                # Trace-only sibling: the `react` span parents explicitly
-                # under `run` (via the worker-thread context captured here),
-                # so Langfuse reads run → react → react:iter-N → step:rN.
-                # Disabled path is a no-op; failures still fall through to
-                # the original honest error below.
-                with _manual_span(
-                    "react",
-                    as_type="span",
-                    input={
-                        "request": _truncate(request_text, 2000),
-                        "plan_error": _truncate(final["plan_error"], 500),
-                    },
-                    trace_context=_get_tc(),
-                ) as react_obs:
-                    react = run_react(
-                        request_text,
-                        self._planner.provider,
-                        self._registry,
-                        self._tool_registry,
-                        trace_id=trace_id,
-                        notebook_id=notebook_id,
-                        context=context,
-                        notebook_context=notebook_context,
-                        cancel_event=cancel_event,
-                        on_event=on_event,
-                        parent_span_ctx=_get_tc(),
-                    )
-                    aggregation = self._aggregator.aggregate(react.plan, react.result)
-                    react_obs.update(output={
-                        "status": aggregation.status,
-                        "steps": len(react.plan.steps),
-                        "iterations": len(react.result.step_results),
-                        "summary": _truncate(aggregation.summary, 2000),
-                    })
-                    if aggregation.status != "failed":
-                        logger.info(
-                            "react fallback recovered plan=%s steps=%d trace=%s",
-                            react.plan.plan_id, len(react.plan.steps), trace_id,
-                        )
-                        return OrchestrationResult(
-                            trace_id=trace_id,
-                            plan_id=react.plan.plan_id,
-                            goal=react.plan.goal,
-                            step_results=list(react.result.step_results),
-                            summary=aggregation.summary,
-                            status=aggregation.status,
-                            plan_incomplete=aggregation.plan_incomplete,
-                            conflicts=aggregation.conflicts,
-                            needs_clarification=aggregation.needs_clarification,
-                            shown=list(aggregation.shown),
-                            hidden=list(aggregation.hidden),
-                            visibility=dict(aggregation.visibility),
-                        )
-                    react_summary = aggregation.summary
-            except OrchestrationError:
-                raise
-            except Exception as e:  # noqa: BLE001 - react miss → original honest error
-                logger.warning("react fallback failed: %s", e)
-            honest_error = react_summary or final["plan_error"]
-            logger.warning("orchestration aborted: %s", honest_error)
-            raise OrchestrationError(honest_error)
+            result, error_msg = self._react_fallback.run(
+                request_text,
+                notebook_id=notebook_id,
+                trace_id=trace_id,
+                plan_error=final["plan_error"],
+                context=context,
+                notebook_context=notebook_context,
+                cancel_event=cancel_event,
+                on_event=on_event,
+                parent_span_ctx=get_trace_context(),
+            )
+            if result is not None:
+                return result
+            logger.warning("orchestration aborted: %s", error_msg)
+            raise OrchestrationError(error_msg or final["plan_error"])
 
         plan: Plan | None = final["plan"]
         aggregation = final["aggregation"]

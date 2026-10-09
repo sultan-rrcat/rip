@@ -73,7 +73,8 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget, plot/report grounding |
 | `orchestration/engine.py` | Outer LangGraph: `plan → execute → aggregate` (+ `plan_error → END`) |
 | `orchestration/plan_graph.py` | Inner per-request DAG: edges = `depends_on`, parallel siblings, placeholder resolution, scoped memory context (terminal prose agents only; tools get none), retry, timeout, cancel |
-| `orchestration/orchestrator.py` | Façade: trace id, per-request config, `OrchestrationError` contract |
+| `orchestration/orchestrator.py` | Façade: trace id, per-request config, `OrchestrationError` contract; delegates ReAct fallback to `ReactFallback` |
+| `orchestration/react_fallback.py` | L3 ReAct fallback — extracted from `Orchestrator.run()` for testability; runs ReAct, aggregates, maps to `OrchestrationResult` |
 | `orchestration/aggregator.py` | Deterministic type-aware answer assembly (no LLM): terminal text shown, intermediates hidden |
 | `orchestration/memory.py` | Context-window summary + recent window |
 | `store/runs.py` | Postgres CRUD for `runs` + gap-free `run_events` seq |

@@ -266,6 +266,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-043: Extract the ReAct fallback from the orchestrator into ReactFallback
+
+- **Status:** Accepted (2026-10-09)
+- **Context:** The orchestrator's docstring said "thin façade" but `run()` contained 85 lines of ReAct fallback logic (span management, error message selection, manual field-by-field mapping from `AggregationResult` to `OrchestrationResult`). This logic was not independently testable and made the orchestrator the largest non-graph module in the layer.
+- **Decision:** Extract the fallback into a `ReactFallback` module (`react_fallback.py`). The module owns the `react` span, the ReAct → Aggregator → `OrchestrationResult` mapping, and error message selection (react_summary or plan_error). The orchestrator owns checking `plan_error`, checking cancellation, delegating to `ReactFallback`, and raising `OrchestrationError`. The interface: `ReactFallback.run(...) -> tuple[OrchestrationResult | None, str | None]` — returns `(result, None)` on success, `(None, error_message)` on failure.
+- **Consequences:** The orchestrator's `run()` shrinks from ~85 to ~15 lines of fallback logic. The fallback is independently testable — `test_react_fallback.py` covers 6 tests against mock collaborators. The field mapping is now internal to the fallback module, not a leak across the orchestrator's interface. All 238 tests pass (232 existing + 6 new).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.
