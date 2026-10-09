@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from typing import ClassVar
 
-from app.agents.base import Agent, DelegationRequest, DelegationResponse, StepStatus
+from app.agents.base import DelegationRequest, DelegationResponse, StepStatus
+from app.agents.provider_agent import ProviderAgent, _Watchdog
 from app.core import constants
 from app.core.config import settings
 from app.providers.base import ModelProvider
@@ -21,7 +21,6 @@ logger = logging.getLogger("agents.coding")
 #: deadline). Once the first visible token arrives the guard is met —
 #: total time stays bounded by the outer wall clock.
 CODING_FIRST_VISIBLE_TIMEOUT_S = 60.0
-_WATCHDOG_POLL_S = 0.5
 
 #: Code-specialized voice: same execution shape as ReasoningAgent, but the
 #: system prompt is tuned for code generation / explanation. Generate-and-
@@ -63,7 +62,7 @@ def _provider_reasoning_chars(provider: ModelProvider) -> int:
     return chars if isinstance(chars, int) else 0
 
 
-class CodingAgent(Agent):
+class CodingAgent(ProviderAgent):
     agent_id = "coding"
     name = "Coding Agent"
     description = (
@@ -76,176 +75,69 @@ class CodingAgent(Agent):
     side_effecting = False
     cost_class = "low"
 
+    system_prompt = CODING_SYSTEM_PROMPT
+    default_budget = settings.coding_max_tokens
+
     def __init__(self, provider: ModelProvider):
-        self._provider = provider
+        super().__init__(provider)
 
-    def execute(self, request: DelegationRequest) -> DelegationResponse:
-        start = time.perf_counter()
-        logger.info("coding start step=%s trace=%s", request.step_id, request.trace_id)
-        try:
-            message = request.input.get("message")
-            if not message:
-                logger.warning("coding missing message step=%s", request.step_id)
-                return DelegationResponse(
-                    step_id=request.step_id,
-                    status=StepStatus.FAILURE,
-                    output=None,
-                    confidence=constants.CONFIDENCE_LOW,
-                    error="Execution failed: 'message' is required in input",
-                )
-            history = request.input.get("history", [])
-            context = request.input.get("context")
+    def _start_watchdog(self, request: DelegationRequest) -> _Watchdog | None:
+        return _Watchdog(CODING_FIRST_VISIBLE_TIMEOUT_S, request.cancel_event)
 
-            messages = [{"role": "system", "content": CODING_SYSTEM_PROMPT}]
-            if context:
-                messages.append({"role": "system", "content": f"Conversation context:\n{context}"})
-            messages.extend(
-                {"role": turn["role"], "content": turn["content"]}
-                for turn in history
-                if isinstance(turn, dict) and "role" in turn and "content" in turn
+    def _handle_empty_output(
+        self, request: DelegationRequest, start: float
+    ) -> DelegationResponse:
+        finish_reason = _provider_finish_reason(self._provider)
+        reasoning_chars = _provider_reasoning_chars(self._provider)
+        if finish_reason == "length":
+            logger.warning(
+                "coding output limit with no visible text step=%s "
+                "(reasoning_chars=%d)",
+                request.step_id, reasoning_chars,
             )
-            messages.append({"role": "user", "content": message})
-
-            # Coding emits whole files + test scripts: per-step override
-            # when the plan sets one, else the generous coding budget
-            # (never the shared default — 2048 truncates test files).
-            budget = request.max_tokens or settings.coding_max_tokens
-
-            cancel_event = request.cancel_event
-            # Watchdog: abort attempts that stream nothing visible (think-only
-            # burn). The provider only accepts one cancel event, so a local
-            # event ORs user-cancel with the first-visible timeout. Provider
-            # stream paths poll it promptly (httpx per-line / 50ms), bounding
-            # the waste to the grace period instead of a full max_tokens run.
-            stop = threading.Event()
-            state = {"visible": False, "quiet_timeout": False}
-            started = time.monotonic()
-
-            def _watch() -> None:
-                while not stop.is_set():
-                    if cancel_event is not None and cancel_event.is_set():
-                        stop.set()
-                        return
-                    if not state["visible"] and (
-                        time.monotonic() - started
-                    ) > CODING_FIRST_VISIBLE_TIMEOUT_S:
-                        state["quiet_timeout"] = True
-                        stop.set()
-                        return
-                    time.sleep(_WATCHDOG_POLL_S)
-
-            watch = threading.Thread(target=_watch, daemon=True)
-            watch.start()
-            try:
-                if request.on_delta is not None:
-                    parts: list[str] = []
-                    for chunk in self._provider.generate_stream(
-                        model=settings.ollama_default_model,
-                        messages=messages,
-                        temperature=settings.default_temperature,
-                        max_tokens=budget,
-                        cancel_event=stop,
-                    ):
-                        state["visible"] = True
-                        parts.append(chunk)
-                        request.on_delta(chunk)
-                    output_text = "".join(parts)
-                else:
-                    output_text = self._provider.generate(
-                        model=settings.ollama_default_model,
-                        messages=messages,
-                        temperature=settings.default_temperature,
-                        max_tokens=budget,
-                        cancel_event=stop,
-                    )
-            except RuntimeError:
-                if state["quiet_timeout"]:
-                    reasoning_chars = _provider_reasoning_chars(self._provider)
-                    logger.warning(
-                        "coding no visible output within %.0fs step=%s "
-                        "(reasoning_chars=%d)",
-                        CODING_FIRST_VISIBLE_TIMEOUT_S, request.step_id,
-                        reasoning_chars,
-                    )
-                    result = DelegationResponse(
-                        step_id=request.step_id,
-                        status=StepStatus.FAILURE,
-                        output=None,
-                        confidence=constants.CONFIDENCE_LOW,
-                        error=(
-                            "Execution failed: model streamed no visible "
-                            f"output within {CODING_FIRST_VISIBLE_TIMEOUT_S:.0f}s"
-                            + (
-                                f" ({reasoning_chars} thinking chars streamed, "
-                                "budget burned in chain-of-thought)"
-                                if reasoning_chars else ""
-                            )
-                        ),
-                    )
-                    duration_ms = (time.perf_counter() - start) * 1000
-                    logger.info(
-                        "coding done step=%s status=%s duration_ms=%.0f",
-                        request.step_id, result.status.value, duration_ms,
-                    )
-                    return result
-                raise
-            finally:
-                stop.set()
-                watch.join(timeout=5.0)
-
-            # Empty output is a failure, not a blank answer: SUCCESS with ""
-            # renders as an empty chat bubble (and skips the retry loop),
-            # while FAILURE retries honestly and surfaces the error.
-            if not (output_text or "").strip():
-                finish_reason = _provider_finish_reason(self._provider)
-                reasoning_chars = _provider_reasoning_chars(self._provider)
-                if finish_reason == "length":
-                    logger.warning(
-                        "coding output limit with no visible text step=%s "
-                        "(reasoning_chars=%d)",
-                        request.step_id, reasoning_chars,
-                    )
-                    result = DelegationResponse(
-                        step_id=request.step_id,
-                        status=StepStatus.FAILURE,
-                        output=None,
-                        confidence=constants.CONFIDENCE_LOW,
-                        error=(
-                            "Execution failed: model hit its output limit "
-                            "before answering (finish_reason=length, no "
-                            "visible text"
-                            + (
-                                f", {reasoning_chars} thinking chars streamed"
-                                if reasoning_chars else ""
-                            )
-                            + ")"
-                        ),
-                    )
-                else:
-                    logger.warning("coding empty output step=%s", request.step_id)
-                    result = DelegationResponse(
-                        step_id=request.step_id,
-                        status=StepStatus.FAILURE,
-                        output=None,
-                        confidence=constants.CONFIDENCE_LOW,
-                        error="Execution failed: model returned no text",
-                    )
-            else:
-                result = DelegationResponse(
-                    step_id=request.step_id,
-                    status=StepStatus.SUCCESS,
-                    output=output_text,
-                    confidence=constants.CONFIDENCE_SUCCESS,
-                )
-        except Exception as e:
-            logger.exception("coding failed step=%s", request.step_id)
-            result = DelegationResponse(
+            return DelegationResponse(
                 step_id=request.step_id,
                 status=StepStatus.FAILURE,
                 output=None,
                 confidence=constants.CONFIDENCE_LOW,
-                error=f"Execution failed: {e!s}",
+                error=(
+                    "Execution failed: model hit its output limit "
+                    "before answering (finish_reason=length, no "
+                    "visible text"
+                    + (
+                        f", {reasoning_chars} thinking chars streamed"
+                        if reasoning_chars else ""
+                    )
+                    + ")"
+                ),
             )
+        return super()._handle_empty_output(request, start)
+
+    def _handle_watchdog_trip(
+        self, request: DelegationRequest, watchdog: _Watchdog, start: float
+    ) -> DelegationResponse:
+        reasoning_chars = _provider_reasoning_chars(self._provider)
+        logger.warning(
+            "coding no visible output within %.0fs step=%s "
+            "(reasoning_chars=%d)",
+            CODING_FIRST_VISIBLE_TIMEOUT_S, request.step_id,
+            reasoning_chars,
+        )
+        result = DelegationResponse(
+            step_id=request.step_id,
+            status=StepStatus.FAILURE,
+            output=None,
+            confidence=constants.CONFIDENCE_LOW,
+            error=(
+                "Execution failed: model streamed no visible "
+                f"output within {CODING_FIRST_VISIBLE_TIMEOUT_S:.0f}s"
+                + (
+                    f" ({reasoning_chars} thinking chars streamed, "
+                    "budget burned in chain-of-thought)"
+                    if reasoning_chars else ""
+                )
+            ),
+        )
         duration_ms = (time.perf_counter() - start) * 1000
         logger.info(
             "coding done step=%s status=%s duration_ms=%.0f",

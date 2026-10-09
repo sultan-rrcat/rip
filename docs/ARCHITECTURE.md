@@ -60,7 +60,8 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `services/file_processor.py`, `chat.py` | Background ingest job; context formatting + source extraction |
 | `providers/base.py`, `ollama.py`, `streaming.py` | `ModelProvider` contract, Ollama OpenAI-compat client, `<think>` filtering |
 | `providers/tracing.py` | `wrap_provider()` — records `llm.generate[.stream|_structured]` generations (no-op when Langfuse off) |
-| `agents/base.py`, `registry.py`, `reasoning.py` | Agent contract + fixed 1-agent set |
+| `agents/base.py`, `registry.py`, `provider_agent.py` | Agent contract + `ProviderAgent` shared base (common execute logic, watchdog) |
+| `agents/reasoning.py`, `agents/coding.py` | Concrete agents — specify only system prompt, budget default, optional watchdog |
 | `tools/base.py`, `registry.py`, `executor.py` | Tool contract + fixed 5-tool set, direct execution (no approval gate) |
 | `tools/rag_query.py`, `notebook_inspect.py`, `plot_chart.py`, `doc_generate.py`, `doc_convert.py` | The five tools |
 | `orchestration/plan.py`, `results.py` | Plan DAG models, step/execution results |

@@ -275,6 +275,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-044: Create a shared ProviderAgent base class for the reasoning and coding agents
+
+- **Status:** Accepted (2026-10-09)
+- **Context:** The two agents (`reasoning.py` 138 lines, `coding.py` 254 lines) shared ~80% of their structure with no shared base implementation: message extraction, history/context assembly, provider call (streaming or not), empty-output-as-failure, exception wrapping, duration logging. The coding watchdog (60s first-visible-token abort) existed in only one agent and would have to be duplicated if reasoning ever needed it.
+- **Decision:** (1) Introduce a `ProviderAgent` base class in `provider_agent.py` holding the common execute logic. The interface is simple: subclasses specify only `system_prompt`, `default_budget`, and optionally override `_start_watchdog` and `_handle_empty_output`. (2) Extract the watchdog into a `_Watchdog` class — a first-visible-token guard that ORs user-cancel with a 60s timeout. `CodingAgent` overrides `_start_watchdog` to return a `_Watchdog` instance; `ReasoningAgent` uses the default (no watchdog). (3) `ProviderAgent` is an abstract intermediate: it implements `execute` but declares `system_prompt` and `default_budget` as abstract properties, so `is_abstract` returns `True` and the metadata check is skipped.
+- **Consequences:** The common pattern changes once, not twice. The watchdog is a shared concern, not a copy. `reasoning.py` shrinks from 138 to ~30 lines; `coding.py` shrinks from 254 to ~90 lines. New agents need only define metadata + system prompt + budget. 16 new unit tests cover the base class and watchdog. All 254 tests pass (238 existing + 16 new).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.
