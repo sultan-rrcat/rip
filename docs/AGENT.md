@@ -29,7 +29,8 @@ orchestration/plan.py, planner.py (thin holder, no DAG prompt), router.py,
   intents.py, builders.py, react_engine.py (thin wrapper + run_react),
   react_loop.py (extracted loop, per-guard methods), react_fallback.py
   (extracted L3 fallback), idle_guard.py, corpus.py, validator.py, aggregator.py,
-  engine.py, plan_graph.py, orchestrator.py, memory.py, results.py
+  engine.py, plan_router.py (extracted L1→L2→L3 routing), plan_graph.py,
+  orchestrator.py, memory.py, results.py
 store/runs.py        Postgres CRUD for runs + run_events (no deltas)
 runs/manager.py      worker: memory, sources, never writes messages
 artifacts.py         file-based artifacts

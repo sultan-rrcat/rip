@@ -72,7 +72,8 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `orchestration/react_loop.py` | L3 ReAct loop — extracted from `ReActEngine.run()` for testability; all guard state on the class, each guard a method |
 | `orchestration/planner.py` | Thin provider holder shared by the L1 router and L3 ReAct (no DAG prompt; mega-prompt removed per ADR-032) |
 | `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget, plot/report grounding |
-| `orchestration/engine.py` | Outer LangGraph: `plan → execute → aggregate` (+ `plan_error → END`) |
+| `orchestration/engine.py` | Outer LangGraph: `plan → execute → aggregate` (+ `plan_error → END`); thin plan node delegates to `PlanRouter` |
+| `orchestration/plan_router.py` | L1 Router → L2 Builders → Validator → plan node output; extracted from `engine._make_plan_node()` for testability |
 | `orchestration/plan_graph.py` | Inner per-request DAG: edges = `depends_on`, parallel siblings, placeholder resolution, scoped memory context (terminal prose agents only; tools get none), retry, timeout, cancel |
 | `orchestration/orchestrator.py` | Façade: trace id, per-request config, `OrchestrationError` contract; delegates ReAct fallback to `ReactFallback` |
 | `orchestration/react_fallback.py` | L3 ReAct fallback — extracted from `Orchestrator.run()` for testability; runs ReAct, aggregates, maps to `OrchestrationResult` |

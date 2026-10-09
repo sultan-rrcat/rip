@@ -284,6 +284,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-045: Extract routing from the engine plan node into PlanRouter
+
+- **Status:** Accepted (2026-10-09)
+- **Context:** The plan node in `engine.py` contained ~190 lines of L1→L2→L3 routing logic (router call, builder dispatch, validator, trivial repair, SSE events, span management) inside a graph node factory — the node should be thin wiring. The routing logic was not independently testable without LangGraph.
+- **Decision:** Extract the routing sequence into a `PlanRouter` module (`plan_router.py`). The module owns the L1 Router call, L2 Builder dispatch, Validator gate, trivial plan repair, `router` + `plan` spans, SSE `plan` event emission, and `plan_span_ctx` capture. The graph node owns checking cancellation, checking `force_react`, delegating to `PlanRouter`, and returning the state dict. The interface: `PlanRouter.route(...) -> PlanRoutingResult` (plan, plan_error, plan_span_ctx, route_info).
+- **Consequences:** The plan node shrinks from ~190 to ~20 lines. The routing logic is independently testable — `test_plan_router.py` covers 9 tests against mock collaborators. The span management and SSE event emission are now local to one module. All 263 tests pass (254 existing + 9 new).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

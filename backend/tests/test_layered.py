@@ -791,10 +791,10 @@ def test_greeting_plan_event_rule_route() -> None:
 
 
 def test_router_span_is_sibling_of_plan_under_run(monkeypatch) -> None:
-    from app.orchestration import engine, plan_graph
+    from app.orchestration import plan_graph, plan_router
 
     recorder = _SpanRecorder()
-    monkeypatch.setattr(engine, "manual_span", recorder)
+    monkeypatch.setattr(plan_router, "manual_span", recorder)
     # Hermetic step spans: when a real Langfuse client is primed (full
     # suite via app.main lifespan), the sentinel plan-span ctx below would
     # otherwise reach the real plan_graph.manual_span and raise on the
@@ -805,7 +805,7 @@ def test_router_span_is_sibling_of_plan_under_run(monkeypatch) -> None:
     # instead). Well-formed (dict with trace_id/parent_span_id) so the
     # real step spans downstream still parent correctly when tracing is on.
     _plan_ctx = {"trace_id": "T", "parent_span_id": "PLAN-SPAN"}
-    monkeypatch.setattr(engine, "get_trace_context", lambda: dict(_plan_ctx))
+    monkeypatch.setattr(plan_router, "get_trace_context", lambda: dict(_plan_ctx))
     result = _orchestrator(_compare_provider()).run(COMPARE_REQUEST, "nb-1")
     assert result.status == "success"
     routers = recorder.by_name("router")
@@ -822,10 +822,10 @@ def test_router_span_is_sibling_of_plan_under_run(monkeypatch) -> None:
 
 
 def test_builder_miss_emits_no_plan_span_and_runs_react(monkeypatch) -> None:
-    from app.orchestration import engine
+    from app.orchestration import plan_router
 
     recorder = _SpanRecorder()
-    monkeypatch.setattr(engine, "manual_span", recorder)
+    monkeypatch.setattr(plan_router, "manual_span", recorder)
     provider = FakeLayeredProvider(text="react answer", queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},
         {"thought": "answer directly", "executor": "reasoning",
