@@ -257,6 +257,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-042: Extract the ReAct loop into a testable ReactLoop class
+
+- **Status:** Accepted (2026-10-09)
+- **Context:** `react_engine.py` was a ~2380-line god module: the `ReActEngine.run()` method spanned ~1300 lines with 15+ interacting guard variables (`failed_actions`, `seen_actions`, `plotted_data`, `chart_fingerprints`, `seen_doc_content`, `seen_observations`, `corpus_empty`, `corpus_processing`, `has_files`, `doc_wanted`, `consecutive_reasoning`, `generated_formats`, `source_ids`, `final_hint_answer`, `no_step_reason`) and no unifying abstraction. The loop body was untested at the unit level — only the extracted pure helpers were tested, and their calling sequence was visible only by reading the full loop. The `react.py` shim re-exported 30+ names (including 17 `_`-private) so existing callers were unaffected, but it obscured where real code lived and coupled tests to indirection.
+- **Decision:** (1) Extract the loop body into a `ReactLoop` class in `react_loop.py`. All guard state lives on the class as instance variables; each guard check is a method that returns a hint string when it trips (or None when the action is valid). The `run()` method becomes a thin orchestrator that calls these methods. (2) Slim down `react_engine.py` to the pure helpers, a thin `ReActEngine` wrapper that creates a `ReactLoop` and delegates, and the `run_react` entry point. (3) Delete `react.py`; update all importers to target `react_engine` directly. (4) The synthesis callback (`synth_fn`) is injected into `ReactLoop` so the loop stays independent of the answer-phrasing strategy.
+- **Consequences:** The loop is now testable as a unit — `test_react_loop.py` covers 37 tests against mock collaborators without requiring Ollama/DB. Each guard is a named method with a clear purpose. `react_engine.py` shrinks from ~2380 to ~400 lines. The `react.py` shim (78 lines) is deleted. All 232 existing tests pass unchanged (except import path updates). New guard behavior can be added by adding a method to `ReactLoop`, not by editing a 1300-line function.
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

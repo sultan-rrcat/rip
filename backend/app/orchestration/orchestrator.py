@@ -156,7 +156,7 @@ class Orchestrator:
                 from app.observability.langfuse import (
                     truncate as _truncate,
                 )
-                from app.orchestration.react import run_react
+                from app.orchestration.react_engine import run_react
 
                 # Trace-only sibling: the `react` span parents explicitly
                 # under `run` (via the worker-thread context captured here),

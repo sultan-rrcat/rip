@@ -67,7 +67,8 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `orchestration/router.py` | L1 intent router — sole dispatcher, one `generate_structured` call (`{intent, confidence}`; `<0.6` → `unknown` → ReAct; failures fail open to ReAct) |
 | `orchestration/intents.py` | `Intent` enum + `ROUTER_CONFIDENCE_THRESHOLD=0.6` + `DETERMINISTIC_INTENTS` (10 builder intents) |
 | `orchestration/builders.py` | L2 deterministic builders — code-built DAGs for `chat/qa_single/compare_multi/summarize/summarize_plot/plot_standalone/quiz/convert_one/convert_all/code` (`_PER_FILE_TOP_K=4`, `>5` files → ReAct) |
-| `orchestration/react.py` | L3 ReAct fallback — thought → action → observation, max 6 iterations, no placeholders |
+| `orchestration/react_engine.py` | L3 ReAct engine — thin wrapper around `ReactLoop`; pure helpers + `run_react` entry point |
+| `orchestration/react_loop.py` | L3 ReAct loop — extracted from `ReActEngine.run()` for testability; all guard state on the class, each guard a method |
 | `orchestration/planner.py` | Thin provider holder shared by the L1 router and L3 ReAct (no DAG prompt; mega-prompt removed per ADR-032) |
 | `orchestration/validator.py` | Pure-rules gate: exactly-one executor, known ids, DAG-acyclic, step budget, plot/report grounding |
 | `orchestration/engine.py` | Outer LangGraph: `plan → execute → aggregate` (+ `plan_error → END`) |

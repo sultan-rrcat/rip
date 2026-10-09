@@ -397,7 +397,7 @@ class TestRouterDocAwareness:
 
     def test_react_prompt_renders_snapshot(self):
         from app.agents.registry import get_default_agent_registry
-        from app.orchestration.react import run_react
+        from app.orchestration.react_engine import run_react
         from app.providers.base import ModelProvider
         from app.tools.registry import get_default_tool_registry
 
@@ -431,7 +431,7 @@ class TestRouterDocAwareness:
 
     def test_no_docs_react_snapshot(self):
         from app.agents.registry import get_default_agent_registry
-        from app.orchestration.react import run_react
+        from app.orchestration.react_engine import run_react
         from app.providers.base import ModelProvider
         from app.tools.registry import get_default_tool_registry
 

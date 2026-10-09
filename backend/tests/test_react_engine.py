@@ -188,20 +188,20 @@ class TestRemapMisnamedCoding:
     """A coding call filed under code.read must still execute (trace c1bbae95)."""
 
     def test_code_read_with_message_becomes_coding(self) -> None:
-        from app.orchestration.react import _remap_executor
+        from app.orchestration.react_engine import _remap_executor
 
         action_input = {"message": "Create a self-contained HTML page..."}
         assert _remap_executor("code.read", action_input) == "coding"
 
     def test_code_read_with_null_file_name_becomes_coding(self) -> None:
         # The exact shape trace c1bbae95 emitted: file_name=null + message.
-        from app.orchestration.react import _remap_executor
+        from app.orchestration.react_engine import _remap_executor
 
         action_input = {"message": "build the page", "file_name": None}
         assert _remap_executor("code.read", action_input) == "coding"
 
     def test_real_code_read_is_untouched(self) -> None:
-        from app.orchestration.react import _remap_executor
+        from app.orchestration.react_engine import _remap_executor
 
         action_input = {
             "file_id": "b38684db-3ff3-4f05-8b8d-bab7c5545b9d",
@@ -210,7 +210,7 @@ class TestRemapMisnamedCoding:
         assert _remap_executor("code.read", action_input) == "code.read"
 
     def test_other_executors_untouched(self) -> None:
-        from app.orchestration.react import _remap_executor
+        from app.orchestration.react_engine import _remap_executor
 
         assert _remap_executor("coding", {"message": "x"}) == "coding"
         assert _remap_executor("plot.chart", {"values": [1]}) == "plot.chart"

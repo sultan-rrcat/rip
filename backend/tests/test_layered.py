@@ -201,7 +201,7 @@ def _react_orchestrator(provider):
 
 
 def test_react_answers_after_tool_observation() -> None:
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(text="react final", queued=[
         {"thought": "need docs", "executor": "rag.query",
@@ -224,7 +224,7 @@ def test_react_answers_after_tool_observation() -> None:
 def test_react_executes_complete_dag_per_iteration() -> None:
     # Multi-step support: one iteration emits reasoning draft + doc.generate
     # with depends_on wiring; failure repairs next iteration.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(text="email ready", queued=[
         {"thought": "draft + render", "is_final": False, "steps": [
@@ -269,7 +269,7 @@ def test_react_infers_generic_tool_executor() -> None:
 
 
 def test_react_is_final_with_steps_executes_when_answer_empty() -> None:
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(text="done", queued=[
         {"thought": "inspect+read", "is_final": True, "steps": [
@@ -286,7 +286,7 @@ def test_react_is_final_with_steps_executes_when_answer_empty() -> None:
 
 
 def test_react_rejects_unknown_executor_then_recovers() -> None:
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(text="recovered", queued=[
         {"thought": "bad pick", "executor": "ghost",
@@ -304,7 +304,7 @@ def test_react_rejects_unknown_executor_then_recovers() -> None:
 
 
 def test_react_normalizes_nested_agent_input() -> None:
-    from app.orchestration.react import (
+    from app.orchestration.react_engine import (
         _normalize_react_input,
         _validate_react_input,
     )
@@ -333,7 +333,7 @@ def test_react_normalizes_nested_agent_input() -> None:
 
 
 def test_react_validation_hints_without_executing() -> None:
-    from app.orchestration.react import _validate_react_input, run_react
+    from app.orchestration.react_engine import _validate_react_input, run_react
 
     assert "query" in (_validate_react_input("rag.query", {}) or "")
     assert _validate_react_input("notebook.inspect", {}) is None
@@ -367,7 +367,7 @@ def test_react_recovers_final_answer_stranded_in_input() -> None:
     # Trace 35e8fbd9 iter-1: is_final=true, answer empty, the full answer
     # rode inside input.content of a malformed doc.generate call. The loop
     # must recover it instead of discarding a correct answer.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(text="| A | B |\n|---|---|", queued=[
         {"thought": "format as table", "executor": "doc.generate",
@@ -388,7 +388,7 @@ def test_react_empty_final_answer_retries_with_actionable_hint() -> None:
     # Two consecutive is_final=true turns with no answer anywhere: the
     # first gets an actionable correction (not the old "retry." non-hint),
     # the second fails the loop honestly.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(queued=[
         {"thought": "done", "executor": "reasoning",
@@ -414,7 +414,7 @@ def test_react_empty_final_answer_retries_with_actionable_hint() -> None:
 def test_react_prompt_carries_all_tool_schemas() -> None:
     # Trace 35e8fbd9 iter-2: the model guessed doc.convert fields for
     # doc.generate twice — the prompt never showed doc.generate's schema.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(queued=[
         {"thought": "answer", "executor": "reasoning",
@@ -431,7 +431,7 @@ def test_react_prompt_carries_all_tool_schemas() -> None:
 def test_react_repeat_of_failed_executor_is_idle_turn() -> None:
     # Trace 27dcf635: code.sandbox ×2 (same docker error), rag.query ×2
     # (same empty result) — the second identical proposal must not execute.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
     from app.tools.base import Tool, ToolRequest, ToolResponse
     from app.tools.registry import ToolRegistry
 
@@ -478,7 +478,7 @@ def test_react_repeat_of_failed_executor_is_idle_turn() -> None:
 def test_react_refuses_rag_query_on_empty_corpus() -> None:
     # Trace 27dcf635 iters 2+6: rag.query on "(no documents)" provably
     # returns "(no chunks retrieved)" — refuse it as an idle turn.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(text="no docs answer", queued=[
         {"thought": "need data", "executor": "rag.query",
@@ -503,7 +503,7 @@ def test_react_refuses_redundant_convert_after_generate() -> None:
     # "converted" the ORIGINAL 18-page upload to pdf — a full copy of
     # the source alongside the report. Same-format converts of snapshot
     # uploads after a generate are refused as idle turns.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(text="table pdf ready", queued=[
         {"thought": "make report", "executor": "doc.generate",
@@ -529,7 +529,7 @@ def test_react_refuses_redundant_convert_after_generate() -> None:
 
 
 def test_redundant_convert_hint_unit() -> None:
-    from app.orchestration.react import _redundant_convert_hint
+    from app.orchestration.react_engine import _redundant_convert_hint
 
     gen = {"pdf"}
     src = {"src-1", "*"}
@@ -593,7 +593,7 @@ def test_misnamed_code_read_still_reaches_coding_agent() -> None:
     both idle turns and the run failed with zero steps. The remap must route
     it to the coding agent and answer.
     """
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(queued=[
         # iter 1: code.read with NO input at all (the original trace shape).
@@ -620,7 +620,7 @@ def test_misnamed_code_read_still_reaches_coding_agent() -> None:
 
 
 def test_react_prompt_allows_parametric_numbers_without_docs() -> None:
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     seen: list = []
 
@@ -639,7 +639,7 @@ def test_react_prompt_allows_parametric_numbers_without_docs() -> None:
 
 
 def test_react_prompt_states_flat_shapes_and_plot_preference() -> None:
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     seen: list = []
 
@@ -663,7 +663,7 @@ def test_react_prompt_is_ordered_with_mandatory_message() -> None:
     # Your trace: iter-1/iter-2 returned reasoning with NO input.message,
     # burning 2 idle turns into "no usable action". The prompt must make
     # input.message mandatory and order decisions stop-at-first-match.
-    from app.orchestration.react_engine import _build_react_system_prompt
+    from app.orchestration.react_loop import _build_react_system_prompt
 
     system = _build_react_system_prompt(
         ["coding", "reasoning"],
@@ -681,7 +681,7 @@ def test_react_prompt_drafts_new_content_before_asking() -> None:
     # Hybrid: "write an email in pdf" on an empty notebook drafts with
     # [brackets] first via reasoning, then doc.generates — never clarifies
     # INSTEAD of drafting.
-    from app.orchestration.react_engine import _build_react_system_prompt
+    from app.orchestration.react_loop import _build_react_system_prompt
 
     system = _build_react_system_prompt(
         ["coding", "reasoning"],
@@ -843,8 +843,8 @@ def test_builder_miss_emits_no_plan_span_and_runs_react(monkeypatch) -> None:
 
 
 def test_react_iteration_spans(monkeypatch) -> None:
-    import app.orchestration.react_engine as react_mod
-    from app.orchestration.react import run_react
+    import app.orchestration.react_loop as react_mod
+    from app.orchestration.react_engine import run_react
 
     recorder = _SpanRecorder()
     monkeypatch.setattr(react_mod, "_manual_span", recorder)
@@ -871,7 +871,7 @@ def test_react_iteration_spans(monkeypatch) -> None:
 
 def test_orchestrator_react_span(monkeypatch) -> None:
     import app.observability.langfuse as lf
-    import app.orchestration.react_engine as react_mod
+    import app.orchestration.react_loop as react_mod
 
     recorder = _SpanRecorder()
     # Orchestrator imports manual_span lazily (picks up the lf patch);
@@ -930,7 +930,7 @@ def test_compare_empty_notebook_yields_clarification() -> None:
 def test_react_broad_ask_defaults_rag_query_to_overview() -> None:
     # Trace cfbaa9c3: "summarize the docs" loop retrieved REFERENCES via
     # specific ranking instead of overview stratification.
-    from app.orchestration.react import _default_react_mode, run_react
+    from app.orchestration.react_engine import _default_react_mode, run_react
 
     assert _default_react_mode("summarize the docs", {"query": "x"})["mode"] == "overview"
     assert "mode" not in _default_react_mode("what is QLoRA?", {"query": "x"})
@@ -958,7 +958,7 @@ def test_react_synthesizes_answer_when_iterations_exhaust() -> None:
     # Trace cfbaa9c3 iter-6: no is_final, final summary was a truncated raw
     # chunk dump. The loop must synthesize prose from observations instead.
     from app.orchestration.aggregator import Aggregator
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(
         text="synthesized summary covering both docs",
@@ -986,7 +986,7 @@ def test_react_plot_nested_values_is_idle_hint() -> None:
     # `series_labels` key) burned executions on "'values' must all be
     # numbers". Malformed shapes must get a corrective hint WITHOUT
     # executing so the iteration budget survives for a fixed shape.
-    from app.orchestration.react import _validate_react_input, run_react
+    from app.orchestration.react_engine import _validate_react_input, run_react
 
     hint = _validate_react_input(
         "plot.chart",
@@ -1025,7 +1025,7 @@ def test_react_plot_without_title_is_idle_hint() -> None:
     # Trace affdbbd4: 3 of 4 charts rendered untitled — the model was
     # never asked for one. A title-less proposal must get a corrective
     # hint WITHOUT executing so the retry carries the same data + title.
-    from app.orchestration.react import _validate_react_input, run_react
+    from app.orchestration.react_engine import _validate_react_input, run_react
 
     hint = _validate_react_input(
         "plot.chart",
@@ -1067,7 +1067,7 @@ def test_react_plot_without_title_is_idle_hint() -> None:
 def test_react_exact_successful_repeat_is_idle() -> None:
     # Trace 07fb4f59 r2/r3: the identical Avg-Tokens chart executed twice.
     # An exact repeat of a success must idle, not re-execute.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     chart = {"chart_type": "bar", "labels": ["A", "B"],
              "values": [46377, 21214], "title": "tokens"}
@@ -1092,7 +1092,7 @@ def test_react_replot_same_data_is_idle() -> None:
     # Trace 07fb4f59 r5/r6: [229, 135] re-plotted under different
     # labels/title renders the same bars. Same data (ignoring cosmetics)
     # must idle so the frontend never shows the same plot twice.
-    from app.orchestration.react import _plot_data_key, run_react
+    from app.orchestration.react_engine import _plot_data_key, run_react
 
     assert _plot_data_key(
         {"chart_type": "bar", "labels": ["A", "B"], "values": [229, 135],
@@ -1130,7 +1130,7 @@ def test_react_replot_same_data_is_idle() -> None:
 def test_react_deltas_only_from_final_synthesis() -> None:
     # No streaming from inside the loop — only the trailing synthesis call
     # streams prose deltas to the user.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     events: list[dict] = []
     provider = FakeLayeredProvider(text="synthesized prose", queued=[
@@ -1154,7 +1154,7 @@ def test_react_synthesis_evidence_collapses_charts() -> None:
     # Trace 07fb4f59 r-final: raw SVG evidence invited an ASCII redraw.
     # Chart successes must collapse to a one-liner in synthesis evidence.
     from app.agents.base import StepStatus
-    from app.orchestration.react import _synthesis_evidence_line
+    from app.orchestration.react_engine import _synthesis_evidence_line
     from app.orchestration.results import StepResult
 
     chart = StepResult(
@@ -1176,7 +1176,7 @@ def test_react_processing_file_yields_wait_not_failure() -> None:
     # idle guard, and surfaced "no usable action was found", naming neither
     # the cause nor the fix. Files that are mid-ingest must produce an honest
     # wait clarification (what the L2 builders already do), not a failure.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     processing = "1 file(s): Anomaly-Detection-Report.pdf [processing] id=abc"
     provider = FakeLayeredProvider(
@@ -1212,7 +1212,7 @@ def test_react_processing_file_yields_wait_not_failure() -> None:
 def test_react_empty_notebook_still_fails_honestly() -> None:
     # The processing fix must not swallow the genuinely-empty case: with no
     # files at all there is nothing to wait for, so the honest failure stays.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     provider = FakeLayeredProvider(
         queued=[
@@ -1236,7 +1236,7 @@ def test_react_large_retrieval_filtered_by_tool_default() -> None:
     # The relevance filter is default-on in rag.query, so ReAct needs no
     # engine change to benefit: a large retrieval is filtered to the
     # query-relevant chunks before it reaches the scratchpad.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     keep = "BENCHMARK " + ("v" * 7000)
     drop = "FILLER " + ("w" * 7000)
@@ -1302,7 +1302,7 @@ def test_react_retrieval_observation_not_truncated_to_1500() -> None:
     # the start of the TOC and nothing else. The benchmark table sat ~12k
     # chars in, so the run concluded the document held no data. The evidence
     # must survive to the model, deep into the observation.
-    from app.orchestration.react import (
+    from app.orchestration.react_engine import (
         _RETRIEVAL_SCRATCHPAD_LIMIT,
         run_react,
     )
@@ -1355,7 +1355,7 @@ def test_react_retrieval_observation_not_truncated_to_1500() -> None:
 
 
 def test_trim_scratchpad_drops_oldest_and_keeps_newest() -> None:
-    from app.orchestration.react import _trim_scratchpad
+    from app.orchestration.react_engine import _trim_scratchpad
 
     pad = ["a" * 30, "b" * 30, "c" * 30]
     kept = _trim_scratchpad(pad, 70)
@@ -1367,7 +1367,7 @@ def test_trim_scratchpad_drops_oldest_and_keeps_newest() -> None:
 
 def test_synthesis_evidence_line_keeps_full_retrieval() -> None:
     from app.agents.base import StepStatus
-    from app.orchestration.react import _synthesis_evidence_line
+    from app.orchestration.react_engine import _synthesis_evidence_line
     from app.orchestration.results import StepResult
 
     deep = "x" * 3000 + " BENCHMARK TABLE"
@@ -1396,7 +1396,7 @@ def test_react_identical_retrieval_result_is_idle() -> None:
     # useless-but-successful chunks counted as progress to both, so 5 of 6
     # iterations were burned on zero new evidence and the final synthesis
     # prompt carried the same chunk four times.
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     class _FixedRAG:
         """Same result regardless of query — the trace's exact shape."""

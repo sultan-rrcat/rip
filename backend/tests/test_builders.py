@@ -422,7 +422,7 @@ def test_react_prompt_carries_zero_file_plot_rule() -> None:
     # Trace 27dcf635: a plot with no docs and no user numbers must recall
     # figures parametrically via reasoning before plot.chart — L3 ReAct
     # owns this path (mega-prompt removed).
-    from app.orchestration.react import run_react
+    from app.orchestration.react_engine import run_react
 
     seen: list = []
 
