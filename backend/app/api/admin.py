@@ -71,6 +71,29 @@ def get_config():
     return _snapshot_or_503()
 
 
+@router.get("/v1/admin/models")
+def list_models():
+    """Live Ollama model list for the admin dropdown. Degraded-honest."""
+    from app.api import deps
+
+    try:
+        provider = deps.get_model_provider()
+        inner = getattr(provider, "_inner", provider)
+        try:
+            inner.ensure_ready()
+            reachable = True
+        except Exception:  # noqa: BLE001 - unreachable Ollama is a state, not an error
+            reachable = False
+        try:
+            models = provider.list_available_models()
+        except Exception:  # noqa: BLE001 - listing must never 500 the admin page
+            models = []
+        return {"reachable": reachable, "models": models}
+    except Exception as e:  # noqa: BLE001 - degraded, not dead
+        logger.warning("admin models degraded: %s", e)
+        return {"reachable": False, "models": []}
+
+
 @router.put("/v1/admin/config")
 def put_config(data: ConfigUpdate):
     from fastapi import HTTPException

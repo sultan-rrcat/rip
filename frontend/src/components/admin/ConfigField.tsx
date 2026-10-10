@@ -1,4 +1,4 @@
-import type { ConfigEntry } from '@/types/admin'
+import type { ConfigEntry, HostedModel } from '@/types/admin'
 
 function badgeClass(kind: 'live' | 'restart' | 'db' | 'env' | 'default'): string {
   switch (kind) {
@@ -21,12 +21,20 @@ export default function ConfigField({
   pending,
   onChange,
   onReset,
+  modelOptions,
+  modelsReachable,
+  modelsLoading,
+  onRefreshModels,
 }: {
   entry: ConfigEntry
   draft: string | boolean
   pending: boolean
   onChange: (v: string | boolean) => void
   onReset: () => void
+  modelOptions?: HostedModel[]
+  modelsReachable?: boolean
+  modelsLoading?: boolean
+  onRefreshModels?: () => void
 }) {
   const dirty =
     entry.editable &&
@@ -34,10 +42,22 @@ export default function ConfigField({
     String(draft) !== String(entry.value) &&
     !(typeof draft === 'boolean' && typeof entry.value === 'boolean' && draft === entry.value)
 
+  const isModelPicker = entry.key === 'ollama_default_model' && entry.editable && !entry.secret
+  const hostedIds = (modelOptions ?? []).map((m) => m.id)
+  const draftStr = String(draft)
+  const pickerOptions = draftStr && !hostedIds.includes(draftStr) ? [draftStr, ...hostedIds] : hostedIds
+
   return (
     <div className="flex flex-col gap-2 rounded-md border border-line/70 bg-paper/50 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-4">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
+          {isModelPicker && (
+            <span
+              title={modelsReachable ? 'Ollama reachable' : 'Ollama unreachable'}
+              aria-label={modelsReachable ? 'Ollama reachable' : 'Ollama unreachable'}
+              className={`inline-block h-2 w-2 rounded-full ${modelsReachable ? 'bg-emerald-500' : 'bg-line'}`}
+            />
+          )}
           <p className="text-[13px] font-semibold text-ink">{entry.label}</p>
           <span className={`font-ledger rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-[0.14em] ${badgeClass(entry.apply)}`}>
             {entry.apply === 'live' ? 'LIVE' : 'RESTART'}
@@ -64,7 +84,49 @@ export default function ConfigField({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        {entry.secret || !entry.editable ? (
+        {isModelPicker && hostedIds.length > 0 ? (
+          <>
+            <select
+              aria-label={entry.label}
+              value={draftStr}
+              onChange={(e) => onChange(e.target.value)}
+              className="font-ledger h-9 w-44 rounded-md border border-line bg-card px-2 text-[12px] text-ink outline-none focus:border-ledger/70"
+            >
+              {pickerOptions.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={onRefreshModels}
+              disabled={modelsLoading}
+              title="Fetch live Ollama model list"
+              className="font-ledger h-9 shrink-0 rounded-md border border-line bg-card px-2.5 text-[11px] font-semibold text-ink-soft hover:bg-paper disabled:opacity-40"
+            >
+              {modelsLoading ? '…' : '↻ Fetch'}
+            </button>
+          </>
+        ) : isModelPicker ? (
+          <>
+            <input
+              aria-label={entry.label}
+              value={draftStr}
+              onChange={(e) => onChange(e.target.value)}
+              spellCheck={false}
+              placeholder="Ollama unreachable — type model name"
+              className="font-ledger h-9 w-44 rounded-md border border-line bg-card px-2.5 text-[12px] text-ink outline-none placeholder:text-ink-soft/35 focus:border-ledger/70"
+            />
+            <button
+              type="button"
+              onClick={onRefreshModels}
+              disabled={modelsLoading}
+              title="Fetch live Ollama model list"
+              className="font-ledger h-9 shrink-0 rounded-md border border-line bg-card px-2.5 text-[11px] font-semibold text-ink-soft hover:bg-paper disabled:opacity-40"
+            >
+              {modelsLoading ? '…' : '↻ Fetch'}
+            </button>
+          </>
+        ) : entry.secret || !entry.editable ? (
           <span className="font-ledger w-44 truncate rounded-md border border-line/60 bg-card px-2.5 py-1.5 text-[12px] text-ink-soft/60">
             {entry.secret ? (entry.configured ? '•••••• set' : 'not set') : String(entry.value)}
           </span>

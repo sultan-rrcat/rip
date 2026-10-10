@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
@@ -9,6 +9,8 @@ import LogoutButton from '@/components/LogoutButton'
 import SectionCard from '@/components/admin/SectionCard'
 import ConfigField from '@/components/admin/ConfigField'
 import { useRuntimeConfig } from '@/hooks/useRuntimeConfig'
+import { getHostedModels } from '@/services/admin'
+import type { HostedModel } from '@/types/admin'
 
 type Drafts = Record<string, string | boolean>
 
@@ -22,6 +24,9 @@ export default function Admin() {
   const [confirmRestart, setConfirmRestart] = useState<null | { keys: string[]; values: Record<string, string | number | boolean> }>(null)
   const [notice, setNotice] = useState('')
   const [activeGroup, setActiveGroup] = useState<string | null>(null)
+  const [hostedModels, setHostedModels] = useState<HostedModel[]>([])
+  const [modelsReachable, setModelsReachable] = useState(false)
+  const [modelsLoading, setModelsLoading] = useState(false)
 
   const entries = snapshot?.entries ?? {}
   const groups = snapshot?.groups ?? []
@@ -30,6 +35,24 @@ export default function Admin() {
   useEffect(() => {
     if (!activeGroup && groups.length > 0) setActiveGroup(groups[0].id)
   }, [groups, activeGroup])
+
+  const fetchModels = useCallback(async () => {
+    setModelsLoading(true)
+    try {
+      const res = await getHostedModels()
+      setHostedModels(res.models ?? [])
+      setModelsReachable(res.reachable)
+    } catch {
+      setHostedModels([])
+      setModelsReachable(false)
+    } finally {
+      setModelsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchModels()
+  }, [fetchModels])
 
   const active = groups.find((g) => g.id === activeGroup) ?? groups[0]
 
@@ -304,6 +327,10 @@ export default function Admin() {
                         pending={pending.has(k)}
                         onChange={(v) => setDrafts((prev) => ({ ...prev, [k]: v }))}
                         onReset={() => resetKeys([k])}
+                        modelOptions={hostedModels}
+                        modelsReachable={modelsReachable}
+                        modelsLoading={modelsLoading}
+                        onRefreshModels={fetchModels}
                       />
                     ))}
                   </SectionCard>

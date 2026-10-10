@@ -103,3 +103,14 @@ def test_reset_restores_default(client):
     assert r.status_code == 200, r.text
     assert r.json()["entries"]["chat_max_tokens"]["source"] in ("default", "env")
     assert settings.chat_max_tokens != 777
+
+
+def test_models_endpoint_shape(client):
+    _apply_schema(client)
+    r = client.get("/v1/admin/models")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert isinstance(body["reachable"], bool)
+    assert isinstance(body["models"], list)
+    for m in body["models"]:
+        assert "id" in m and "display_name" in m

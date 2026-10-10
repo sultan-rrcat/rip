@@ -28,6 +28,16 @@ export interface ConfigGroup {
   fields: string[]
 }
 
+export interface HostedModel {
+  id: string
+  display_name: string
+}
+
+export interface HostedModels {
+  reachable: boolean
+  models: HostedModel[]
+}
+
 export interface ConfigSnapshot {
   groups: ConfigGroup[]
   entries: Record<string, ConfigEntry>
