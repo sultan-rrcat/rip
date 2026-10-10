@@ -48,6 +48,16 @@ _REVIEW_RE = re.compile(
     r"\b(review|explain|describe|summariz\w*|what\s+does|how\s+does|walk\s*through)\b",
     re.IGNORECASE,
 )
+#: Execute-signal verbs for CODE dispatch: run/test/execute asks go through
+#: the sandbox DAG (build_code_execute); everything else (explain/review/
+#: generate) stays on the generate-only builder. Review verbs win over
+#: execute verbs ("review the test file" is a review). "build" is
+#: deliberately absent: "build a landing page" is greenfield generation.
+_EXECUTE_RE = re.compile(
+    r"\b(run|runs|running|execute|executes|executing|execution|"
+    r"test|tests|testing|pytest|unittest|lint|fix|repair)\b",
+    re.IGNORECASE,
+)
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -782,6 +792,95 @@ def _coding_budget_for(request_text: str) -> int:
     return _settings.coding_max_tokens
 
 
+def _is_execute_request(request_text: str) -> bool:
+    """True when a CODE ask wants execution, not just generated text."""
+    text = request_text or ""
+    if _REVIEW_RE.search(text):
+        return False
+    return bool(_EXECUTE_RE.search(text))
+
+
+def _sandbox_budget_ms() -> int:
+    """Sandbox step input budget: tool default, capped like the tool."""
+    return min(int(settings.sandbox_timeout_ms), 480000)
+
+
+def build_code_execute(
+    request_text: str,
+    file_hint: str = "",
+    notebook_context: str | None = None,
+    notebook_id: str | None = None,
+) -> Plan:
+    """Two-step execute DAG: code.sandbox runs, coding reports (ADR-050).
+
+    Observation-only full workflow: sandbox stdout + changed files surface
+    via the (hidden) step output and run artifacts for review — originals
+    are never overwritten. The coding step carries {{1}} so the validator's
+    reasoning-grounding rule holds by construction; its message forbids
+    inventing execution results. notebook_id is unused here: the engine
+    injects the run's notebook id into the tool step at runtime.
+    """
+    targets = _resolve_code_targets(file_hint, notebook_context)
+    if not targets and (file_hint or "").strip():
+        # User named a file that resolves to nothing: honest
+        # clarification, never an invented file or an empty sandbox run.
+        detail = (
+            f"No uploaded code file matches '{file_hint.strip()}'. Ask the user "
+            "to check the file name or upload the file, or clarify how "
+            "to proceed without it"
+        )
+        return Plan(
+            plan_id=str(uuid.uuid4()),
+            goal=request_text,
+            steps=[
+                PlanStep(
+                    step_id="1",
+                    agent_id="coding",
+                    input={"message": f"{detail}. Request: {request_text}"},
+                    expected_output_type="clarification",
+                )
+            ],
+        )
+    sandbox_input: dict = {
+        "task": request_text,
+        "timeout_ms": _sandbox_budget_ms(),
+    }
+    if targets:
+        sandbox_input["file_names"] = [name for name, _ in targets]
+    # Greenfield (no hint, no files): sandbox runs task-only; the tool
+    # notes the empty staging honestly in its observation.
+    return Plan(
+        plan_id=str(uuid.uuid4()),
+        goal=request_text,
+        steps=[
+            PlanStep(
+                step_id="1",
+                tool_id="code.sandbox",
+                input=sandbox_input,
+                expected_output_type="text",
+            ),
+            PlanStep(
+                step_id="2",
+                agent_id="coding",
+                input={
+                    "message": (
+                        f"Request: {request_text}\n\n"
+                        "Sandbox execution result:\n{{1}}\n\n"
+                        "Report only what the box returned: a concise summary "
+                        "of the stdout, the files changed (available under "
+                        "Artifacts for review), and concrete next steps. "
+                        "Never invent execution results, and never claim the "
+                        "code ran if the result shows a failure."
+                    ),
+                    "max_tokens": _coding_budget_for(request_text),
+                },
+                depends_on=["1"],
+                expected_output_type="answer",
+            ),
+        ],
+    )
+
+
 def build_code(
     request_text: str,
     file_hint: str = "",
@@ -1003,5 +1102,7 @@ def build(
             return None
         return build_convert_one(file_id, route.target_format, request_text)
     if route.intent is Intent.CODE:
+        if _is_execute_request(request_text):
+            return build_code_execute(request_text, route.file_hint, notebook_context, notebook_id)
         return build_code(request_text, route.file_hint, notebook_context, notebook_id)
     return None

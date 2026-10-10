@@ -16,6 +16,8 @@ Collection keys on DATA SHAPES, never on tool ids (same shapes as Athena):
 - {"docx_b64": ...} / {"pdf_b64": ...} → document
 - {"markdown": ...} (only when it rides with binaries) → document (.md)
 - {"rows": [...], "row_count": ...} → data (.json)
+- {"sandbox_files": [{filename, b64}]} → code review artifacts (ADR-050:
+  code.sandbox changed files, mime guessed by extension)
 
 Naming: doc.convert files keep the source-file stem; doc.generate
 reports are named after the report `title` slug (never the step id), and
@@ -255,6 +257,31 @@ def _collect_from_data(
     rows = data.get("rows")
     if isinstance(rows, list) and "row_count" in data:
         add("data", MIME_JSON, f"{step_id}.json", json.dumps(rows).encode("utf-8"))
+
+    # code.sandbox review artifacts (ADR-050): changed-file bytes ride the
+    # tool payload so the run worker persists them without re-executing.
+    # Observation-only: originals are never touched, these copies are for
+    # review under Artifacts.
+    sandbox_files = data.get("sandbox_files")
+    if isinstance(sandbox_files, list) and sandbox_files:
+        import mimetypes as _mimetypes
+
+        for entry in sandbox_files[:16]:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("filename")
+            b64 = entry.get("b64")
+            if (not isinstance(name, str) or not name.strip()
+                    or not isinstance(b64, str) or not b64):
+                continue
+            try:
+                content = base64.b64decode(b64)
+            except ValueError:
+                logger.warning("artifact sandbox file undecodable run=%s step=%s",
+                               run_id, step_id)
+                continue
+            mime = _mimetypes.guess_type(name.strip())[0] or "text/plain"
+            add("code", mime, f"{step_id}_{_safe(name.strip())}", content)
 
     return out
 

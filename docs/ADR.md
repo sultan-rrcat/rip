@@ -327,6 +327,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-050: L2 execute DAG for run/test/execute (sandbox runs, coding reports)
+
+- **Status:** Accepted (2026-10-11)
+- **Context:** ADR-049 left `build_code` generate-only with the sandbox ReAct-reachable: run/test/execute asks paid up to 6 ReAct iterations for what is structurally a fixed pipeline (stage → execute → report), and changed files evaporated with the scratch dir — the observation named them but the bytes were gone. Staging via `docker run -v <tempdir>:/work` additionally resolved the mount on the host, so it silently staged nothing when the backend itself ran in a container behind the same docker socket.
+- **Decision:** (1) CODE dispatch splits on verbs: run/test/execute signals (`_EXECUTE_RE`, review verbs win) → new `build_code_execute` DAG (`code.sandbox` step with literal `file_names` scope + `timeout_ms`, then a `coding` report step wired by `{{1}}` that reports only what the box returned); everything else stays on the generate-only `build_code`. Scope-miss and greenfield behave like the existing builder (honest clarification / task-only run). (2) Observation-only artifacts-for-review: changed-file bytes (capped: 8 files × 100KB) ride `ToolResponse.data["sandbox_files"]`; `artifacts.py` persists them as `kind: "code"` review copies under the run dir — originals are never overwritten, no Apply path in this pass. (3) Staging moves to `docker create` + `docker cp` (in/out) + `docker start -a` + `docker rm -f`: no host-path mount, so DooD works; the tool timeout clamps to the request wall-clock and the `code.sandbox` step budget carves out `max(default, sandbox_timeout_ms)`. (4) The sandbox observation joins the hidden intermediates (aggregator + step visibility, alongside `code.read`/`notebook.inspect`): the chat shows the coding report verbatim, stdout stays in the Steps panel. No new tools, no schema change, no frontend change (`kind: "code"` renders as a download link).
+- **Consequences:** Run/test/execute resolves in a fixed 2-step DAG (one router call + one container run + one report call); ReAct remains the fallback for builder misses. Changed files are reviewable but never auto-applied — over-trust in agentic edits stays with the human. Pinned by `test_code_execute_builder.py` (dispatch/shape/validator/clarification/aggregator-hiding/artifact-roundtrip/step-budget) and the rewritten `test_code_sandbox.py` (create/cp/start/cp/rm lifecycle, teardown-on-timeout, step-budget clamp, artifact caps). Partially supersedes ADR-049 §2 (sandbox is now L2-reachable, not ReAct-only).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

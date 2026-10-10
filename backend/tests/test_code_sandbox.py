@@ -1,12 +1,17 @@
-"""code.sandbox tool (ADR-049): staging, honest failures, kill-switch.
+"""code.sandbox tool (ADR-049/050): staging, honest failures, kill-switch.
 
 DB-free: the container runner (`_run_container`) and the file listing are
 monkeypatched; only the validation/timeout/manifest/validator paths run
 for real. Docker-daemon suites stay on the operator's fresh stack.
+
+The tool talks to the daemon as create → cp-in → start -a → cp-out → rm:
+`docker cp` (never a `-v` host path) so staging works when the backend
+itself runs in a container behind the same docker socket.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -22,13 +27,14 @@ from app.tools import code_sandbox as sbx
 from app.tools.base import ToolRequest
 
 NB = "nb-sbx-1"
+CID = "a" * 64
 
 
-def _tool_request(**kwargs) -> ToolRequest:
+def _tool_request(timeout_ms: int = 30000, **kwargs) -> ToolRequest:
     base: dict = {"notebook_id": NB, "task": "run the tests"}
     base.update(kwargs)
     return ToolRequest(tool_id="code.sandbox", step_id="1", trace_id="t",
-                       input=base)
+                       input=base, timeout_ms=timeout_ms)
 
 
 def _stage_disk(tmp_path, files: dict[str, str]) -> str:
@@ -54,6 +60,55 @@ def _json_text(text: str) -> str:
     return json.dumps({"part": {"type": "text", "text": text}})
 
 
+def _make_daemon(monkeypatch, *, out_files=None, start=None):
+    """Fake `docker` CLI dispatching on subcommand; returns seen calls.
+
+    `out_files`: {relpath: text} materialized into the cp-out target dir.
+    `start`: _FakeCompleted (or exception instance) for `docker start`.
+    """
+    seen: list = []
+    out_files = dict(out_files or {})
+    start_resp = start if start is not None else _FakeCompleted(
+        0, _json_text("ALL GREEN") + "\n")
+
+    def fake_run(cmd, timeout_s):
+        seen.append({"cmd": cmd, "timeout": timeout_s})
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "create":
+            assert "--cpus" in cmd and "--memory" in cmd
+            assert "-w" in cmd and "/work" in cmd
+            assert "opencode" in cmd and "run" in cmd
+            return _FakeCompleted(0, CID + "\n", "")
+        if sub == "cp":
+            src, dst = cmd[2], cmd[3]
+            if dst.endswith(":/work"):
+                stage = src.removesuffix("/.")
+                cfg_path = os.path.join(stage, "opencode.json")
+                assert os.path.isfile(cfg_path), stage
+                with open(cfg_path, encoding="utf-8") as f:
+                    cfg = json.load(f)
+                assert "ollama-local" in cfg["provider"]
+                return _FakeCompleted(0, "", "")
+            for rel, content in out_files.items():
+                path = os.path.join(dst, rel)
+                os.makedirs(os.path.dirname(path) or dst, exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(content.encode("utf-8"))
+            return _FakeCompleted(0, "", "")
+        if sub == "start":
+            assert cmd[2] == "-a" and cmd[3] == CID
+            if isinstance(start_resp, BaseException):
+                raise start_resp
+            return start_resp
+        if sub == "rm":
+            assert CID in cmd
+            return _FakeCompleted(0, "", "")
+        raise AssertionError(f"unexpected docker call: {cmd}")
+
+    monkeypatch.setattr(sbx, "_run_container", fake_run)
+    return seen
+
+
 def test_success_stages_and_reports_changes(monkeypatch, tmp_path):
     upload_dir = _stage_disk(tmp_path, {"fid-0.py": "print('hi')\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
@@ -64,30 +119,24 @@ def test_success_stages_and_reports_changes(monkeypatch, tmp_path):
                         lambda scope, files: ([("fid-0", "hello.py")], []))
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
 
-    seen: dict = {}
-
-    def fake_run(cmd, timeout_s):
-        seen["cmd"] = cmd
-        seen["timeout"] = timeout_s
-        vol = cmd[cmd.index("-v") + 1]
-        src = vol.rsplit(":", 1)[0]  # rsplit: Windows drive letters hold a colon
-        cfg_path = os.path.join(src, "opencode.json")
-        assert os.path.isfile(cfg_path)
-        with open(cfg_path, encoding="utf-8") as f:
-            cfg = json.load(f)
-        assert "ollama-local" in cfg["provider"]
-        with open(os.path.join(src, "result.txt"), "w", encoding="utf-8") as f:
-            f.write("done\n")
-        return _FakeCompleted(0, _json_text("ALL GREEN") + "\n")
-
-    monkeypatch.setattr(sbx, "_run_container", fake_run)
+    seen = _make_daemon(monkeypatch, out_files={
+        "hello.py": "print('hi')\nprint('patched')\n",
+        "result.txt": "done\n",
+    })
     resp = sbx.CodeSandboxTool().execute(_tool_request())
     assert resp.ok is True
     assert "ALL GREEN" in (resp.output or "")
-    assert "result.txt" in resp.data["changed_files"]
+    assert sorted(resp.data["changed_files"]) == ["hello.py", "result.txt"]
     assert resp.data["model"] == "granite"
-    assert "--rm" in seen["cmd"]
-    assert "rip-sandbox" in " ".join(seen["cmd"]) or settings.sandbox_image in seen["cmd"]
+    assert resp.data["staged_files"] == ["hello.py"]
+    # Review bytes ride the payload for the run worker's artifacts.
+    by_name = {e["filename"]: e for e in resp.data["sandbox_files"]}
+    assert set(by_name) == {"hello.py", "result.txt"}
+    assert base64.b64decode(by_name["result.txt"]["b64"]) == b"done\n"
+    # Lifecycle is create → cp → start → cp → rm (no `docker run --rm`).
+    subs = [c["cmd"][1] for c in seen]
+    assert subs == ["create", "cp", "start", "cp", "rm"]
+    assert settings.sandbox_image in seen[0]["cmd"]
 
 
 def test_empty_task_and_bad_notebook_fail_honest():
@@ -106,7 +155,7 @@ def test_scope_miss_fails_with_file_list(monkeypatch):
     assert "a.py" in (resp.error or "")
 
 
-def test_timeout_is_honest(monkeypatch, tmp_path):
+def test_timeout_is_honest_and_tears_down(monkeypatch, tmp_path):
     upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
@@ -114,12 +163,35 @@ def test_timeout_is_honest(monkeypatch, tmp_path):
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
 
     def fake_run(cmd, timeout_s):
-        raise subprocess.TimeoutExpired(cmd, timeout_s)
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "create":
+            return _FakeCompleted(0, CID + "\n", "")
+        if sub == "cp":
+            return _FakeCompleted(0, "", "")
+        if sub == "start":
+            raise subprocess.TimeoutExpired(cmd, timeout_s)
+        if sub == "rm":
+            return _FakeCompleted(0, "", "")
+        raise AssertionError(cmd)
 
     monkeypatch.setattr(sbx, "_run_container", fake_run)
     resp = sbx.CodeSandboxTool().execute(_tool_request())
     assert resp.ok is False
     assert "timed out" in (resp.error or "")
+
+
+def test_timeout_clamped_to_step_budget(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("fid-0", "a.py")])
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+    seen = _make_daemon(monkeypatch)
+    # Step wall-clock (request.timeout_ms) beats the 240s tool default.
+    resp = sbx.CodeSandboxTool().execute(_tool_request(timeout_ms=5000))
+    assert resp.ok is True
+    start = next(c for c in seen if c["cmd"][1] == "start")
+    assert start["timeout"] == 5.0
 
 
 def test_no_docker_fails_honest(monkeypatch):
@@ -135,17 +207,124 @@ def test_nonzero_exit_reports_stderr(monkeypatch, tmp_path):
     monkeypatch.setattr(sbx, "_notebook_code_files",
                         lambda nb: [("fid-0", "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
-    monkeypatch.setattr(
-        sbx, "_run_container",
-        lambda cmd, timeout_s: _FakeCompleted(1, "", "boom: auth failed"))
+    _make_daemon(monkeypatch, start=_FakeCompleted(1, "", "boom: auth failed"))
     resp = sbx.CodeSandboxTool().execute(_tool_request())
     assert resp.ok is False
     assert "boom" in (resp.error or "")
 
 
+def test_create_failure_is_honest(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("fid-0", "a.py")])
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+
+    def fake_run(cmd, timeout_s):
+        if cmd[1] == "create":
+            return _FakeCompleted(125, "", "image not found")
+        if cmd[1] == "rm":
+            return _FakeCompleted(0, "", "")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(sbx, "_run_container", fake_run)
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is False
+    assert "create failed" in (resp.error or "")
+
+
+def test_cp_in_failure_is_honest(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("fid-0", "a.py")])
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+
+    def fake_run(cmd, timeout_s):
+        if cmd[1] == "create":
+            return _FakeCompleted(0, CID + "\n", "")
+        if cmd[1] == "cp":
+            return _FakeCompleted(1, "", "no such container path")
+        if cmd[1] == "rm":
+            return _FakeCompleted(0, "", "")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(sbx, "_run_container", fake_run)
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is False
+    assert "staging failed" in (resp.error or "")
+
+
+def test_oversize_change_observed_but_not_kept(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("fid-0", "a.py")])
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+    big = "y\n" * (sbx._SBX_ARTIFACT_MAX_BYTES // 2 + 10)
+    _make_daemon(monkeypatch, out_files={"big.py": big})
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is True
+    assert "big.py" in resp.data["changed_files"]
+    assert all(e["filename"] != "big.py" for e in resp.data["sandbox_files"])
+    assert "exceeds" in (resp.output or "")
+
+
 def test_pick_model_unreachable_falls_back():
     model, reachable = sbx._pick_model("http://127.0.0.1:9", "pref-model")
     assert (model, reachable) == ("pref-model", False)
+
+
+def test_extract_text_prefers_prose_over_tool_errors():
+    prose = _json_text("done") + "\n" + json.dumps(
+        {"part": {"type": "tool", "tool": "edit",
+                  "state": {"status": "error", "error": "bad args"}}})
+    assert sbx._extract_text(prose) == "done"
+
+
+def test_extract_text_summarizes_tool_errors():
+    err = json.dumps(
+        {"part": {"type": "tool", "tool": "edit",
+                  "state": {"status": "error", "error": "bad args"}}})
+    out = sbx._extract_text(err + "\n")
+    assert out == "tool edit failed: bad args"
+    assert "ses_" not in out and "prt_" not in out
+
+
+def test_extract_text_drops_pure_event_noise():
+    noise = json.dumps({"type": "step_start", "part": {"type": "step-start"}})
+    assert sbx._extract_text(noise + "\n") == ""
+
+
+def test_model_probe_uses_host_view_not_gateway(monkeypatch, tmp_path):
+    # Host-local backend with a loopback OLLAMA_BASE_URL: the pulled-model
+    # probe must hit the host-view URL (reachable from this process), while
+    # the staged opencode.json keeps the gateway URL for the box.
+    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(settings, "ollama_base_url", "http://localhost:11434")
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("fid-0", "a.py")])
+    probed: list = []
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self):
+            return json.dumps({"models": [{"name": "granite"}]}).encode()
+
+    def fake_urlopen(url, timeout=None):
+        probed.append(url)
+        return _Resp()
+
+    monkeypatch.setattr(sbx, "urlopen", fake_urlopen)
+    seen = _make_daemon(monkeypatch)
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is True
+    assert probed and probed[0].startswith("http://localhost:11434"), probed
+    create = next(c for c in seen if c["cmd"][1] == "create")
+    assert "ollama-local/granite" in create["cmd"]
+    assert resp.data["model"] == "granite"
 
 
 def test_sandbox_base_url_rewrites_loopback(monkeypatch):

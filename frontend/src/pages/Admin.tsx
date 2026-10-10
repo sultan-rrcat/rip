@@ -32,7 +32,7 @@ const TOOL_REFERENCED_BY: Record<string, string[]> = {
   'doc.convert': ['Convert builders', 'ReAct convert guard'],
   'notebook.inspect': ['Code-task routing', 'ReAct code steps'],
   'code.read': ['Code builders', 'ReAct code steps'],
-  'code.sandbox': ['ReAct run/test/execute steps', 'No builder depends on it'],
+  'code.sandbox': ['Code execute builder (run/test/execute)', 'ReAct run/test/execute steps'],
 }
 
 export default function Admin() {

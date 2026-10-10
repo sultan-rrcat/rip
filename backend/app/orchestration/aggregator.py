@@ -5,7 +5,8 @@ step (merge decision: cuts cost and latency; predictable and testable).
 
 Type-aware deterministic rules (ADR-023 as amended):
 - HIDE intermediate outputs (`expected_output_type` in chunks/numbers, or
-  the `notebook.inspect` freshness probe) unless they are the only output
+  the evidence-gathering executors `notebook.inspect` / `code.read` /
+  `code.sandbox`) unless they are the only output
   (anti-blank fallback);
 - SHOW terminal outputs (answer/summary/text/document/chart/clarification,
   plus any unknown type — fail-visible, never fail-blank); chart/SVG
@@ -141,7 +142,11 @@ class Aggregator:
             eot = (meta.expected_output_type or "text").lower()
             if eot in ("chunks", "numbers"):
                 return True
-            return meta.executor_id in ("notebook.inspect", "code.read")
+            # Evidence-gathering steps: the terminal synthesis carries the
+            # answer; raw stdout/listings stay in the Steps panel. The
+            # code.sandbox observation is intermediate evidence for the
+            # coding report step (ADR-050 L2 execute DAG).
+            return meta.executor_id in ("notebook.inspect", "code.read", "code.sandbox")
 
         shown = [r for r in ordered_successful if not _hidden(r.step_id)]
         # ReAct runs build the answer incrementally (r1..rN, then r-final

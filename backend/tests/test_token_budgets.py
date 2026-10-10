@@ -61,7 +61,7 @@ def test_code_builder_budget_generous(tmp_path, monkeypatch) -> None:
     # No code files and no hint -> greenfield generation step with
     # the generous budget (ADR-038), not a clarification.
     route = RouterResult(intent=Intent.CODE, confidence=0.9, file_hint="")
-    plan = build("write a test", route, "(no documents)", None)
+    plan = build("write a quicksort function", route, "(no documents)", None)
     assert plan is not None and len(plan.steps) == 1
     assert plan.steps[0].agent_id == "coding"
     assert (plan.steps[0].expected_output_type or "").lower() == "answer"
@@ -83,10 +83,20 @@ def test_code_builder_budget_generous(tmp_path, monkeypatch) -> None:
     fid = "11111111-1111-1111-1111-111111111111"
     (tmp_path / nb / (fid + ".py")).write_text("def add(a, b):\n    return a + b\n")
     snap = f"1 file(s): app.py [ready:code] id={fid}"
-    plan = build("write a test", route, snap, nb)
+    plan = build("write a quicksort function", route, snap, nb)
     assert plan is not None and len(plan.steps) == 1
     assert plan.steps[0].input["max_tokens"] == settings.coding_max_tokens
     assert settings.coding_max_tokens > settings.default_max_tokens
+    _validator(_RecordingProvider()).validate(plan)
+
+    # Execute verbs ("write a test" names testing) route to the sandbox
+    # DAG (ADR-050) — and its coding report step keeps the generous
+    # budget so stdout + changed files are never cut by the token cap.
+    plan = build("write a test", route, snap, nb)
+    assert plan is not None and len(plan.steps) == 2
+    assert plan.steps[0].tool_id == "code.sandbox"
+    assert plan.steps[1].agent_id == "coding"
+    assert plan.steps[1].input["max_tokens"] == settings.coding_max_tokens
     _validator(_RecordingProvider()).validate(plan)
 
 

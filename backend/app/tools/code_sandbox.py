@@ -1,16 +1,23 @@
 """code.sandbox tool — agentic code execution in an ephemeral local container.
 
 ADR-049: stages the notebook's code files plus a generated `opencode.json`
-(pinning a pulled Ollama model, no credentials) into a temp dir, runs
-`docker run --rm` with CPU/memory caps, collects stdout + changed files,
-and removes the scratch. Host-stored opencode credentials are never used —
-the box talks only to Ollama over the host gateway, so the offline thesis
-holds.
+(pinning a pulled Ollama model, no credentials), runs opencode inside an
+ephemeral container against host Ollama, and returns stdout plus the
+changed-file list as the observation. ADR-050 (L2 execute DAG): changed
+file bytes additionally ride `ToolResponse.data["sandbox_files"]` so the
+run worker persists them as review artifacts — originals are never
+overwritten. Host-stored opencode credentials are never used — the box
+talks only to Ollama over the host gateway, so the offline thesis holds.
+
+Staging uses `docker create` + `docker cp` (never a `-v` host path): the
+backend itself may run in a container behind the same docker socket, where
+a container-local temp path would resolve to nothing on the host.
 
 Honest-failure contract (never raises across the executor boundary…
 this module returns ok=False itself, matching the other tools):
 - missing/invalid input, no docker CLI, Ollama unreachable, non-zero exit,
-  timeout, or empty output all become ok=False with a named reason.
+  timeout, staging failures, or empty output all become ok=False with a
+  named reason.
 - Ambiguous file scopes are skipped with a note (listed in the output);
   a scope matching nothing fails honest with the notebook file list.
 
@@ -20,6 +27,7 @@ tests monkeypatch it without a daemon.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -36,22 +44,37 @@ logger = logging.getLogger("tools.code_sandbox")
 
 _SAFE_NOTEBOOK_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
+#: `docker create` output carries the 64-hex container id.
+_CONTAINER_ID_RE = re.compile(r"[0-9a-f]{64}")
+
 #: Stdout budget for the observation (mirrors the retrieval scratchpad scale).
 _SANDBOX_OUTPUT_MAX_CHARS = 12000
 
 #: Stderr tail kept on non-zero exit.
 _SANDBOX_STDERR_TAIL = 2000
 
-#: Extra grace over the tool timeout for container teardown.
-_SANDBOX_KILL_GRACE_S = 30.0
+#: Per-call deadline for the fast staging ops (create/cp/rm carry no model).
+_SANDBOX_STAGE_TIMEOUT_S = 90.0
 
 #: Model names that are embeddings, never code executors.
 _EMBED_MARKERS = ("bge", "embed")
 
+#: Review-artifact caps for changed files (ADR-050, observation-only: the
+#: chat shows the report, the bytes travel via run artifacts).
+_SBX_ARTIFACT_MAX_FILES = 8
+_SBX_ARTIFACT_MAX_BYTES = 100 * 1024
+
 
 def _run_container(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess:
-    """Run one sandbox container (monkeypatched in tests)."""
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s, check=False)
+    """Run one sandbox container (monkeypatched in tests).
+
+    UTF-8 with replacement: opencode/model output is UTF-8 JSON, and the
+    platform locale (cp1252 on Windows hosts) would otherwise crash the
+    reader thread on smart quotes/ellipsis.
+    """
+    return subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
+                          timeout=timeout_s, check=False)
 
 
 def _docker_available() -> bool:
@@ -79,7 +102,15 @@ def _sandbox_base_url() -> str:
 
 def _pick_model(base_url: str, preferred: str) -> tuple[str, bool]:
     """Resolve the sandbox model: preferred when pulled, else first
-    non-embedding pulled model. Returns (model, ollama_reachable)."""
+    non-embedding pulled model. Returns (model, ollama_reachable).
+
+    `base_url` is the caller's view of Ollama (probed from this process);
+    the box-view URL for `opencode.json` is built separately by
+    `_sandbox_base_url`, since a host-local loopback must be rewritten to
+    the container gateway — probing the rewritten URL from the host would
+    fail wherever the gateway name doesn't route back (Windows host-local
+    runs), even with Ollama listening on localhost.
+    """
     try:
         with urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=8) as res:
             data = json.loads(res.read().decode("utf-8") or "{}")
@@ -112,8 +143,17 @@ def _opencode_config(model: str, base_url: str) -> str:
 
 
 def _extract_text(stdout: str) -> str:
-    """Join `text` parts of `opencode run --format json` event lines."""
+    """Join `text` parts of `opencode run --format json` event lines.
+
+    Three tiers: model prose (`part.type == "text"`) wins; without prose,
+    failed tool calls summarize as one line each (a box that only errored
+    still reports honestly instead of dumping raw event JSON); otherwise
+    only non-JSON lines are kept (older CLI human output). Pure event
+    noise with no errors yields "" so the caller fails honest instead of
+    surfacing session ids.
+    """
     chunks: list[str] = []
+    errors: list[str] = []
     for line in (stdout or "").splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -125,14 +165,25 @@ def _extract_text(stdout: str) -> str:
         if not isinstance(event, dict):
             continue
         part = event.get("part")
-        if isinstance(part, dict) and part.get("type") == "text":
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
             text = part.get("text")
             if isinstance(text, str) and text.strip():
                 chunks.append(text)
+        elif part.get("type") == "tool":
+            state = part.get("state")
+            if (isinstance(state, dict) and state.get("status") == "error"
+                    and isinstance(state.get("error"), str)):
+                tool = part.get("tool") or "tool"
+                errors.append(f"tool {tool} failed: {state['error'][:500]}")
     if chunks:
         return "\n".join(chunks).strip()
-    # Non-JSON fallback (older CLI / --format default): raw stdout.
-    return (stdout or "").strip()
+    if errors:
+        return "\n".join(errors).strip()
+    rest = [ln for ln in (stdout or "").splitlines()
+            if not ln.strip().startswith("{")]
+    return "\n".join(rest).strip()
 
 
 def _notebook_code_files(notebook_id: str) -> list[tuple[str, str]]:
@@ -155,6 +206,15 @@ def _notebook_code_files(notebook_id: str) -> list[tuple[str, str]]:
         if ext and ext in code_exts:
             out.append((str(file_id), name))
     return out
+
+
+def _parse_container_id(output: str) -> str:
+    """Best-effort container id out of `docker create` stdout."""
+    match = _CONTAINER_ID_RE.search(output or "")
+    if match:
+        return match.group(0)
+    text = (output or "").strip()
+    return text.splitlines()[-1].strip() if text else ""
 
 
 def _match_scope(scope: list[str], files: list[tuple[str, str]]
@@ -221,6 +281,7 @@ class CodeSandboxTool(Tool):
             "changed_files": {"type": "array"},
             "staged_files": {"type": "array"},
             "model": {"type": "string"},
+            "sandbox_files": {"type": "array"},
         },
     }
     effect_class = "sandboxed"  # type: ignore[assignment]
@@ -262,10 +323,15 @@ class CodeSandboxTool(Tool):
             notes.append("no code files staged — running greenfield (task only)")
 
         base_url = _sandbox_base_url()
+        # Probe Ollama from THIS process (host view): the box-view URL
+        # above may rewrite loopback to the container gateway, which the
+        # host itself often cannot route back to (Windows host-local).
+        # Same server either way, so the pulled-model listing is identical.
+        probe_url = (settings.ollama_base_url or "").strip().rstrip("/")
         model_override = request.input.get("model")
         preferred = (str(model_override).strip() if isinstance(model_override, str)
                      and model_override.strip() else settings.ollama_default_model)
-        model, reachable = _pick_model(base_url, preferred)
+        model, reachable = _pick_model(probe_url, preferred)
         if not reachable:
             return self._fail(
                 f"ollama unreachable at {settings.ollama_base_url} — "
@@ -274,9 +340,16 @@ class CodeSandboxTool(Tool):
         if not isinstance(timeout_ms, int) or timeout_ms <= 0:
             timeout_ms = settings.sandbox_timeout_ms
         timeout_ms = min(timeout_ms, 480000)
+        # Respect the step wall-clock carried on the request: the tool must
+        # return before the plan graph reports the step timed out.
+        step_budget = getattr(request, "timeout_ms", 0)
+        if isinstance(step_budget, int) and step_budget > 0:
+            timeout_ms = min(timeout_ms, step_budget)
 
         stage = tempfile.mkdtemp(prefix="rip-sbx-")
+        fetch = tempfile.mkdtemp(prefix="rip-sbx-out-")
         originals: dict[str, bytes] = {}
+        cid = ""
         try:
             staged_names: list[str] = []
             for file_id, name in staged:
@@ -296,22 +369,48 @@ class CodeSandboxTool(Tool):
             with open(os.path.join(stage, "opencode.json"), "w", encoding="utf-8") as f:
                 f.write(_opencode_config(model, base_url))
 
-            cmd = [
-                "docker", "run", "--rm",
-                "--cpus", str(settings.sandbox_cpus),
-                "--memory", str(settings.sandbox_memory),
-                "-v", f"{stage}:/work",
-                "-w", "/work",
-                settings.sandbox_image,
-                "opencode", "run",
-                "-m", f"ollama-local/{model}",
-                "--format", "json",
-                task.strip(),
-            ]
             logger.info("sandbox start notebook=%s files=%d model=%s timeout_ms=%d",
                         notebook_id, len(staged_names), model, timeout_ms)
             try:
-                proc = _run_container(cmd, timeout_ms / 1000.0 + _SANDBOX_KILL_GRACE_S)
+                created = _run_container(
+                    ["docker", "create",
+                     "--cpus", str(settings.sandbox_cpus),
+                     "--memory", str(settings.sandbox_memory),
+                     "-w", "/work",
+                     settings.sandbox_image,
+                     "opencode", "run",
+                     "-m", f"ollama-local/{model}",
+                     "--format", "json",
+                     task.strip()],
+                    _SANDBOX_STAGE_TIMEOUT_S,
+                )
+            except FileNotFoundError:
+                return self._fail("docker CLI not available at execution time")
+            except Exception as e:  # noqa: BLE001 - spawn failure is honest
+                return self._fail(f"sandbox spawn failed: {e}")
+            if created.returncode != 0:
+                tail = (created.stderr or "")[-_SANDBOX_STDERR_TAIL:]
+                return self._fail(
+                    f"sandbox create failed: {tail or 'no stderr'}")
+            cid = _parse_container_id(created.stdout or "")
+            if not cid:
+                return self._fail("sandbox create returned no container id")
+            try:
+                cp_in = _run_container(
+                    ["docker", "cp", f"{stage}/.", f"{cid}:/work"],
+                    _SANDBOX_STAGE_TIMEOUT_S,
+                )
+            except FileNotFoundError:
+                return self._fail("docker CLI not available at execution time")
+            except Exception as e:  # noqa: BLE001 - staging failure is honest
+                return self._fail(f"sandbox staging failed: {e}")
+            if cp_in.returncode != 0:
+                tail = (cp_in.stderr or "")[-_SANDBOX_STDERR_TAIL:]
+                return self._fail(
+                    f"sandbox staging failed: {tail or 'no stderr'}")
+            try:
+                proc = _run_container(
+                    ["docker", "start", "-a", cid], timeout_ms / 1000.0)
             except subprocess.TimeoutExpired:
                 return self._fail(
                     f"sandbox run timed out after {timeout_ms}ms — "
@@ -327,16 +426,42 @@ class CodeSandboxTool(Tool):
 
             output = _extract_text(proc.stdout or "")[:_SANDBOX_OUTPUT_MAX_CHARS]
             changed: list[str] = []
+            sandbox_files: list[dict] = []
             try:
-                for root, _, filenames in os.walk(stage):
-                    for filename in filenames:
-                        if filename == "opencode.json":
-                            continue
-                        rel = os.path.relpath(os.path.join(root, filename), stage)
-                        with open(os.path.join(root, filename), "rb") as f:
-                            blob = f.read()
-                        if originals.get(rel) != blob:
-                            changed.append(rel)
+                fetched = _run_container(
+                    ["docker", "cp", f"{cid}:/work/.", fetch],
+                    _SANDBOX_STAGE_TIMEOUT_S,
+                )
+                if fetched.returncode != 0:
+                    notes.append("change-scan incomplete: docker cp back failed")
+                else:
+                    for root, _, filenames in os.walk(fetch):
+                        for filename in filenames:
+                            if filename == "opencode.json":
+                                continue
+                            full = os.path.join(root, filename)
+                            rel = os.path.relpath(full, fetch).replace(os.sep, "/")
+                            with open(full, "rb") as f:
+                                blob = f.read()
+                            if originals.get(rel) != blob:
+                                changed.append(rel)
+                                if len(sandbox_files) >= _SBX_ARTIFACT_MAX_FILES:
+                                    notes.append(
+                                        f"artifact cap: '{rel}' observed but not "
+                                        "kept for review")
+                                    continue
+                                if len(blob) > _SBX_ARTIFACT_MAX_BYTES:
+                                    notes.append(
+                                        f"artifact cap: '{rel}' exceeds "
+                                        f"{_SBX_ARTIFACT_MAX_BYTES // 1024}KB, "
+                                        "not kept for review")
+                                    continue
+                                sandbox_files.append({
+                                    "filename": rel,
+                                    "b64": base64.b64encode(blob).decode("ascii"),
+                                })
+            except FileNotFoundError:
+                notes.append("change-scan incomplete: docker CLI went away")
             except OSError as e:
                 notes.append(f"change-scan incomplete: {e}")
             if not output.strip() and not changed:
@@ -349,10 +474,17 @@ class CodeSandboxTool(Tool):
                        f"changed={len(changed)}\n{output}".strip(),
                 data={"changed_files": sorted(changed),
                       "staged_files": sorted(staged_names),
-                      "model": model},
+                      "model": model,
+                      "sandbox_files": sandbox_files},
             )
         finally:
+            if cid:
+                try:
+                    _run_container(["docker", "rm", "-f", cid], 30.0)
+                except Exception as e:  # noqa: BLE001 - teardown is best-effort
+                    logger.debug("sandbox teardown rm failed: %s", e)
             shutil.rmtree(stage, ignore_errors=True)
+            shutil.rmtree(fetch, ignore_errors=True)
 
     def _fail(self, error: str) -> ToolResponse:
         logger.warning("code.sandbox honest failure: %s", error)

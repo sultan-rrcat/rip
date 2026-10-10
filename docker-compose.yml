@@ -152,7 +152,7 @@ services:
       - rip-net
 
   # Code sandbox image (ADR-049): build-only, never started on plain `up`.
-  # Backend spawns ephemeral siblings via `docker run --rm rip-sandbox`.
+  # Backend runs ephemeral siblings via create/cp/start (no host-path mount).
   # Build with `docker compose build sandbox` or `up --build` with profile.
   sandbox:
     build: {context: ./sandbox}

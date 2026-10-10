@@ -122,7 +122,7 @@ npm install; npm run dev
 Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (alias `GET /health`). Substitute `HOST_BACKEND_PORT` when remapped (e.g. `http://localhost:8005/api/health`).
 Vite dev (`npm run dev`, port `5178` per `vite.config.ts`) proxies `/api/` + `/v1/` → `http://localhost:8000`; compose-host frontend is `HOST_FRONTEND_PORT` (default `5173`) → container `8080`. Prod `nginx.conf` must proxy both. Empty `VITE_API_URL` = same-origin; nginx allows 50M uploads (`client_max_body_size 50M`, matching `MAX_UPLOAD_SIZE_MB=50`) with unbuffered SSE (`/api/` 60s, `/v1/` 600s timeouts).
 
-### Code sandbox (ADR-049, optional)
+### Code sandbox (ADR-049/050, optional)
 
 Run/test/execute asks dispatch `code.sandbox`: the backend stages the notebook's code files into an ephemeral container (`rip-sandbox` image, opencode CLI vs host Ollama) and returns stdout + changed files. Two operator steps, both one-time:
 
@@ -131,7 +131,7 @@ docker compose build sandbox
 # equivalent: docker build -t rip-sandbox sandbox/
 ```
 
-`sandbox` is a build-only compose service (`profiles: [sandbox]`): plain `up --build` ignores it, so it never starts an idle container — it only gives the image a compose-owned build path. The backend still spawns siblings via `docker run --rm rip-sandbox` through the socket mount already in `docker-compose.yml` (`/var/run/docker.sock` — root-equivalent, accepted for local single-user use). Without image + mount the tool fails honest (`docker CLI not available` / daemon error) and everything else keeps working; toggle/kill-switch lives in Admin → Tools. Sandbox knobs (`SANDBOX_IMAGE/_TIMEOUT_MS/_CPUS/_MEMORY`) are live admin keys under `.env` deploy overrides.
+`sandbox` is a build-only compose service (`profiles: [sandbox]`): plain `up --build` ignores it, so it never starts an idle container — it only gives the image a compose-owned build path. Staging uses `docker create` + `docker cp` (never a `-v` host path), so it works when the backend itself runs in a container behind the same socket mount (`/var/run/docker.sock` in `docker-compose.yml` — root-equivalent, accepted for local single-user use). Execution requests take the deterministic L2 DAG (`code.sandbox` → `coding` report; the sandbox observation stays hidden, the report is the answer, changed files land under Artifacts for review — originals are never overwritten). Without image + mount the tool fails honest (`docker CLI not available` / daemon error) and everything else keeps working; toggle/kill-switch lives in Admin → Tools. Sandbox knobs (`SANDBOX_IMAGE/_TIMEOUT_MS/_CPUS/_MEMORY`) are live admin keys under `.env` deploy overrides.
 
 ## 5. Smoke test
 

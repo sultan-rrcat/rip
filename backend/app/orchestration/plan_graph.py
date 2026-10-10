@@ -440,6 +440,10 @@ def _step_timeout_ms(step: PlanStep, default_ms: int) -> int:
     survive BGE rerank on CPU.
     """
     if step.tool_id:
+        if step.tool_id == "code.sandbox":
+            # Container execution outlives the tight tool default: the step
+            # budget must cover the sandbox budget (ADR-050 L2 execute DAG).
+            return max(default_ms, settings.sandbox_timeout_ms)
         if step.tool_id == "rag.query":
             try:
                 mode = str((step.input or {}).get("mode", "")).strip().lower()
@@ -479,7 +483,7 @@ def _make_step_node(
     _visibility = (
         "hide"
         if _eot in ("chunks", "numbers")
-        or step.executor_id in ("notebook.inspect", "code.read")
+        or step.executor_id in ("notebook.inspect", "code.read", "code.sandbox")
         else "show"
     )
 
