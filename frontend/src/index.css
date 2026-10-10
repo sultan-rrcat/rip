@@ -4,9 +4,34 @@
 @import '@fontsource/inter/500.css';
 @import '@fontsource/inter/600.css';
 
+@theme {
+    --color-ink: #152736;
+    --color-ink-soft: #22394e;
+    --color-bench: #d8dfe7;
+    --color-paper: #edf0f3;
+    --color-card: #fbfcfd;
+    --color-line: #b7c1cc;
+    --color-brass: #a38442;
+    --color-brass-deep: #7d6530;
+    --color-ledger: #2a5f46;
+    --color-rust: #b6492b;
+
+    --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+    --font-sans: "Inter", system-ui, sans-serif;
+    --font-ledger: "IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
+}
+
 @layer utilities {
     .font-inter {
         font-family: 'Inter', sans-serif;
+    }
+
+    .font-display {
+        font-family: var(--font-display);
+    }
+
+    .font-ledger {
+        font-family: var(--font-ledger);
     }
 
     .icon-sm {
@@ -14,12 +39,6 @@
         font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
     }
 }
-
-/* Icon tuning */
-/* .material-symbols-outlined {
-    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-} */
-
 
 @layer base {
     html,
@@ -32,5 +51,54 @@
 
     body {
         font-family: 'Inter', sans-serif;
+        background: var(--color-bench);
+        color: var(--color-ink);
+    }
+
+    :focus-visible {
+        outline: 2px solid var(--color-ledger);
+        outline-offset: 2px;
+    }
+}
+
+/* Single orchestrated entrance: drawers settle in sequence. */
+@keyframes drawer-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.drawer-enter {
+    animation: drawer-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.drawer-row {
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.drawer-row:hover {
+    transform: translateX(4px);
+}
+
+.drawer-row:hover .brass-pull {
+    background: var(--color-brass-deep);
+    width: 3.5rem;
+}
+
+.brass-pull {
+    transition: width 0.18s ease, background 0.18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .drawer-enter {
+        animation: none;
+    }
+    .drawer-row:hover {
+        transform: none;
     }
 }

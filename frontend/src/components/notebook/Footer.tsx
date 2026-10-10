@@ -64,9 +64,9 @@ const Footer = memo(function Footer({
   }
 
   return (
-    <footer className="m-1 mt-0 py-4 shrink-0 bg-white border border-gray-400 rounded-xl shadow-sm">
-      <div className="w-full max-w-3xl mx-auto px-4">
-        <div className="border border-gray-400 rounded-xl">
+    <footer className="shrink-0 rounded-lg border border-line bg-card shadow-[0_1px_0_rgba(21,39,54,0.12)]">
+      <div className="mx-auto w-full max-w-3xl px-4 py-3">
+        <div className="rounded-md border border-line bg-paper/60 focus-within:border-ledger/60">
           <div className="relative px-3 py-2.5 ">
             <textarea
               ref={textareaRef}
@@ -75,15 +75,16 @@ const Footer = memo(function Footer({
               onChange={handleChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder="Enter your query"
-              className={`w-full bg-transparent border-none outline-none text-gray-700 placeholder:text-gray-400 resize-none overflow-y-auto leading-relaxed py-1.5
+              placeholder="Ask about your sources"
+              aria-label="Ask about your sources"
+              className={`w-full resize-none overflow-y-auto border-none bg-transparent py-1.5 leading-relaxed text-ink outline-none placeholder:text-ink-soft/40
                             [&::-webkit-scrollbar]:w-1.5
                             [&::-webkit-scrollbar-track]:bg-transparent
-                            [&::-webkit-scrollbar-thumb]:bg-gray-300
+                            [&::-webkit-scrollbar-thumb]:bg-line
                             [&::-webkit-scrollbar-thumb]:rounded-full
-                            hover:[&::-webkit-scrollbar-thumb]:bg-gray-400
-                            [scrollbar-width:thin] [scrollbar-color:#d1d5db_transparent]
-                            ${isCode ? 'text-[11px] font-mono whitespace-pre' : 'text-sm'}`}
+                            hover:[&::-webkit-scrollbar-thumb]:bg-ink-soft/40
+                            [scrollbar-width:thin] [scrollbar-color:#b7c1cc_transparent]
+                            ${isCode ? 'font-ledger text-[11px] whitespace-pre' : 'text-sm'}`}
               style={{
                 minHeight: '32px',
                 maxHeight: '200px',
@@ -91,16 +92,21 @@ const Footer = memo(function Footer({
               }}
             />
           </div>
-          <div className="flex justify-between bg-gray-100 px-3 py-3 rounded-xl">
-            <div className="flex items-center font-medium text-sm">
-              Local Model
+          <div className="flex items-center justify-between rounded-b-md bg-ink px-3 py-2">
+            <div className="font-ledger flex items-center gap-2 text-[10px] font-semibold tracking-[0.18em] text-paper/70">
+              <span
+                className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400"
+                aria-hidden="true"
+              />
+              LOCAL MODEL · OFFLINE
             </div>
             <div className="border-none">
               {isRunning ? (
                 <button
                   onClick={onCancel}
                   title="Stop run"
-                  className="flex items-center justify-center w-8 h-8 bg-red-700 hover:bg-red-600 text-white rounded-lg shrink-0 transition-all"
+                  aria-label="Stop run"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rust text-white transition-colors hover:bg-rust/85"
                 >
                   <StopIcon sx={{ fontSize: 16 }} />
                 </button>
@@ -108,7 +114,9 @@ const Footer = memo(function Footer({
                 <button
                   onClick={handleSend}
                   disabled={isLoading || !inputText.trim()}
-                  className="flex items-center justify-center w-8 h-8 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg shrink-0 transition-all"
+                  title="Send message"
+                  aria-label="Send message"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-paper text-ink transition-all hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <SendIcon sx={{ fontSize: 16 }} />
                 </button>
@@ -116,8 +124,8 @@ const Footer = memo(function Footer({
             </div>
           </div>
         </div>
-        <p className="text-[10px] text-gray-400 text-center mt-2">
-          Shift+Enter for new line
+        <p className="font-ledger mt-2 text-center text-[10px] tracking-wide text-ink-soft/50">
+          SHIFT+ENTER FOR NEW LINE
         </p>
       </div>
     </footer>

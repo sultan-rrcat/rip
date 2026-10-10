@@ -10,13 +10,13 @@ export default function ArtifactItem({ artifact: a }: { artifact: Artifact }) {
     return (
       <>
         <a
-          className="text-blue-600 hover:underline"
+          className="font-medium text-ledger hover:underline"
           href={artifactSrc(a)}
           download={a.filename}
         >
           {a.filename}
         </a>
-        <span className="text-gray-400"> · {a.kind}</span>
+        <span className="font-ledger text-ink-soft/60"> · {a.kind}</span>
       </>
     )
   }
@@ -28,17 +28,17 @@ export default function ArtifactItem({ artifact: a }: { artifact: Artifact }) {
         alt={a.filename}
         loading="lazy"
         onError={() => setFailed(true)}
-        className="max-w-full h-auto rounded border border-gray-200 bg-white"
+        className="h-auto max-w-full rounded-md border border-line bg-white"
       />
       <div>
         <a
-          className="text-blue-600 hover:underline"
+          className="font-medium text-ledger hover:underline"
           href={artifactSrc(a)}
           download={a.filename}
         >
           {a.filename}
         </a>
-        <span className="text-gray-400"> · {a.kind}</span>
+        <span className="font-ledger text-ink-soft/60"> · {a.kind}</span>
       </div>
     </div>
   )

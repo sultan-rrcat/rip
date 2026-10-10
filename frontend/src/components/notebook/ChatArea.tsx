@@ -24,42 +24,42 @@ const markdownComponents: Components = {
   // parent's text-xs size. Give each level a distinct type scale.
   h1({ children }) {
     return (
-      <h1 className="mt-4 mb-2 text-xl font-bold leading-tight text-gray-900">
+      <h1 className="font-display mt-4 mb-2 text-xl font-bold leading-tight text-ink">
         {children}
       </h1>
     )
   },
   h2({ children }) {
     return (
-      <h2 className="mt-4 mb-2 text-lg font-bold leading-tight text-gray-900">
+      <h2 className="font-display mt-4 mb-2 text-lg font-bold leading-tight text-ink">
         {children}
       </h2>
     )
   },
   h3({ children }) {
     return (
-      <h3 className="mt-3 mb-1.5 text-base font-semibold leading-snug text-gray-900">
+      <h3 className="mt-3 mb-1.5 text-base font-semibold leading-snug text-ink">
         {children}
       </h3>
     )
   },
   h4({ children }) {
     return (
-      <h4 className="mt-3 mb-1 text-sm font-semibold leading-snug text-gray-900">
+      <h4 className="mt-3 mb-1 text-sm font-semibold leading-snug text-ink">
         {children}
       </h4>
     )
   },
   h5({ children }) {
     return (
-      <h5 className="mt-2 mb-1 text-sm font-semibold text-gray-800">
+      <h5 className="mt-2 mb-1 text-sm font-semibold text-ink-soft">
         {children}
       </h5>
     )
   },
   h6({ children }) {
     return (
-      <h6 className="mt-2 mb-1 text-xs font-semibold uppercase tracking-wide text-gray-700">
+      <h6 className="font-ledger mt-2 mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-soft/80">
         {children}
       </h6>
     )
@@ -73,7 +73,7 @@ const markdownComponents: Components = {
         href={href}
         target="_blank"
         rel="noreferrer"
-        className="text-blue-600 underline underline-offset-2 hover:text-blue-800"
+        className="font-medium text-ledger underline underline-offset-2 hover:text-ink"
       >
         {children}
       </a>
@@ -93,17 +93,17 @@ const markdownComponents: Components = {
   },
   blockquote({ children }) {
     return (
-      <blockquote className="my-2 border-l-4 border-gray-300 pl-3 italic text-gray-600">
+      <blockquote className="my-2 border-l-[3px] border-brass pl-3 italic text-ink-soft">
         {children}
       </blockquote>
     )
   },
   hr() {
-    return <hr className="my-4 border-gray-200" />
+    return <hr className="my-4 border-line" />
   },
   strong({ children }) {
     return (
-      <strong className="font-semibold text-gray-800">{children}</strong>
+      <strong className="font-semibold text-ink">{children}</strong>
     )
   },
   // Fenced blocks render as <pre><code class="language-*">. The inner code
@@ -136,7 +136,7 @@ const markdownComponents: Components = {
       </SyntaxHighlighter>
     ) : (
       <code
-        className={`rounded bg-gray-200 px-1 py-0.5 font-mono text-[0.85em] text-gray-800 ${className ?? ''}`}
+        className={`rounded bg-ink/[0.06] px-1 py-0.5 font-mono text-[0.85em] text-ink ${className ?? ''}`}
       >
         {children}
       </code>
@@ -146,7 +146,7 @@ const markdownComponents: Components = {
   table({ children }) {
     return (
       <div className="overflow-x-auto my-2">
-        <table className="border-collapse border border-gray-300 min-w-full">
+        <table className="border-collapse border border-line min-w-full">
           {children}
         </table>
       </div>
@@ -154,13 +154,13 @@ const markdownComponents: Components = {
   },
   th({ children }) {
     return (
-      <th className="border border-gray-300 px-4 py-2 bg-gray-200">
+      <th className="font-ledger border border-line px-4 py-2 bg-paper text-[11px] tracking-wide text-ink">
         {children}
       </th>
     )
   },
   td({ children }) {
-    return <td className="border border-gray-300 px-4 py-2">{children}</td>
+    return <td className="border border-line px-4 py-2">{children}</td>
   },
 }
 
@@ -200,7 +200,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns }: ChatA
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="m-1 min-h-0 space-y-6 flex-1 overflow-y-auto overscroll-contain px-8 py-10 bg-white border border-gray-400 rounded-xl shadow-sm"
+      className="m-0 min-h-0 space-y-6 flex-1 overflow-y-auto overscroll-contain px-5 py-8 sm:px-8 bg-paper border border-line rounded-lg shadow-[0_1px_0_rgba(21,39,54,0.12)]"
     >
       {messages.map((message) => {
         // The in-flight run renders its plan + artifacts inside the run's
@@ -289,13 +289,13 @@ function AssistantMessage({
   return (
     <div className="flex gap-4 items-start">
       {/* avatar  */}
-      <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
-        <SmartToyIcon />
+      <div className="w-8 h-8 rounded-full bg-ink text-paper flex items-center justify-center shrink-0">
+        <SmartToyIcon fontSize="small" />
       </div>
       {/* content */}
-      <div className="flex-1 space-y-1">
-        <p className="text-xs font-small text-gray-300">Assistant</p>
-        <div className="text-sm text-gray-600 leading-relaxed max-w-2xl border border-gray-200 p-4 rounded-xl rounded-tl-none bg-gray-100">
+      <div className="flex-1 min-w-0 space-y-1">
+        <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">ASSISTANT</p>
+        <div className="text-sm text-ink/90 leading-relaxed max-w-2xl border border-line p-4 rounded-lg rounded-tl-sm bg-card shadow-[0_1px_0_rgba(21,39,54,0.1)]">
           {children ? (
             children
           ) : (
@@ -308,8 +308,8 @@ function AssistantMessage({
           )}
 
           {plan && plan.length > 0 && (
-            <details className="mt-3 text-[11px] text-gray-500">
-              <summary className="cursor-pointer font-semibold hover:text-gray-700">
+            <details className="font-ledger mt-3 text-[11px] text-ink-soft/80">
+              <summary className="cursor-pointer font-semibold hover:text-ink">
                 Plan{goal ? `: ${goal}` : ''}
               </summary>
               <ol className="mt-1 ml-4 list-decimal space-y-0.5">
@@ -325,8 +325,8 @@ function AssistantMessage({
           )}
 
           {plan && plan.length > 0 && stepResults && Object.keys(stepResults).length > 0 && (
-            <details className="mt-3 text-[11px] text-gray-500">
-              <summary className="cursor-pointer font-semibold hover:text-gray-700">
+            <details className="font-ledger mt-3 text-[11px] text-ink-soft/80">
+              <summary className="cursor-pointer font-semibold hover:text-ink">
                 Steps (all, collapsed)
               </summary>
               <div className="mt-1 ml-2 space-y-1">
@@ -341,13 +341,13 @@ function AssistantMessage({
                   const eot = sr.expected_output_type ?? step.expected_output_type ?? null
                   const badge = vis === 'hide' ? 'hidden' : vis === 'show' ? 'shown' : null
                   return (
-                    <details key={step.step_id} className="border-l-2 border-gray-300 pl-2">
-                      <summary className="cursor-pointer font-semibold hover:text-gray-700">
+                    <details key={step.step_id} className="border-l-2 border-brass/60 pl-2">
+                      <summary className="cursor-pointer font-semibold hover:text-ink">
                         Step {step.step_id} · {step.executor} · {sr.status}
                         {eot ? ` · ${eot}` : ''}
                         {badge ? ` · ${badge}` : ''}
                       </summary>
-                      <div className="max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-[10px] text-gray-600">
+                      <div className="max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-[10px] text-ink-soft">
                         {content}
                       </div>
                     </details>
@@ -358,9 +358,9 @@ function AssistantMessage({
           )}
 
           {artifacts && artifacts.length > 0 && (
-            <div className="mt-3 pt-2 border-t border-gray-300">
-              <p className="text-[11px] font-semibold text-gray-500 mb-1">
-                Artifacts
+            <div className="mt-3 pt-2 border-t border-line">
+              <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60 mb-1">
+                ARTIFACTS
               </p>
               <ul className="space-y-2">
                 {artifacts.map((a) => (
@@ -373,15 +373,16 @@ function AssistantMessage({
           )}
 
           {sources && sources.length > 0 && (
-            <div className="mt-4 pt-3 border-t border-gray-300">
-              <p className="text-[11px] font-semibold text-gray-500 mb-1">
-                Sources
+            <div className="mt-4 pt-3 border-t border-line">
+              <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60 mb-2">
+                SOURCES
               </p>
-              <ul>
+              <ul className="flex flex-wrap gap-1.5">
                 {sources.length > 0 &&
                   sources.map((s, i) => (
-                    <li key={i} className="text-[11px] text-gray-500">
-                      [{i + 1}] {s.source} - {s.section}
+                    <li key={i} className="font-ledger inline-flex max-w-full items-center gap-1.5 rounded border border-line bg-paper px-2 py-1 text-[10px] text-ink-soft">
+                      <span className="font-semibold text-brass-deep">[{i + 1}]</span>
+                      <span className="truncate">{s.source} — {s.section}</span>
                     </li>
                   ))}
               </ul>
@@ -401,8 +402,8 @@ function UserMessage({ text }: TextMessageProps) {
   return (
     <div className="flex gap-4 items-start justify-end">
       <div className="flex-1 space-y-1 text-right">
-        <p className="text-xs font-medium text-gray-400 ">You</p>
-        <div className="inline-block text-gray-600 bg-blue-100 px-5 py-2 rounded-2xl rounded-tr-none text-xs leading-relaxed shadow-sm max-w-2xl">
+        <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">YOU</p>
+        <div className="inline-block text-paper bg-ink px-5 py-2.5 rounded-lg rounded-tr-sm text-[13px] leading-relaxed shadow-sm max-w-2xl text-left">
           {text}
         </div>
       </div>
@@ -413,12 +414,12 @@ function UserMessage({ text }: TextMessageProps) {
 function ErrorMessage({ text }: TextMessageProps) {
   return (
     <div className="flex gap-4 items-start">
-      <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
-        <SmartToyIcon className="text-red-400" />
+      <div className="w-8 h-8 rounded-full bg-rust/15 text-rust flex items-center justify-center shrink-0">
+        <SmartToyIcon fontSize="small" />
       </div>
       <div className="flex-1 space-y-1">
-        <p className="text-xs font-medium text-red-300">Assistant</p>
-        <div className="text-sm text-red-400 leading-relaxed max-w-2xl">
+        <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-rust">ASSISTANT · ERROR</p>
+        <div className="text-sm text-rust leading-relaxed max-w-2xl">
           {text}
         </div>
       </div>

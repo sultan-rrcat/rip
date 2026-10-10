@@ -2,6 +2,10 @@ import AddIcon from '@mui/icons-material/Add'
 import LocalLibraryIcon from '@mui/icons-material/LocalLibrary'
 import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
+import DescriptionIcon from '@mui/icons-material/Description'
+import TextSnippetIcon from '@mui/icons-material/TextSnippet'
+import CodeIcon from '@mui/icons-material/Code'
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
 import DeleteIcon from '@mui/icons-material/Delete'
 import { useState, memo } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
@@ -41,9 +45,12 @@ const LeftSidebar = memo(function LeftSidebar({
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* name field  */}
-      <div className="flex p-3 m-1 bg-white overflow-hidden border border-gray-400 rounded-xl items-center">
+    <div className="flex h-full w-[292px] shrink-0 flex-col gap-2">
+      {/* drawer front: notebook name + brass pull */}
+      <div className="rounded-lg border border-line bg-card px-3 pb-2.5 pt-2 shadow-[0_1px_0_rgba(21,39,54,0.12)]">
+        <div className="flex justify-center pb-1.5" aria-hidden="true">
+          <span className="block h-1.5 w-12 rounded-full bg-brass" />
+        </div>
         {isRenaming ? (
           <input
             autoFocus
@@ -51,42 +58,43 @@ const LeftSidebar = memo(function LeftSidebar({
             onChange={(e) => setTempName(e.target.value)}
             onBlur={handleRenameSave}
             onKeyDown={handleKeyDown}
-            className="w-full px-2 py-1 border-none text-md rounded"
+            aria-label="Notebook name"
+            className="font-display w-full rounded border border-ledger/50 bg-paper px-2 py-1 text-[15px] font-semibold text-ink outline-none"
           />
         ) : (
-          <div
+          <button
+            type="button"
             onClick={() => {
               setTempName(notebookName)
               setIsRenaming(true)
             }}
-            className="cursor-pointer text-md font-medium hover:bg-gray-200 px-2 py-1 rounded"
+            title="Rename notebook"
+            className="font-display w-full cursor-pointer truncate rounded px-2 py-1 text-left text-[15px] font-semibold text-ink transition-colors hover:bg-paper"
           >
             {notebookName}
-          </div>
+          </button>
         )}
       </div>
-      {/* sidebar  */}
-      <div className="flex m-1 h-full bg-white overflow-hidden border border-gray-400 rounded-xl">
-        <aside className="w-70 shrink-0 flex flex-col border-r border-gray-200 rounded-xl shadow-sm">
+      {/* source cabinet */}
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-card shadow-[0_1px_0_rgba(21,39,54,0.12)]">
+        <aside className="flex min-h-0 w-full flex-1 flex-col">
           {/* header  */}
-          <div className="m-5 p-4 bg-gray-100 border border-gray-200 rounded-md flex items-center justify-between">
+          <div className="m-3 mb-0 flex items-center justify-between rounded-md border border-line/70 bg-paper p-3">
             <div>
-              <h1 className="text-lg font-bold text-gray-900">
+              <h1 className="font-display text-[15px] font-bold leading-tight text-ink">
                 Knowledge Base
               </h1>
-              <p className="text-xs text-gray-400 mt-0.5">
-                {readyCount} Active Source{readyCount !== 1 ? 's' : ''}
+              <p className="font-ledger mt-1 text-[10px] tracking-[0.14em] text-ink-soft/70">
+                {readyCount} ACTIVE SOURCE{readyCount !== 1 ? 'S' : ''}
               </p>
             </div>
-            <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center">
-              {/* <span className="text-indigo-600 text-sm">✅</span> */}
-              {/* <span className="material-symbols-outlined" style={{fontSize:'28px'}}>local_library</span> */}
-              <LocalLibraryIcon />
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-ink text-paper">
+              <LocalLibraryIcon fontSize="small" />
             </div>
           </div>
 
           {/* upload button  */}
-          <div className="px-5">
+          <div className="px-3 pt-3">
             <input
               id="file-upload"
               type="file"
@@ -98,24 +106,28 @@ const LeftSidebar = memo(function LeftSidebar({
 
             <label
               htmlFor="file-upload"
-              className="w-full font-inter text-sm font-semibold bg-white text-black py-2 border border-gray-200 rounded-xl  flex items-center justify-center gap-2 cursor-pointer hover:bg-gray-100 hover:shadow-sm transition-all duration-200"
+              className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-md bg-ink py-2 text-sm font-semibold text-paper transition-colors hover:bg-ink-soft"
             >
-              <AddIcon />
+              <AddIcon fontSize="small" />
               Add sources
             </label>
           </div>
 
           {/* file list  */}
-          <nav className="m-5 px-2 border border-gray-200 rounded-xl flex-1 overflow-y-auto">
+          <nav
+            className="m-3 flex-1 overflow-y-auto rounded-md border border-line/70 bg-paper/50 px-2 py-2"
+            aria-label="Sources"
+          >
             {files.length === 0 && (
-              <div className="px-4 py-8 text-center">
+              <div className="px-4 py-8 text-center text-ink-soft/60">
                 <FolderOpenIcon />
-                <p className="text-xs text-gray-400 mt-2">
-                  No files uploaded yet
+                <p className="mt-2 text-xs">No files uploaded yet</p>
+                <p className="font-ledger mt-1 text-[10px] tracking-wide">
+                  PDF · DOC · MD · TXT · PY
                 </p>
               </div>
             )}
-            <div className="my-3">
+            <div className="space-y-1.5">
               {files.map((file) => (
                 <FileItem key={file.id} file={file} onDelete={onDelete} />
               ))}
@@ -137,60 +149,97 @@ function formatFileSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
+// Mirrors backend code_extensions (backend/app/core/config.py:125).
+// Any file with one of these gets the code icon, not the generic one.
+const CODE_EXTENSIONS = new Set([
+  'py', 'js', 'ts', 'jsx', 'tsx', 'java', 'c', 'cpp', 'h', 'hpp',
+  'cs', 'go', 'rs', 'rb', 'php', 'swift', 'kt', 'scala', 'r',
+  'm', 'sh', 'ps1', 'sql', 'html', 'css', 'scss', 'less',
+  'json', 'xml', 'yaml', 'yml', 'toml', 'ini',
+])
+
+function FileTypeIcon({ name }: { name: string }) {
+  const ext = fileExtension(name)
+  const cls = 'shrink-0'
+  if (ext === 'pdf')
+    return (
+      <PictureAsPdfIcon fontSize="small" className={`${cls} text-rust`} aria-hidden="true" />
+    )
+  if (ext === 'doc' || ext === 'docx')
+    return (
+      <DescriptionIcon fontSize="small" className={`${cls} text-[#2b579a]`} aria-hidden="true" />
+    )
+  if (ext === 'md' || ext === 'markdown')
+    return (
+      <TextSnippetIcon fontSize="small" className={`${cls} text-ink-soft`} aria-hidden="true" />
+    )
+  if (ext === 'txt')
+    return (
+      <TextSnippetIcon fontSize="small" className={`${cls} text-ink-soft/70`} aria-hidden="true" />
+    )
+  if (CODE_EXTENSIONS.has(ext))
+    return (
+      <CodeIcon fontSize="small" className={`${cls} text-ledger`} aria-hidden="true" />
+    )
+  return (
+    <InsertDriveFileIcon fontSize="small" className={`${cls} text-ink-soft/60`} aria-hidden="true" />
+  )
+}
+
 interface FileItemProps {
   file: NotebookFile
   onDelete: (fileId: string) => void
 }
 
 function FileItem({ file, onDelete }: FileItemProps) {
-  const bgColor = {
-    uploading: 'bg-blue-50',
-    processing: 'bg-yellow-50',
-    ready: 'bg-green-50',
-    error: 'bg-red-100',
+  const tone = {
+    uploading: 'border-brass/50 bg-brass/10',
+    processing: 'border-brass/50 bg-brass/10',
+    ready: 'border-ledger/40 bg-ledger/[0.07]',
+    error: 'border-rust/50 bg-rust/[0.07]',
   }[file.status]
   return (
-    <div className="border border-gray-100 rounded-sm m-1">
-      <div
-        className={`group flex items-center justify-between text-gray-300 cursor-pointer ${bgColor}`}
-      >
-        <div className="flex gap-3 items-center overflow-hidden flex-1">
-          <PictureAsPdfIcon
-            fontSize="small"
-            className="text-red-500 shrink-0"
-          />
+    <div className={`rounded-md border ${tone}`}>
+      <div className="group flex cursor-pointer items-center justify-between gap-2 px-2.5 py-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden">
+          <FileTypeIcon name={file.name} />
           <div className="min-w-0">
             <p
-              className="text-[10px] text-gray-800 truncate"
+              className="truncate text-[11px] font-medium text-ink"
               title={file.name}
             >
               {file.name}
             </p>
-            <p className="text-[9px] text-gray-400">
+            <p className="font-ledger text-[9px] tracking-wide text-ink-soft/60">
               {formatFileSize(file.size)}
             </p>
-            <p className="text-[9px] text-gray-400 flex items-center gap-2">
+            <p className="font-ledger flex items-center gap-1.5 text-[9px] tracking-wide">
               {file.status === 'uploading' && (
                 <>
-                  <span className="w-3 h-3 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin"></span>
-                  Uploading
+                  <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-line border-t-brass-deep"></span>
+                  <span className="text-brass-deep">UPLOADING</span>
                 </>
               )}
 
               {file.status === 'processing' && (
                 <>
-                  <span className="w-3 h-3 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin"></span>
-                  Processing
+                  <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-line border-t-brass-deep"></span>
+                  <span className="text-brass-deep">PROCESSING</span>
                 </>
               )}
 
               {file.status === 'ready' && (
-                <span className="text-green-500 font-medium">Ready</span>
+                <span className="font-semibold text-ledger">READY</span>
               )}
 
               {file.status === 'error' && (
-                <span className="text-red-500 font-medium">
-                  Error: Error adding file to Knowledge base.
+                <span className="font-medium text-rust">
+                  ERROR ADDING FILE
                 </span>
               )}
             </p>
@@ -202,12 +251,12 @@ function FileItem({ file, onDelete }: FileItemProps) {
             e.stopPropagation()
             onDelete(file.id)
           }}
-          className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 rounded hover:bg-red-100"
-          aria-label="Delete File"
+          className="rounded p-1 opacity-0 transition-opacity duration-200 hover:bg-rust/10 focus:opacity-100 group-hover:opacity-100"
+          aria-label={`Delete ${file.name}`}
         >
           <DeleteIcon
             fontSize="small"
-            className="text-gray-400 hover:text-red-500"
+            className="text-ink-soft/60 hover:text-rust"
           />
         </button>
       </div>

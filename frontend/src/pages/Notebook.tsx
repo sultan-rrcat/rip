@@ -1,4 +1,4 @@
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import ChatArea from '@/components/notebook/ChatArea'
 import Footer from '@/components/notebook/Footer'
 import LeftSidebar from '@/components/notebook/LeftSidebar'
@@ -14,7 +14,7 @@ export default function Notebook() {
     useMessages(notebook_id)
 
   return (
-    <div className="flex h-screen min-h-0 bg-gray-200 overflow-hidden">
+    <div className="flex h-screen min-h-0 gap-2 overflow-hidden bg-bench p-2">
       <LeftSidebar
         files={files}
         onUpload={handleUpload}
@@ -22,8 +22,21 @@ export default function Notebook() {
         notebookName={notebookName}
         onRenameNotebook={renameNotebook}
       />
-      <main className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <ChatArea messages={messages} activeRun={activeRun} pastRuns={pastRuns} />
+      <main className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between px-1 pt-0.5">
+          <Link
+            to="/"
+            className="font-ledger text-[11px] font-semibold tracking-[0.18em] text-ink-soft/70 transition-colors hover:text-ink"
+          >
+            ← STACK
+          </Link>
+          <p className="font-ledger hidden text-[10px] tracking-[0.2em] text-ink-soft/50 sm:block">
+            OFFLINE · NOTHING LEAVES THIS MACHINE
+          </p>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <ChatArea messages={messages} activeRun={activeRun} pastRuns={pastRuns} />
+        </div>
         <Footer
           onSendMessage={handleSendMessage}
           isLoading={isRunning}
