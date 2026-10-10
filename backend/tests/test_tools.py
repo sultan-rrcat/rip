@@ -313,6 +313,111 @@ class TestRagQuery:
         finally:
             bind_rag_singleton(None)  # type: ignore[arg-type]
 
+    def test_stats_from_context_do_not_change_shape(self):
+        """A double returning stats keeps the ToolResponse shape identical.
+
+        Tracing is off in unit tests, so the new shard/corpus/filter spans
+        are no-ops — retrieval must behave exactly as before.
+        """
+
+        class StatsRAG(FakeRAG):
+            def retrieve_context(self, *args, **kwargs):
+                out = super().retrieve_context(*args, **kwargs)
+                out["stats"] = {
+                    "vector_raw": 6,
+                    "vector_kept": 3,
+                    "vector_threshold": 0.1,
+                    "fts_raw": 2,
+                    "merged": 4,
+                    "reranked": 4,
+                    "selected": 3,
+                    "rerank_threshold": 0.05,
+                    "top_scores": [0.9, 0.8, 0.7],
+                    "fetch_k": 12,
+                    "mode": "specific",
+                    "timings_ms": {"embed": 1.0, "sql": 2.0, "rerank": 3.0},
+                }
+                return out
+
+        tool = RagQueryTool(rag=StatsRAG())
+        resp = tool.execute(
+            ToolRequest(
+                tool_id="rag.query",
+                input={"notebook_id": "nb-1", "query": "hi", "verbatim": True},
+            )
+        )
+        assert resp.ok
+        assert [r["content"] for r in resp.data["results"]] == ["c1", "c2", "c3"]
+        assert resp.data["whole_file"] is False
+        assert resp.data["filter_reason"] == "not_requested"
+
+    def test_module_collect_stats_captures_shard_stats(self):
+        """collect_stats receives one stats dict per shard without stats."""
+
+        class StatsRAG(FakeRAG):
+            def retrieve_context(self, *args, **kwargs):
+                out = super().retrieve_context(*args, **kwargs)
+                out["stats"] = {"vector_raw": 6, "selected": 3}
+                return out
+
+        collected: list = []
+        out = rag_query("nb-1", "hello", rag=StatsRAG(), collect_stats=collected)
+        assert len(out) == 3
+        assert collected == [{"vector_raw": 6, "selected": 3}]
+
+    def test_module_collect_stats_empty_without_stats(self):
+        """Legacy doubles without stats yield one {} per call, not a crash."""
+        collected: list = []
+        out = rag_query("nb-1", "hello", rag=FakeRAG(), collect_stats=collected)
+        assert len(out) == 3
+        assert collected == [{}]
+
+    def test_corpus_probe_missing_on_legacy_double(self):
+        """Doubles predating corpus_stats report unavailable, never raise."""
+        tool = RagQueryTool(rag=FakeRAG())
+        assert tool._corpus_probe("nb-1", None, None) == {"probe": "unavailable"}
+
+    def test_shard_and_retrieval_summaries(self):
+        from app.tools.rag_query import _retrieval_summary, _shard_summary
+
+        shard = _shard_summary(
+            {
+                "vector_raw": 12,
+                "vector_kept": 3,
+                "fts_raw": 8,
+                "merged": 9,
+                "reranked": 9,
+                "selected": 0,
+                "top_scores": [0.04, 0.01],
+                "timings_ms": {"embed": 900.0, "sql": 40.0, "rerank": 120.0},
+            },
+            4,
+        )
+        assert shard["results"] == 4
+        assert shard["vector"] == "12->3"
+        assert shard["top_scores"] == [0.04, 0.01]
+
+        thin = _shard_summary({}, 0)
+        assert thin["vector"] == "?->?"
+        assert thin["results"] == 0
+
+        line = _retrieval_summary(
+            corpus={
+                "total_chunks": 17,
+                "files": [{"name": "a.pdf"}, {"name": "b.pdf"}],
+                "wholefile_verdict": "over_budget",
+            },
+            wholefile_hit=False,
+            shard_counts=[4, 0, 2],
+            merged_total=5,
+            filtered=False,
+            filter_reason="not_requested",
+            returned=0,
+        )
+        assert "returned=0" in line
+        assert "over_budget" in line
+        assert len(line) <= 200
+
 
 class FilterProvider:
     """Fake provider serving both the sub-query planner and the filter.

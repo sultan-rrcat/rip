@@ -21,6 +21,12 @@ import logging
 from typing import Any, ClassVar
 
 from app.core.config import settings
+from app.observability.langfuse import (
+    get_trace_context,
+    manual_span,
+    truncate,
+    update_current_span,
+)
 from app.services.chat import extract_sources, format_context_for_llm
 from app.tools.base import Tool, ToolRequest, ToolResponse
 
@@ -98,6 +104,53 @@ def _map_quotes_to_results(
     return kept
 
 
+def _shard_summary(stats: dict, result_count: int) -> dict:
+    """Glanceable per-shard funnel for the `rag.shard:N` span output.
+
+    Missing keys (legacy doubles without stats) read "?" so a thin
+    corpus is distinguishable from a blind spot in instrumentation.
+    """
+    get = stats.get if isinstance(stats, dict) else (lambda _k, d=None: d)
+    return {
+        "results": result_count,
+        "vector": f"{get('vector_raw', '?')}->{get('vector_kept', '?')}",
+        "fts": get("fts_raw", "?"),
+        "merged": get("merged", "?"),
+        "reranked": get("reranked", "?"),
+        "selected": get("selected", "?"),
+        "top_scores": get("top_scores", []),
+        "timings_ms": get("timings_ms", {}),
+    }
+
+
+def _retrieval_summary(
+    *,
+    corpus: dict,
+    wholefile_hit: bool,
+    shard_counts: list[int],
+    merged_total: int,
+    filtered: bool,
+    filter_reason: str,
+    returned: int,
+) -> str:
+    """One-line retrieval story for the `tool:rag.query` span metadata.
+
+    Capped for the 200-char metadata budget: counts survive, prose doesn't.
+    """
+    shards = ",".join(str(n) for n in shard_counts) or "-"
+    if wholefile_hit:
+        path = "whole=hit"
+    else:
+        path = f"whole=skip:{corpus.get('wholefile_verdict', '?')}"
+    return (
+        f"corpus={corpus.get('total_chunks', '?')}ch/"
+        f"{len(corpus.get('files', []))}f {path} "
+        f"shards=[{shards}] merged={merged_total} "
+        f"filter={'yes' if filtered else 'no'}:{filter_reason} "
+        f"returned={returned}"
+    )
+
+
 def bind_rag_singleton(rag: Any) -> None:
     """Bind the lifespan VectorRAG singleton for rag.query calls."""
     global _rag_singleton
@@ -132,6 +185,7 @@ def rag_query(
     file_id: str | None = None,
     file_name: str | None = None,
     mode: str = "specific",
+    collect_stats: list | None = None,
 ) -> list[dict]:
     """Search notebook documents; return chunk-level results with source metadata.
 
@@ -142,6 +196,10 @@ def rag_query(
     sample in doc order). Raises RuntimeError when the singleton is unbound;
     VectorRAG retrieval errors propagate to the caller (the Tool converts
     them to ok=False).
+
+    ``collect_stats``: when a list is given, the call appends this shard's
+    ``context["stats"]`` dict (or {} for doubles without one) — the tool
+    uses it for per-shard trace spans without changing the return shape.
 
     Whole-file shortcut: when every chunk in scope fits the context window
     (``settings.rag_whole_file_pct``), the ranked path is skipped entirely and
@@ -163,6 +221,9 @@ def rag_query(
         # Back-compat with test doubles exposing the legacy
         # retrieve_context(notebook_id, query, top_k) signature.
         context = resolved.retrieve_context(notebook_id, query, top_k=top_k)
+    if collect_stats is not None:
+        stats = context.get("stats") if isinstance(context, dict) else None
+        collect_stats.append(stats if isinstance(stats, dict) else {})
     results = context.get("results", [])
     if not isinstance(results, list):
         raise TypeError("VectorRAG returned a malformed context (no results list)")
@@ -259,6 +320,25 @@ class RagQueryTool(Tool):
             return None, "kept_all"
         return subset, "filtered"
 
+    def _corpus_probe(
+        self, notebook_id: str, file_id: str | None, file_name: str | None
+    ) -> dict:
+        """Ingestion snapshot for the `rag.corpus` trace span. Never raises."""
+        try:
+            rag = self._rag if self._rag is not None else get_rag_singleton()
+        except RuntimeError as e:
+            return {"probe": "unbound", "error": str(e)[:200]}
+        probe = getattr(rag, "corpus_stats", None)
+        if not callable(probe):
+            # Legacy doubles predate corpus_stats: retrieval still works,
+            # there is just no ingestion snapshot to report.
+            return {"probe": "unavailable"}
+        try:
+            stats = probe(str(notebook_id), file_id=file_id, file_name=file_name)
+        except Exception as e:  # noqa: BLE001 - probe must never fail retrieval
+            return {"probe": "failed", "error": str(e)[:200]}
+        return stats if isinstance(stats, dict) else {"probe": "malformed"}
+
     def _maybe_filter(
         self, query: str, results: list[dict], verbatim: bool, cancel_event=None
     ) -> tuple[list[dict], bool, str]:
@@ -268,6 +348,35 @@ class RagQueryTool(Tool):
         filtering (L2 builders ground on full text); small outputs skip it
         too. Never raises — failures keep the unfiltered results.
         """
+        with manual_span(
+            "rag.filter",
+            input=truncate(
+                {
+                    "query": query,
+                    "results": len(results or []),
+                    "verbatim": verbatim,
+                },
+                500,
+            ),
+            trace_context=get_trace_context(),
+        ) as obs:
+            out = self._do_maybe_filter(query, results, verbatim, cancel_event)
+            kept, was_filtered, reason = out
+            obs.update(
+                output=truncate(
+                    {
+                        "filtered": was_filtered,
+                        "reason": reason,
+                        "kept": len(kept or []),
+                        "total": len(results or []),
+                    }
+                )
+            )
+            return out
+
+    def _do_maybe_filter(
+        self, query: str, results: list[dict], verbatim: bool, cancel_event=None
+    ) -> tuple[list[dict], bool, str]:
         if verbatim:
             return results, False, "not_requested"
         if not results:
@@ -349,33 +458,105 @@ class RagQueryTool(Tool):
         # via {{id}} placeholders). Default (false) filters large results
         # down to query-relevant chunks quoted verbatim.
         verbatim = bool(request.input.get("verbatim", False))
+        # Trace parenting for the spans below: this body runs on the worker
+        # thread with the caller-owned `tool:rag.query` span current, so
+        # children nest under it. None (disabled / unit tests) makes every
+        # manual_span a no-op — instrumentation never branches behavior.
+        tool_ctx = get_trace_context()
+        # Ingestion snapshot first: when retrieval comes back empty, this
+        # span tells empty-corpus (ingestion) apart from killed-by-threshold
+        # (tuning) without a second trip to the database.
+        with manual_span(
+            "rag.corpus",
+            input=truncate(
+                {
+                    "notebook_id": str(notebook_id),
+                    "file_id": file_id,
+                    "file_name": file_name,
+                    "mode": mode,
+                    "top_k": top_k,
+                }
+            ),
+            trace_context=tool_ctx,
+        ) as corpus_obs:
+            corpus = self._corpus_probe(str(notebook_id), file_id, file_name)
+            corpus_obs.update(output=truncate(corpus))
         # Whole-file shortcut: when the scoped file(s) fit the context window,
         # return every chunk and skip BOTH the sub-query planner LLM call and
         # the embed -> vector -> FTS -> RRF -> rerank pipeline. Returns None
         # (over budget / empty / DB error / legacy double without the method),
         # which falls through to the ranked path below unchanged.
-        try:
-            resolved_rag = self._rag if self._rag is not None else get_rag_singleton()
-            whole_file_fn = getattr(resolved_rag, "retrieve_whole_file", None)
-            whole_file = (
-                whole_file_fn(
-                    str(notebook_id),
-                    file_id=file_id,
-                    file_name=file_name,
+        whole_file = None
+        wholefile_hit = False
+        with manual_span(
+            "rag.wholefile",
+            input=truncate(
+                {
+                    "notebook_id": str(notebook_id),
+                    "file_id": file_id,
+                    "file_name": file_name,
+                }
+            ),
+            trace_context=tool_ctx,
+        ) as wholefile_obs:
+            try:
+                resolved_rag = self._rag if self._rag is not None else get_rag_singleton()
+                whole_file_fn = getattr(resolved_rag, "retrieve_whole_file", None)
+                whole_file = (
+                    whole_file_fn(
+                        str(notebook_id),
+                        file_id=file_id,
+                        file_name=file_name,
+                    )
+                    if callable(whole_file_fn)
+                    else None
                 )
-                if callable(whole_file_fn)
-                else None
-            )
-        except Exception as e:  # noqa: BLE001 - optimization must never fail retrieval
-            logger.warning("whole-file shortcut unavailable, using ranked retrieval: %s", e)
-            whole_file = None
+            except Exception as e:  # noqa: BLE001 - optimization must never fail retrieval
+                logger.warning("whole-file shortcut unavailable, using ranked retrieval: %s", e)
+                whole_file = None
 
-        if whole_file:
-            whole_file, was_filtered, filter_reason = self._maybe_filter(
-                str(query), whole_file, verbatim, request.cancel_event
+            if whole_file:
+                whole_file, was_filtered, filter_reason = self._maybe_filter(
+                    str(query), whole_file, verbatim, request.cancel_event
+                )
+                sources = extract_sources({"results": whole_file})
+                output = format_context_for_llm({"results": whole_file})
+                wholefile_hit = True
+                wholefile_obs.update(
+                    output=truncate(
+                        {
+                            "hit": True,
+                            "chunks": len(whole_file),
+                            "filtered": was_filtered,
+                            "filter_reason": filter_reason,
+                        }
+                    )
+                )
+            else:
+                wholefile_obs.update(
+                    output=truncate(
+                        {
+                            "hit": False,
+                            "verdict": corpus.get("wholefile_verdict", "unknown"),
+                            "detail": "ranked path below; eligibility in rag.corpus",
+                        }
+                    )
+                )
+
+        if wholefile_hit and whole_file is not None:
+            update_current_span(
+                metadata={
+                    "retrieval": _retrieval_summary(
+                        corpus=corpus,
+                        wholefile_hit=True,
+                        shard_counts=[],
+                        merged_total=len(whole_file),
+                        filtered=was_filtered,
+                        filter_reason=filter_reason,
+                        returned=len(whole_file),
+                    )
+                }
             )
-            sources = extract_sources({"results": whole_file})
-            output = format_context_for_llm({"results": whole_file})
             return ToolResponse(
                 tool_id=self.tool_id,
                 ok=True,
@@ -442,21 +623,58 @@ class RagQueryTool(Tool):
         # Execute retrieval for each sub-query and merge results
         all_results: list[dict] = []
         seen = set()
+        shard_counts: list[int] = []
         try:
-            for sub_q in generated_queries:
-                try:
-                    sub_results = rag_query(
-                        str(notebook_id),
-                        sub_q,
-                        top_k=top_k,
-                        rag=self._rag,
-                        file_id=file_id,
-                        file_name=file_name,
-                        mode=mode,
+            for i, sub_q in enumerate(generated_queries):
+                with manual_span(
+                    f"rag.shard:{i + 1}",
+                    input=truncate(
+                        {
+                            "shard": sub_q,
+                            "top_k": top_k,
+                            "file_id": file_id,
+                            "file_name": file_name,
+                            "mode": mode,
+                        },
+                        500,
+                    ),
+                    trace_context=tool_ctx,
+                ) as shard_obs:
+                    collected: list = []
+                    try:
+                        sub_results = rag_query(
+                            str(notebook_id),
+                            sub_q,
+                            top_k=top_k,
+                            rag=self._rag,
+                            file_id=file_id,
+                            file_name=file_name,
+                            mode=mode,
+                            collect_stats=collected,
+                        )
+                    except RuntimeError:
+                        # Unbound singleton / dead shard plumbing: fail the
+                        # tool honestly via the outer handler, never as an
+                        # empty ok=True merge.
+                        raise
+                    except Exception as e:  # noqa: BLE001 - one bad shard must not kill the merge
+                        logger.warning("rag sub-query failed for '%s': %s", sub_q, e)
+                        shard_obs.update(
+                            output=truncate({"error": str(e)[:200], "results": 0})
+                        )
+                        shard_counts.append(0)
+                        continue
+                    stat = (
+                        collected[0]
+                        if collected and isinstance(collected[0], dict)
+                        else {}
                     )
-                except Exception as e:  # noqa: BLE001 - one bad shard must not kill the merge
-                    logger.warning("rag sub-query failed for '%s': %s", sub_q, e)
-                    continue
+                    shard_obs.update(
+                        output=truncate(
+                            _shard_summary(stat, len(sub_results or []))
+                        )
+                    )
+                    shard_counts.append(len(sub_results or []))
                 for r in sub_results or []:
                     # simple dedupe by chunk text
                     key = r.get("chunk_text") or r.get("content")
@@ -478,11 +696,25 @@ class RagQueryTool(Tool):
                 error=f"retrieval failed: {e}",
             )
         results = all_results
+        merged_total = len(results)
         results, was_filtered, filter_reason = self._maybe_filter(
             str(query), results, verbatim, request.cancel_event
         )
         sources = extract_sources({"results": results})
         output = format_context_for_llm({"results": results})
+        update_current_span(
+            metadata={
+                "retrieval": _retrieval_summary(
+                    corpus=corpus,
+                    wholefile_hit=False,
+                    shard_counts=shard_counts,
+                    merged_total=merged_total,
+                    filtered=was_filtered,
+                    filter_reason=filter_reason,
+                    returned=len(results),
+                )
+            }
+        )
         return ToolResponse(
             tool_id=self.tool_id,
             ok=True,

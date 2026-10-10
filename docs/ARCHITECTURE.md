@@ -145,11 +145,14 @@ One trace per run worker (`session_id = notebook_id`, `trace_name = run`). Span 
 run
 ├─ router → llm.generate_structured (L1 intent router; one call per request)
 ├─ plan (L2 builder hit only; absent when delegating to ReAct)
-│  └─ step:{id} → llm.generate[.stream] (agent LLM)
+│  └─ step:{id} → tool:{tool_id} (tool calls; agent steps hold llm.generate[.stream] directly)
+│     └─ rag.* (rag.query internals: corpus → wholefile → shard:N → filter)
 ├─ aggregate (deterministic, no LLM)
 └─ react → react:iter-N → step:rN (L3 ReAct, max 6 iterations)
 ```
 
 `router` is a trace-only sibling of `plan` under `run` (explicit `trace_context` parenting; the code still runs inside the plan node — no graph/state change). `plan` output carries `layer` (`L2-builder`) + `intent`/`routed_by`/`confidence`; `router` output carries `intent`/`confidence`/`routed_by`; each `react:iter-N` output carries `thought`/`executor`/`observation`. The SSE `plan` event carries an additive `route: {intent, routed_by, confidence}` object (old clients ignore it) and a constant `attempt: 1` (no recall; kept for old clients).
+
+Tool internals (`tools/rag_query.py`, no-ops when disabled): `rag.corpus` reports the ingestion snapshot (per-file chunk/char counts + whole-file eligibility verdict — an empty corpus here means an ingestion problem, not a tuning one); `rag.wholefile` reports shortcut hit/skip; one `rag.shard:N` span per sub-query carries that shard's retrieval funnel (`vector_raw→kept`, `fts_raw`, `merged`, `reranked`, `selected`, top scores, per-stage timings); `rag.filter` reports the relevance-filter reason. `retrieve_context` returns an additive `stats` dict with the same funnel. The `tool:rag.query` span metadata carries a one-line `retrieval` summary (`corpus=… whole=… shards=[…] filter=… returned=…`, 200-char budget) for at-a-glance diagnosis. Empty answers are guided to complete sentences (`_EMPTY_ANSWER_GUIDANCE` in `orchestration/builders.py`), never a bare fragment.
 
 Enabled only with `LANGFUSE_ENABLED=true` + keys + backend restart; disabled path is behavior-identical.

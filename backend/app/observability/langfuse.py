@@ -100,6 +100,26 @@ def tracing_enabled() -> bool:
     return settings.langfuse_enabled and _client is not None
 
 
+def _has_active_span() -> bool:
+    """True when an OTEL span is current in this thread.
+
+    The v4 SDK reads the same global OTEL context (`get_current_span`)
+    and logs a scary "No active span" warning on every miss — so check
+    first and skip client calls entirely when there is nothing to parent
+    to or update. Returns False (never raises) when OpenTelemetry is
+    unavailable.
+    """
+    try:
+        from opentelemetry import trace as _otel_trace
+    except ImportError:  # pragma: no cover - SDK always ships OTEL
+        return False
+    try:
+        span = _otel_trace.get_current_span()
+        return span is not None and span.get_span_context().is_valid
+    except Exception:  # noqa: BLE001 - tracing must never break runs
+        return False
+
+
 def get_trace_context() -> dict[str, str] | None:
     """Capture the current Langfuse trace context for explicit parenting.
 
@@ -113,6 +133,8 @@ def get_trace_context() -> dict[str, str] | None:
     if not tracing_enabled():
         return None
     assert _client is not None, "tracing_enabled() guarantees a configured client"
+    if not _has_active_span():
+        return None
     try:
         trace_id = _client.get_current_trace_id()
         parent_span_id = _client.get_current_observation_id()
@@ -222,6 +244,34 @@ def update_generation(**kwargs: Any) -> None:
     if not tracing_enabled():
         return
     _get_client().update_current_generation(**kwargs)
+
+
+def update_current_span(
+    *, output: Any = None, metadata: dict[str, Any] | None = None
+) -> None:
+    """Attach output/metadata to the *current* span from inside its body.
+
+    Lets tool code enrich the caller-owned `tool:{id}` span (which the
+    tool did not open) with a glanceable summary — e.g. retrieval stage
+    counts — without changing the span's evidence output. No-op when
+    tracing is disabled; never raises, so instrumentation can't break runs.
+    """
+    if not tracing_enabled():
+        return
+    if not _has_active_span():
+        # No span to enrich (unit tests, unbound-singleton paths): skip
+        # the client call instead of logging an SDK "no active span" miss.
+        return
+    try:
+        client = _get_client()
+        updater = getattr(client, "update_current_observation", None)
+        if not callable(updater):
+            return
+        if metadata is not None:
+            metadata = _norm_meta(metadata)
+        updater(output=output, metadata=metadata)
+    except Exception:  # noqa: BLE001 - tracing must never break runs
+        return
 
 
 @contextmanager

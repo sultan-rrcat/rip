@@ -1,3 +1,5 @@
+import time
+
 from app.core.config import settings
 from app.core.db import pg_connection
 from app.core.logging import setup_logging
@@ -241,6 +243,91 @@ def _bind_scope(where: str, keys: list[str], notebook_id, fid, fname) -> tuple:
 
 
 class VectorRAG(RagPipeline):
+    def corpus_stats(
+        self,
+        notebook_id,
+        *,
+        file_id: str | None = None,
+        file_name: str | None = None,
+    ) -> dict:
+        """Cheap COUNT probe over files/embeddings for observability.
+
+        Answers "is anything ingested at all?" without touching vectors:
+        per-file chunk/char counts plus the whole-file eligibility verdict
+        computed with the same rules as `retrieve_whole_file`. Never raises —
+        DB errors yield `{"probe": "failed", ...}` so instrumentation can't
+        break retrieval.
+        """
+        fid = (file_id or "").strip() or None
+        fname = (file_name or "").strip() or None
+        try:
+            with pg_connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT f.file_id, f.file_name, f.file_status,
+                           COUNT(e.chunk_text) AS chunks,
+                           COALESCE(SUM(char_length(e.chunk_text)), 0) AS chars
+                    FROM files f
+                    LEFT JOIN embeddings e ON e.file_id = f.file_id
+                    WHERE f.notebook_id = %s
+                    GROUP BY f.file_id, f.file_name, f.file_status
+                    ORDER BY f.file_name
+                    """,
+                    (notebook_id,),
+                )
+                rows = cur.fetchall()
+        except Exception as e:  # noqa: BLE001 - probe must never fail retrieval
+            logger.warning("corpus_stats probe failed: %s", e)
+            return {
+                "probe": "failed",
+                "error": str(e)[:200],
+                "files": [],
+                "total_chunks": 0,
+                "total_chars": 0,
+                "budget_chars": _whole_file_budget_chars(),
+                "wholefile_verdict": "unknown",
+            }
+        files = [
+            {
+                "name": r[1],
+                "status": r[2],
+                "chunks": int(r[3] or 0),
+                "chars": int(r[4] or 0),
+            }
+            for r in rows
+        ]
+        # In-scope mirror of _scope_sql: exact file_id, case-insensitive
+        # exact file_name (ILIKE without wildcards).
+        in_scope = [
+            f
+            for f, r in zip(files, rows)
+            if (fid is None or str(r[0]) == fid)
+            and (fname is None or str(r[1] or "").lower() == fname.lower())
+        ]
+        total_chunks = sum(f["chunks"] for f in in_scope)
+        total_chars = sum(f["chars"] for f in in_scope)
+        budget_chars = _whole_file_budget_chars()
+        if budget_chars <= 0:
+            verdict = "no_budget"
+        elif total_chunks == 0:
+            verdict = "empty"
+        elif total_chunks > _WHOLE_FILE_MAX_CHUNKS:
+            verdict = "over_chunks"
+        elif total_chars > budget_chars:
+            verdict = "over_budget"
+        else:
+            verdict = "fit"
+        return {
+            "probe": "ok",
+            "files": files,
+            "scope": {"file_id": fid, "file_name": fname},
+            "total_chunks": total_chunks,
+            "total_chars": total_chars,
+            "budget_chars": budget_chars,
+            "wholefile_cap": _WHOLE_FILE_MAX_CHUNKS,
+            "wholefile_verdict": verdict,
+        }
+
     def retrieve_whole_file(
         self,
         notebook_id,
@@ -350,9 +437,12 @@ class VectorRAG(RagPipeline):
             # The reranker + top_k cut below restore precision.
             fetch_k = top_k * 3
 
+            t_embed = time.perf_counter()
             prompt_embeddings = self.embedding_model.embed_query(user_prompt)
+            embed_ms = (time.perf_counter() - t_embed) * 1000
 
             # Vector and Keyword Search (file-scoped when fid/fname set)
+            t_sql = time.perf_counter()
             with pg_connection() as conn, conn.cursor() as cur:
                 # 1. Vector Search
                 if fid and fname:
@@ -481,6 +571,7 @@ class VectorRAG(RagPipeline):
                 keyword_results = cur.fetchall()
                 logger.info(f"Keyword search returned {len(keyword_results)} raw results")
                 # logger.info(f"Keyword search result : {keyword_results}")
+            sql_ms = (time.perf_counter() - t_sql) * 1000
 
             # Filtering Vector Results (4-tuple: text, metadata, chunk_index, score)
             initial_count = len(vector_results)
@@ -551,7 +642,9 @@ class VectorRAG(RagPipeline):
                 # Score section-prefixed text: headers live in metadata only,
                 # and the pair must match what the LLM receives below.
                 pairs = [(user_prompt, _rerank_text(c)) for c in rerank_subset]
+                t_rerank = time.perf_counter()
                 scores = self.reranker_model.predict(pairs)
+                rerank_ms = (time.perf_counter() - t_rerank) * 1000
 
                 for i, score in enumerate(scores):
                     # Cast to plain float: numpy scalars break LangGraph's
@@ -573,6 +666,7 @@ class VectorRAG(RagPipeline):
             else:
                 logger.info("No results found to rerank.")
                 final_list = sorted_contexts
+                rerank_ms = 0.0
 
             # Diversity: round-robin by file for GLOBAL queries only.
             # File-scoped shards are single-source — interleaving is a no-op.
@@ -618,6 +712,33 @@ class VectorRAG(RagPipeline):
                     }
                     for c in top_results
                 ],
+                # Stage funnel for observability: every count that decides
+                # whether chunks survive, plus per-stage timings. Read from
+                # the rag.query tool's shard spans — when this reads
+                # vector_raw=0 the corpus is empty/unembedded (ingestion),
+                # when vector_raw>0 but selected=0 the thresholds killed
+                # everything (tuning). Plain JSON scalars only.
+                "stats": {
+                    "vector_raw": initial_count,
+                    "vector_kept": len(vector_results),
+                    "vector_threshold": vector_threshold,
+                    "fts_raw": len(keyword_results),
+                    "merged": len(sorted_contexts),
+                    "reranked": len(rerank_subset),
+                    "selected": len(top_results),
+                    "rerank_threshold": rerank_threshold,
+                    "top_scores": [
+                        round(float(c.get("rerank_score") or 0), 4)
+                        for c in top_results[:5]
+                    ],
+                    "fetch_k": fetch_k,
+                    "mode": normalized_mode,
+                    "timings_ms": {
+                        "embed": round(embed_ms, 1),
+                        "sql": round(sql_ms, 1),
+                        "rerank": round(rerank_ms, 1),
+                    },
+                },
             }
             logger.info(f"structured_context: {structured_context}")
             return structured_context

@@ -92,8 +92,8 @@ _EXT_TO_LANG: dict[str, str] = {
 }
 
 #: Presentation tail for every grounded writer step (qa_single, compare,
-#: summarize, quiz). Grounding invariants ("ONLY chunks", "not in the
-#: documents", no placeholder leaks) come first; this only styles HOW the
+#: summarize, quiz). Grounding invariants ("ONLY chunks", honest-empty
+#: answers, no placeholder leaks) come first; this only styles HOW the
 #: honest answer reads in chat. Kept short — the reasoning system prompt
 #: carries the full voice.
 _PRESENTATION_SUFFIX = (
@@ -102,14 +102,29 @@ _PRESENTATION_SUFFIX = (
     "numbered steps, or a table when it helps)."
 )
 
+#: Honest-empty-answer guidance spliced into every grounded writer step.
+#: The old "Say 'not in the documents'" line produced bare fragments that
+#: read as broken output (observed live: a bare "not in the documents"
+#: bubble). The replacement keeps the grounding invariant — never invent
+#: coverage — but demands complete, professional sentences: what was
+#: searched, what is missing, one concrete next step.
+_EMPTY_ANSWER_GUIDANCE = (
+    "Ground every claim in the chunks; for anything they do not cover, "
+    "say so honestly in complete sentences — never a bare fragment. "
+    "If the chunks are empty or read '(no chunks retrieved)', say you "
+    "searched the notebook's documents and found nothing covering the "
+    "request, name the topic briefly, and suggest one concrete next step "
+    "(rephrasing the question or uploading a relevant document). "
+)
+
 
 
 def build_qa_no_docs(request_text: str) -> Plan:
     """Answer a factual question with no retrievable documents.
 
     Empty-corpus path: emitting rag.query would provably return
-    "(no chunks retrieved)" and force the grounded prompt to answer
-    "not in the documents" — useless for general-knowledge questions
+    "(no chunks retrieved)" and force the grounded prompt into an
+    honest-empty answer — useless for general-knowledge questions
     like "What is QLoRA?". Answer from general knowledge instead
     (verbatim request, no document-grounding wrapper).
     """
@@ -221,10 +236,10 @@ def build_qa_single(query: str, request_text: str) -> Plan:
                 agent_id="reasoning",
                 input={
                     "message": (
-                        f"Answer the user's request using ONLY these retrieved "
-                        f"chunks {{{{1}}}}. Say 'not in the documents' when the "
-                        f"chunks are empty or read '(no chunks retrieved)'. "
-                        f"Never mention chunk ids or placeholders. "
+                        "Answer the user's request using ONLY these retrieved "
+                        "chunks {{1}}. "
+                        + _EMPTY_ANSWER_GUIDANCE
+                        + "Never mention chunk ids or placeholders. "
                         f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                     )
                 },
@@ -297,10 +312,10 @@ def build_compare_multi(
             input={
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), address the "
-                    f"request. Say 'not in the documents' for anything the "
-                    f"chunks do not cover, including when they read "
-                    f"'(no chunks retrieved)'. Never mention chunk ids or "
-                    f"placeholders. Request: {request_text}{_PRESENTATION_SUFFIX}"
+                    f"request. "
+                    + _EMPTY_ANSWER_GUIDANCE
+                    + f"Never mention chunk ids or placeholders. "
+                    f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                 )
             },
             depends_on=dep_ids,
@@ -360,9 +375,9 @@ def build_summarize(request_text: str, notebook_context: str | None = None) -> P
             input={
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), write the "
-                    f"requested summary. Say 'not in the documents' when the "
-                    f"chunks are empty or read '(no chunks retrieved)'. "
-                    f"Never mention chunk ids or placeholders. "
+                    f"requested summary. "
+                    + _EMPTY_ANSWER_GUIDANCE
+                    + f"Never mention chunk ids or placeholders. "
                     f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                 )
             },
@@ -466,9 +481,9 @@ def build_summarize_plot(
             input={
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), write the "
-                    f"requested summary. Say 'not in the documents' when the "
-                    f"chunks are empty or read '(no chunks retrieved)'. "
-                    f"Never mention chunk ids or placeholders. "
+                    f"requested summary. "
+                    + _EMPTY_ANSWER_GUIDANCE
+                    + f"Never mention chunk ids or placeholders. "
                     f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                 )
             },
@@ -518,10 +533,9 @@ def build_quiz(
                 input={
                     "message": (
                         f"Using ONLY these retrieved chunks ({refs}), "
-                        f"write the requested questions/quiz. Say 'not in "
-                        f"the documents' when the chunks are empty or read "
-                        f"'(no chunks retrieved)'. Never mention chunk ids "
-                        f"or placeholders. "
+                        f"write the requested questions/quiz. "
+                        + _EMPTY_ANSWER_GUIDANCE
+                        + f"Never mention chunk ids or placeholders. "
                         f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                     )
                 },
@@ -551,11 +565,10 @@ def build_quiz(
                 agent_id="reasoning",
                 input={
                     "message": (
-                        f"Using ONLY these retrieved chunks {{{{1}}}}, "
-                        f"write the requested questions/quiz. Say 'not in "
-                        f"the documents' when the chunks are empty or read "
-                        f"'(no chunks retrieved)'. Never mention chunk ids "
-                        f"or placeholders. "
+                        "Using ONLY these retrieved chunks {{1}}, "
+                        "write the requested questions/quiz. "
+                        + _EMPTY_ANSWER_GUIDANCE
+                        + "Never mention chunk ids or placeholders. "
                         f"Request: {request_text}{_PRESENTATION_SUFFIX}"
                     )
                 },

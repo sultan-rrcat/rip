@@ -357,6 +357,35 @@ def test_all_builder_rag_steps_opt_out_of_filtering() -> None:
             assert step.input.get("verbatim") is True, (intent, step.step_id)
 
 
+def test_grounded_prompts_require_complete_sentence_empty_answers() -> None:
+    """No writer prompt may instruct the bare 'not in the documents' fragment.
+
+    Every grounded writer step must carry the shared honest-empty guidance
+    (complete sentences, topic named, one next step) instead of the old
+    fragment instruction that produced broken-looking bubbles live.
+    """
+    snapshot = "2 file(s): a.pdf [ready] id=aaa; b.pdf [ready] id=bbb"
+    cases = [
+        (Intent.QA_SINGLE, "what is X?"),
+        (Intent.COMPARE_MULTI, "compare a and b"),
+        (Intent.SUMMARIZE, "summarize the docs"),
+        (Intent.QUIZ, "quiz me on the docs"),
+    ]
+    for intent, text in cases:
+        route = RouterResult(intent=intent, confidence=0.9, routed_by="llm")
+        plan = build(text, route, snapshot)
+        assert plan is not None, intent
+        grounded = [
+            s for s in plan.steps
+            if "retrieved chunks" in str((s.input or {}).get("message", ""))
+        ]
+        assert grounded, intent
+        for step in grounded:
+            msg = str(step.input.get("message", ""))
+            assert "Say 'not in" not in msg, (intent, step.step_id)
+            assert "bare fragment" in msg, (intent, step.step_id)
+
+
 def _qa_route(queries=None) -> RouterResult:
     return RouterResult(
         intent=Intent.QA_SINGLE,

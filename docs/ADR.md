@@ -311,6 +311,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-048: Retrieval-stage spans inside rag.query + corpus probe
+
+- **Status:** Accepted (2026-10-10)
+- **Context:** A `tool:rag.query` span returning "(no chunks retrieved)" was opaque: the trace could not distinguish an empty/unembedded corpus (ingestion problem) from thresholds killing every candidate (tuning problem), and the 20s+ tool latency had no per-stage breakdown (each fan-out shard re-embeds on CPU). Live trace f855f24f showed all three gaps at once.
+- **Decision:** (1) `VectorRAG.retrieve_context` returns an additive `stats` dict (vector_raw/kept, fts_raw, merged, reranked, selected, top_scores, thresholds, per-stage timings) alongside `results` — no signature change, doubles without it read as `{}`. (2) New `VectorRAG.corpus_stats` COUNT probe (per-file chunks/chars + whole-file eligibility verdict, never raises). (3) `RagQueryTool.execute` opens `rag.corpus` / `rag.wholefile` / `rag.shard:N` / `rag.filter` child spans under the caller-owned `tool:` span (no-ops when tracing is off; explicit `trace_context` survives the worker thread hop) and attaches a 200-char `retrieval` summary to the tool span metadata via a new `observability.update_current_span` helper. (4) `get_trace_context`/`update_current_span` check OTEL span validity first so span-less contexts (unit tests, unbound-singleton paths) stay warning-free. (5) Replace the six "Say 'not in the documents'" writer prompts with a shared `_EMPTY_ANSWER_GUIDANCE` demanding complete sentences (topic named, one next step).
+- **Consequences:** Empty retrieval is diagnosable from the trace alone (corpus=0 → ingestion; candidates>0 but selected=0 → thresholds). Per-shard timings show the embed cost. `except RuntimeError: raise` in the shard loop also fixes a latent honest-failure bug (`test_unbound_singleton_fails_honest` failed on main). New tests: 5 tool-shape/stats tests + 1 builder prompt test. Full no-DB suite green; DB-backed suites need Postgres (unreachable here).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.
