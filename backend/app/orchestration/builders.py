@@ -103,14 +103,6 @@ _PRESENTATION_SUFFIX = (
 )
 
 
-def _corpus_state(notebook_context: str | None) -> str:
-    """Backwards-compat wrapper over `corpus.get_corpus_state`.
-
-    Kept so existing importers (`react.py` legacy, tests) keep working;
-    new code should import from `app.orchestration.corpus` directly.
-    """
-    return get_corpus_state(notebook_context)
-
 
 def build_qa_no_docs(request_text: str) -> Plan:
     """Answer a factual question with no retrievable documents.
@@ -914,7 +906,7 @@ def build(
     if route.intent is Intent.CHAT:
         return build_chat(request_text)
     if route.intent is Intent.QA_SINGLE:
-        state = _corpus_state(notebook_context)
+        state = get_corpus_state(notebook_context)
         if state == "empty":
             return build_qa_no_docs(request_text)
         if state == "processing":
@@ -923,7 +915,7 @@ def build(
             )
         return build_qa_single(request_text, request_text)
     if route.intent is Intent.COMPARE_MULTI:
-        state = _corpus_state(notebook_context)
+        state = get_corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing"),
@@ -934,7 +926,7 @@ def build(
             return None  # too many files: fall through to L3 ReAct
         return build_compare_multi([], request_text, notebook_context)
     if route.intent is Intent.SUMMARIZE:
-        state = _corpus_state(notebook_context)
+        state = get_corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing"),
@@ -945,7 +937,7 @@ def build(
             return None
         return build_summarize(request_text, notebook_context)
     if route.intent is Intent.SUMMARIZE_PLOT:
-        state = _corpus_state(notebook_context)
+        state = get_corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing"),
@@ -958,7 +950,7 @@ def build(
     if route.intent is Intent.PLOT_STANDALONE:
         return build_plot_standalone(request_text)
     if route.intent is Intent.QUIZ:
-        state = _corpus_state(notebook_context)
+        state = get_corpus_state(notebook_context)
         if state in ("empty", "processing"):
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing"),

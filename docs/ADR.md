@@ -302,6 +302,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-047: Remove the `_corpus_state` backwards-compat shim from builders.py
+
+- **Status:** Accepted (2026-10-10)
+- **Context:** `builders.py` carried a one-line `_corpus_state` wrapper over `corpus.get_corpus_state`, kept "so existing importers (`react.py` legacy, tests) keep working." The `react.py` shim was already deleted in ADR-042; the `_corpus_state` wrapper was the last remaining compat shim in the orchestration layer.
+- **Decision:** Delete `_corpus_state` from `builders.py`; update all 5 call sites to use `corpus.get_corpus_state` directly. Update the test import in `test_builders.py`.
+- **Consequences:** One less indirection layer. The corpus tri-state has one import path (`corpus.get_corpus_state`), not two. All 286 tests pass unchanged.
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

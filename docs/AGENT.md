@@ -26,7 +26,7 @@ agents/base.py, registry.py, provider_agent.py (shared base),
 tools/base.py, registry.py, executor.py, rag_query.py, notebook_inspect.py,
   plot_chart.py, doc_generate.py, doc_convert.py
 orchestration/plan.py, planner.py (thin holder, no DAG prompt), router.py,
-  intents.py, builders.py, react_engine.py (thin wrapper + run_react),
+  intents.py, builders.py (no compat shims), react_engine.py (thin wrapper + run_react),
   react_loop.py (extracted loop, per-guard methods), react_fallback.py
   (extracted L3 fallback), idle_guard.py, corpus.py, validator.py, aggregator.py,
   engine.py, plan_router.py (extracted L1→L2→L3 routing), plan_graph.py,

@@ -410,12 +410,12 @@ def test_doc_intents_empty_corpus_yield_clarification() -> None:
 
 
 def test_corpus_state_tristate() -> None:
-    from app.orchestration.builders import _corpus_state
+    from app.orchestration.corpus import get_corpus_state
 
-    assert _corpus_state(None) == "unknown"
-    assert _corpus_state("(no documents)") == "empty"
-    assert _corpus_state("1 file(s): big.pdf [processing] id=zzz") == "processing"
-    assert _corpus_state(_SNAPSHOT) == "ready"
+    assert get_corpus_state(None) == "unknown"
+    assert get_corpus_state("(no documents)") == "empty"
+    assert get_corpus_state("1 file(s): big.pdf [processing] id=zzz") == "processing"
+    assert get_corpus_state(_SNAPSHOT) == "ready"
 
 
 def test_react_prompt_carries_zero_file_plot_rule() -> None:
