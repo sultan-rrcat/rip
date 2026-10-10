@@ -1,5 +1,7 @@
 import SmartToyIcon from '@mui/icons-material/SmartToy'
-import { useRef, useLayoutEffect, useEffect, memo } from 'react'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import CheckIcon from '@mui/icons-material/Check'
+import { useRef, useState, useLayoutEffect, useEffect, memo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -125,15 +127,11 @@ const markdownComponents: Components = {
     const { children, className, node: _node, style: _style, ref: _ref, ...rest } = props
     const match = /language-(\w+)/.exec(className || '')
     return match ? (
-      <SyntaxHighlighter
-        style={oneLight as { [key: string]: CSSProperties }}
+      <CodeBlock
         language={match[1]}
-        PreTag="div"
-        customStyle={{ margin: 0, fontSize: '13px' }}
-        {...rest}
-      >
-        {String(children).replace(/\n$/, '')}
-      </SyntaxHighlighter>
+        code={String(children).replace(/\n$/, '')}
+        extraProps={rest}
+      />
     ) : (
       <code
         className={`rounded bg-ink/[0.06] px-1 py-0.5 font-mono text-[0.85em] text-ink ${className ?? ''}`}
@@ -162,6 +160,86 @@ const markdownComponents: Components = {
   td({ children }) {
     return <td className="border border-line px-4 py-2">{children}</td>
   },
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    // Fallback for non-secure contexts where navigator.clipboard is missing.
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+function CodeBlock({
+  language,
+  code,
+  extraProps,
+}: {
+  language: string
+  code: string
+  extraProps: Record<string, unknown>
+}) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timer.current !== null) window.clearTimeout(timer.current)
+    }
+  }, [])
+
+  async function handleCopy() {
+    const ok = await copyText(code)
+    if (!ok) return
+    setCopied(true)
+    if (timer.current !== null) window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  return (
+    <div className="group/code relative">
+      <button
+        type="button"
+        onClick={handleCopy}
+        title={copied ? 'Copied' : `Copy ${language} code`}
+        aria-label={copied ? 'Copied to clipboard' : `Copy ${language} code to clipboard`}
+        className={`absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md border shadow-sm transition-all ${
+          copied
+            ? 'border-ledger/50 bg-card text-ledger opacity-100'
+            : 'border-line bg-card/95 text-ink-soft/70 opacity-70 hover:text-ink hover:opacity-100 focus-visible:opacity-100'
+        }`}
+      >
+        {copied ? (
+          <CheckIcon sx={{ fontSize: 15 }} />
+        ) : (
+          <ContentCopyIcon sx={{ fontSize: 15 }} />
+        )}
+      </button>
+      <SyntaxHighlighter
+        style={oneLight as { [key: string]: CSSProperties }}
+        language={language}
+        PreTag="div"
+        customStyle={{ margin: 0, fontSize: '13px', paddingRight: '2.75rem' }}
+        {...extraProps}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  )
 }
 
 const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns }: ChatAreaProps) {
