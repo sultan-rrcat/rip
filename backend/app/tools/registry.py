@@ -73,6 +73,7 @@ def get_default_tool_registry(
     # Local imports: keeps `app.tools.registry` importable without pulling
     # tool modules (and their settings/deps) until the factory runs.
     from app.tools.code_read import CodeReadTool
+    from app.tools.code_sandbox import CodeSandboxTool
     from app.tools.doc_convert import DocConvertTool
     from app.tools.doc_generate import DocGenerateTool
     from app.tools.notebook_inspect import NotebookInspectTool
@@ -86,4 +87,5 @@ def get_default_tool_registry(
     registry.register(DocConvertTool())
     registry.register(NotebookInspectTool())
     registry.register(CodeReadTool())
+    registry.register(CodeSandboxTool())
     return registry

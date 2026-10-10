@@ -122,6 +122,16 @@ npm install; npm run dev
 Health: `GET http://localhost:8000/api/health` → `{"status":"ok"}` (alias `GET /health`). Substitute `HOST_BACKEND_PORT` when remapped (e.g. `http://localhost:8005/api/health`).
 Vite dev (`npm run dev`, port `5178` per `vite.config.ts`) proxies `/api/` + `/v1/` → `http://localhost:8000`; compose-host frontend is `HOST_FRONTEND_PORT` (default `5173`) → container `8080`. Prod `nginx.conf` must proxy both. Empty `VITE_API_URL` = same-origin; nginx allows 50M uploads (`client_max_body_size 50M`, matching `MAX_UPLOAD_SIZE_MB=50`) with unbuffered SSE (`/api/` 60s, `/v1/` 600s timeouts).
 
+### Code sandbox (ADR-049, optional)
+
+Run/test/execute asks dispatch `code.sandbox`: the backend stages the notebook's code files into an ephemeral container (`rip-sandbox` image, opencode CLI vs host Ollama) and returns stdout + changed files. Two operator steps, both one-time:
+
+```powershell
+docker build -t rip-sandbox sandbox/
+```
+
+plus the docker socket mount already in `docker-compose.yml` (`/var/run/docker.sock` — root-equivalent, accepted for local single-user use). Without them the tool fails honest (`docker CLI not available` / daemon error) and everything else keeps working; toggle/kill-switch lives in Admin → Tools. Sandbox knobs (`SANDBOX_IMAGE/_TIMEOUT_MS/_CPUS/_MEMORY`) are live admin keys under `.env` deploy overrides.
+
 ## 5. Smoke test
 
 0. `python scripts/rip.py health` — backend, frontend, postgres all OK.

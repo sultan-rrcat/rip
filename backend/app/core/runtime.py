@@ -70,6 +70,8 @@ GROUPS: tuple[GroupSpec, ...] = (
               "Ollama endpoint and client budget. Restart to rebind the HTTP client.", "mixed"),
     GroupSpec("embeddings", "Embedding Models",
               "Local BGE weights. Reloads only on backend restart (heavy).", "mixed"),
+    GroupSpec("sandbox", "Code Sandbox",
+              "Ephemeral Docker containers running the opencode CLI. All live.", "live"),
     GroupSpec("system", "System (read-only)",
               "Operator-owned boot values. Change via .env / compose, not here.", "system"),
 )
@@ -145,6 +147,17 @@ _reg(FieldSpec("bge_reranker_v2_m3", "embeddings", "Reranker path",
                "Reranker weights. Missing path = degraded boot.", "str", "restart"))
 _reg(FieldSpec("upload_dir", "embeddings", "Upload directory",
                "File storage root. Changing it strands existing files.", "str", "restart"))
+# — Sandbox (live: read per execution) —
+_reg(FieldSpec("sandbox_image", "sandbox", "Sandbox image",
+               "Docker image with the opencode CLI. Build once: docker build -t rip-sandbox sandbox/.",
+               "str", "live"))
+_reg(FieldSpec("sandbox_timeout_ms", "sandbox", "Sandbox timeout",
+               "Hard deadline per sandbox run, under the step wall-clock.", "int", "live",
+               min=10000, max=480000))
+_reg(FieldSpec("sandbox_cpus", "sandbox", "Sandbox CPUs",
+               "CPU quota per sandbox container.", "float", "live", min=0.5, max=16.0))
+_reg(FieldSpec("sandbox_memory", "sandbox", "Sandbox memory",
+               "Memory cap per sandbox container (docker format, e.g. 2g).", "str", "live"))
 # — System (read-only display) —
 for _k, _label in (
     ("db_host", "DB host"), ("db_port", "DB port"), ("db_name", "DB name"),

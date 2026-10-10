@@ -55,6 +55,7 @@ TOOL_IDS: tuple[str, ...] = (
     "doc.convert",
     "notebook.inspect",
     "code.read",
+    "code.sandbox",
 )
 
 
@@ -147,6 +148,7 @@ def _seed_map() -> dict[str, str]:
 def _tool_seed_descriptions() -> dict[str, str]:
     """Tool description seeds from the tool classes (no instantiation)."""
     from app.tools.code_read import CodeReadTool
+    from app.tools.code_sandbox import CodeSandboxTool
     from app.tools.doc_convert import DocConvertTool
     from app.tools.doc_generate import DocGenerateTool
     from app.tools.notebook_inspect import NotebookInspectTool
@@ -160,6 +162,7 @@ def _tool_seed_descriptions() -> dict[str, str]:
         "doc.convert": DocConvertTool.description,
         "notebook.inspect": NotebookInspectTool.description,
         "code.read": CodeReadTool.description,
+        "code.sandbox": CodeSandboxTool.description,
     }
 
 
@@ -167,6 +170,7 @@ def _tool_seed_descriptions() -> dict[str, str]:
 def _tool_meta() -> dict[str, dict[str, Any]]:
     """Static per-tool metadata (name/effect/cost stay code-owned)."""
     from app.tools.code_read import CodeReadTool
+    from app.tools.code_sandbox import CodeSandboxTool
     from app.tools.doc_convert import DocConvertTool
     from app.tools.doc_generate import DocGenerateTool
     from app.tools.notebook_inspect import NotebookInspectTool
@@ -175,7 +179,8 @@ def _tool_meta() -> dict[str, dict[str, Any]]:
 
     out: dict[str, dict[str, Any]] = {}
     for cls in (RagQueryTool, PlotChartTool, DocGenerateTool,
-                DocConvertTool, NotebookInspectTool, CodeReadTool):
+                DocConvertTool, NotebookInspectTool, CodeReadTool,
+                CodeSandboxTool):
         out[cls.tool_id] = {
             "name": cls.name,
             "effect_class": cls.effect_class,

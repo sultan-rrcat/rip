@@ -51,6 +51,10 @@ services:
     volumes:
       - ./backend/models:/app/backend/models:ro
       - uploads:/app/uploads
+      # Code sandbox (ADR-049): the backend spawns ephemeral sibling
+      # containers for code.sandbox runs. Desktop-supported mount; this is
+      # root-equivalent access, accepted for local single-user use.
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       # stdlib-only probe: image has no curl/wget; /api/health is trivial ok.
       # Lifespan blocks serving until BGE weights load: cold first-pull +

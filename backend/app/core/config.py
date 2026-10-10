@@ -158,6 +158,15 @@ class Settings(BaseSettings):
     # entirely and runs the ReAct loop. Env: FORCE_REACT (false by default).
     force_react: bool = False
 
+    # Code sandbox (ADR-049): ephemeral local Docker containers running the
+    # opencode CLI against host Ollama. Image is built once by the operator
+    # (`docker build -t rip-sandbox sandbox/`); the backend needs the docker
+    # socket mount. All live admin keys (read per execution, no restart).
+    sandbox_image: str = "rip-sandbox:latest"
+    sandbox_timeout_ms: int = 240000
+    sandbox_cpus: float = 2.0
+    sandbox_memory: str = "2g"
+
     # Chat memory (context-window-based, Q28 locked — port of athena memory.py)
     # estimator: len(text)//4 (no tiktoken); budget = int(ollama_context_window * summary_threshold_pct)
     ollama_context_window: int = 32768  # qwen2.5:14b native window; override per model

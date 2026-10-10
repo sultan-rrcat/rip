@@ -558,7 +558,7 @@ REACT_PROMPT_TEMPLATE = (
     "One COMPLETE DAG per turn (1-5 steps); if it fails you get the next iteration to repair it.\n"
     "Agents: {agent_ids}\nTools: {tool_ids}\n"
     "Shape (mandatory, never violated):\n"
-    '- each steps[] element is {"step_id": "1", "executor": "<one of coding, reasoning, code.read, doc.convert, doc.generate, notebook.inspect, plot.chart, rag.query>", "input": {...}, '
+    '- each steps[] element is {"step_id": "1", "executor": "<one of coding, reasoning, code.read, code.sandbox, doc.convert, doc.generate, notebook.inspect, plot.chart, rag.query>", "input": {...}, '
     '"depends_on": ["1"], "expected_output_type": "answer|text|chunks|numbers|chart|document"}. '
     'Legacy single-step {"executor","input"} is still accepted as a 1-step DAG.\n'
     '- input is a FLAT object, never nested under \'agent\'. WRONG: {"agent": {"message": "..."}}. RIGHT: {"query": "..."}.\n'
@@ -569,7 +569,9 @@ REACT_PROMPT_TEMPLATE = (
     'doc.convert {"file_id": "...", "target_format": "md|docx|pdf"}, '
     'doc.generate {"title": "...", "sections": [{"heading": ..., "body": ...}], "target_format": "md|docx|pdf"}, '
     "notebook.inspect {}, "
-    'code.read {"file_id": "..."} or {"file_name": "..."}.\n'
+    'code.read {"file_id": "..."} or {"file_name": "..."}, '
+    'code.sandbox {"notebook_id": "...", "task": "<full ask>", "file_names": ["..."]} '
+    "(executes code in an isolated container and returns stdout plus changed files).\n"
     '- wire dataflow with depends_on + {{id}} placeholders: downstream input must contain {{1}} for depends_on ["1"]. '
     "A step with depends_on but no placeholder, or a placeholder with no edge, is INVALID.\n"
     "Decide in order, stop at the first match:\n"
@@ -582,6 +584,8 @@ REACT_PROMPT_TEMPLATE = (
     "Draft with placeholders FIRST — never ask clarifying questions INSTEAD of drafting; put follow-ups in the final answer.\n"
     "3. CODE tasks (write/test/explain/review/debug code): notebook.inspect once, then code.read each needed file, "
     "then ONE coding step with file content inlined verbatim in {\"message\": \"...\"}. "
+    "For run/test/execute asks (run the code, run tests, fix failures by running): "
+    "use code.sandbox with the full ask and file scope instead — report only what the box returned, never invent execution results. "
     "Never coding without file content in an observation (empty notebook with no files: write directly with coding, no code.read).\n"
     "4. Retrieval when documents exist: rag.query first "
     "(overview for summarize/compare/quiz/overall-content, specific default otherwise). "
@@ -1297,7 +1301,7 @@ class ReactLoop:
                         )
                         break
                     scratchpad.append(
-                        (
+                        
                             "the notebook's document is STILL PROCESSING — it "
                             "has no chunks to read yet, so rag.query cannot "
                             "return anything. Do NOT retry it. Set "
@@ -1308,7 +1312,7 @@ class ReactLoop:
                             "cannot return chunks; answer directly with "
                             "is_final=true (e.g. greetings/small-talk) or "
                             "recall numbers with reasoning."
-                        )
+                        
                     )
                     iter_obs.update(
                         output={
