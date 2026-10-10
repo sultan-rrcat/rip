@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
@@ -21,10 +21,17 @@ export default function Admin() {
   const [drafts, setDrafts] = useState<Drafts>({})
   const [confirmRestart, setConfirmRestart] = useState<null | { keys: string[]; values: Record<string, string | number | boolean> }>(null)
   const [notice, setNotice] = useState('')
+  const [activeGroup, setActiveGroup] = useState<string | null>(null)
 
   const entries = snapshot?.entries ?? {}
   const groups = snapshot?.groups ?? []
   const pending = useMemo(() => new Set(snapshot?.pending_restart ?? []), [snapshot])
+
+  useEffect(() => {
+    if (!activeGroup && groups.length > 0) setActiveGroup(groups[0].id)
+  }, [groups, activeGroup])
+
+  const active = groups.find((g) => g.id === activeGroup) ?? groups[0]
 
   function draftFor(key: string): string | boolean {
     if (key in drafts) return drafts[key]
@@ -41,6 +48,10 @@ export default function Admin() {
       if (typeof d === 'boolean' || typeof e.value === 'boolean') return d !== e.value
       return String(d) !== String(e.value)
     })
+  }
+
+  function pendingCountFor(fields: string[]): number {
+    return fields.filter((k) => pending.has(k)).length
   }
 
   function coerceForSave(key: string, draft: string | boolean): string | number | boolean {
@@ -118,7 +129,7 @@ export default function Admin() {
 
   return (
     <div className="h-screen overflow-y-auto bg-bench">
-      <div className="mx-auto w-full max-w-4xl px-4 pb-10 pt-6 sm:px-6 sm:pt-10">
+      <div className="mx-auto w-full max-w-5xl px-4 pb-10 pt-6 sm:px-6 sm:pt-10">
         <header className="rounded-xl bg-ink px-6 py-7 text-paper shadow-[0_18px_50px_-24px_rgba(21,39,54,0.7)] sm:px-8">
           <div className="flex items-start justify-between gap-4">
             <p className="font-ledger text-[11px] font-semibold tracking-[0.22em] text-paper/70">
@@ -184,46 +195,123 @@ export default function Admin() {
           </div>
         )}
 
-        <main className="mt-4 space-y-3" aria-label="Runtime configuration">
-          {loading && [0, 1, 2].map((i) => (
-            <div key={i} className="rounded-lg border border-line/70 bg-card/60 px-5 py-6" aria-hidden="true">
-              <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-line/60" />
-              <div className="h-4 w-2/5 rounded bg-line/50" />
-              <div className="mt-2 h-3 w-1/4 rounded bg-line/40" />
-            </div>
-          ))}
+        {loading && (
+          <div className="mt-4 space-y-3" aria-hidden="true">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="rounded-lg border border-line/70 bg-card/60 px-5 py-6">
+                <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-line/60" />
+                <div className="h-4 w-2/5 rounded bg-line/50" />
+                <div className="mt-2 h-3 w-1/4 rounded bg-line/40" />
+              </div>
+            ))}
+          </div>
+        )}
 
-          {!loading && snapshot && groups.map((g, gi) => {
-            const editableFields = g.fields.filter((k) => entries[k]?.editable && !entries[k]?.secret)
-            const visibleFields = g.fields.filter((k) => entries[k])
-            const dirty = dirtyKeysFor(editableFields)
-            if (visibleFields.length === 0) return null
-            return (
-              <SectionCard
-                key={g.id}
-                eyebrow={`GROUP ${String(gi + 1).padStart(2, '0')} · ${g.id.toUpperCase()}`}
-                title={g.title}
-                description={g.description}
-                apply={g.apply}
-                dirtyCount={dirty.length}
-                saving={saving}
-                onSave={editableFields.length > 0 ? () => saveKeys(dirty.length > 0 ? dirty : editableFields.filter((k) => k in drafts)) : undefined}
-                onReset={editableFields.length > 0 ? () => resetKeys(editableFields.filter((k) => entries[k]?.source === 'db')) : undefined}
-              >
-                {visibleFields.map((k) => (
-                  <ConfigField
-                    key={k}
-                    entry={entries[k]}
-                    draft={draftFor(k)}
-                    pending={pending.has(k)}
-                    onChange={(v) => setDrafts((prev) => ({ ...prev, [k]: v }))}
-                    onReset={() => resetKeys([k])}
-                  />
-                ))}
-              </SectionCard>
-            )
-          })}
-        </main>
+        {!loading && snapshot && active && (
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
+            {/* Mobile: horizontal tab bar */}
+            <nav aria-label="Config groups" className="flex gap-2 overflow-x-auto pb-1 sm:hidden">
+              {groups.map((g) => {
+                const dirty = dirtyKeysFor(g.fields).length
+                const pend = pendingCountFor(g.fields)
+                const isActive = g.id === active.id
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => setActiveGroup(g.id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+                      isActive
+                        ? 'border-ink bg-ink text-paper'
+                        : 'border-line bg-card text-ink-soft hover:border-ink-soft/50'
+                    }`}
+                  >
+                    {g.title}
+                    {dirty > 0 && <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-brass' : 'bg-brass-deep'}`} aria-label={`${dirty} unsaved`} />}
+                    {pend > 0 && <span className="font-ledger text-[9px] font-bold text-rust">●</span>}
+                  </button>
+                )
+              })}
+            </nav>
+
+            {/* Desktop: sidebar nav */}
+            <nav aria-label="Config groups" className="hidden w-60 shrink-0 flex-col gap-1.5 sm:flex">
+              {groups.map((g, gi) => {
+                const dirty = dirtyKeysFor(g.fields).length
+                const pend = pendingCountFor(g.fields)
+                const isActive = g.id === active.id
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => setActiveGroup(g.id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`drawer-row group rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                      isActive
+                        ? 'border-ink bg-ink text-paper shadow-[0_8px_24px_-16px_rgba(21,39,54,0.6)]'
+                        : 'border-line bg-card text-ink hover:border-ink-soft/50'
+                    }`}
+                  >
+                    <span className={`font-ledger block text-[9px] font-semibold tracking-[0.2em] ${isActive ? 'text-paper/60' : 'text-ink-soft/55'}`}>
+                      {String(gi + 1).padStart(2, '0')} · {g.apply.toUpperCase()}
+                    </span>
+                    <span className="mt-0.5 flex items-center gap-2">
+                      <span className="font-display block flex-1 truncate text-[13px] font-semibold">{g.title}</span>
+                      {dirty > 0 && (
+                        <span className="font-ledger rounded-full bg-brass px-1.5 py-0.5 text-[9px] font-bold text-ink" title={`${dirty} unsaved`}>
+                          {dirty}
+                        </span>
+                      )}
+                      {pend > 0 && (
+                        <span className="font-ledger rounded-full bg-rust px-1.5 py-0.5 text-[9px] font-bold text-paper" title={`${pend} pending restart`}>
+                          {pend}↻
+                        </span>
+                      )}
+                    </span>
+                    <span className={`mt-0.5 block truncate text-[11px] ${isActive ? 'text-paper/65' : 'text-ink-soft/65'}`}>
+                      {g.fields.length} keys
+                    </span>
+                  </button>
+                )
+              })}
+            </nav>
+
+            {/* Active group content — one section at a time, no long scroll */}
+            <main className="min-w-0 flex-1" aria-label="Runtime configuration" aria-live="polite">
+              {(() => {
+                const editableFields = active.fields.filter((k) => entries[k]?.editable && !entries[k]?.secret)
+                const visibleFields = active.fields.filter((k) => entries[k])
+                const dirty = dirtyKeysFor(editableFields)
+                const gi = groups.indexOf(active)
+                return (
+                  <SectionCard
+                    key={active.id}
+                    eyebrow={`GROUP ${String(gi + 1).padStart(2, '0')} / ${String(groups.length).padStart(2, '0')} · ${active.id.toUpperCase()}`}
+                    title={active.title}
+                    description={active.description}
+                    apply={active.apply}
+                    dirtyCount={dirty.length}
+                    saving={saving}
+                    onSave={editableFields.length > 0 ? () => saveKeys(dirty.length > 0 ? dirty : editableFields.filter((k) => k in drafts)) : undefined}
+                    onReset={editableFields.length > 0 ? () => resetKeys(editableFields.filter((k) => entries[k]?.source === 'db')) : undefined}
+                  >
+                    {visibleFields.map((k) => (
+                      <ConfigField
+                        key={k}
+                        entry={entries[k]}
+                        draft={draftFor(k)}
+                        pending={pending.has(k)}
+                        onChange={(v) => setDrafts((prev) => ({ ...prev, [k]: v }))}
+                        onReset={() => resetKeys([k])}
+                      />
+                    ))}
+                  </SectionCard>
+                )
+              })()}
+            </main>
+          </div>
+        )}
 
         {!loading && snapshot && (
           <footer className="mt-6 flex flex-wrap items-center justify-between gap-3">
