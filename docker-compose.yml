@@ -151,6 +151,14 @@ services:
     networks:
       - rip-net
 
+  # Code sandbox image (ADR-049): build-only, never started on plain `up`.
+  # Backend spawns ephemeral siblings via `docker run --rm rip-sandbox`.
+  # Build with `docker compose build sandbox` or `up --build` with profile.
+  sandbox:
+    build: {context: ./sandbox}
+    image: rip-sandbox:latest
+    profiles: [sandbox]
+
   # redis: optional
   #   image: redis:7-alpine
   #   ports:

@@ -1,6 +1,7 @@
 # RIP code-sandbox image (ADR-049): opencode CLI, baked once by the operator.
 #
-#   docker build -t rip-sandbox sandbox/
+#   docker compose build sandbox
+#   # equivalent: docker build -t rip-sandbox sandbox/
 #
 # The backend stages each run (code files + generated opencode.json pinning
 # the Ollama model) into a temp dir mounted at /work; the tool never bakes

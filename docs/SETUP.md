@@ -127,10 +127,11 @@ Vite dev (`npm run dev`, port `5178` per `vite.config.ts`) proxies `/api/` + `/v
 Run/test/execute asks dispatch `code.sandbox`: the backend stages the notebook's code files into an ephemeral container (`rip-sandbox` image, opencode CLI vs host Ollama) and returns stdout + changed files. Two operator steps, both one-time:
 
 ```powershell
-docker build -t rip-sandbox sandbox/
+docker compose build sandbox
+# equivalent: docker build -t rip-sandbox sandbox/
 ```
 
-plus the docker socket mount already in `docker-compose.yml` (`/var/run/docker.sock` — root-equivalent, accepted for local single-user use). Without them the tool fails honest (`docker CLI not available` / daemon error) and everything else keeps working; toggle/kill-switch lives in Admin → Tools. Sandbox knobs (`SANDBOX_IMAGE/_TIMEOUT_MS/_CPUS/_MEMORY`) are live admin keys under `.env` deploy overrides.
+`sandbox` is a build-only compose service (`profiles: [sandbox]`): plain `up --build` ignores it, so it never starts an idle container — it only gives the image a compose-owned build path. The backend still spawns siblings via `docker run --rm rip-sandbox` through the socket mount already in `docker-compose.yml` (`/var/run/docker.sock` — root-equivalent, accepted for local single-user use). Without image + mount the tool fails honest (`docker CLI not available` / daemon error) and everything else keeps working; toggle/kill-switch lives in Admin → Tools. Sandbox knobs (`SANDBOX_IMAGE/_TIMEOUT_MS/_CPUS/_MEMORY`) are live admin keys under `.env` deploy overrides.
 
 ## 5. Smoke test
 
