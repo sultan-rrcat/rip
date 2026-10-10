@@ -7,7 +7,6 @@ from typing import ClassVar
 from app.agents.base import DelegationRequest, DelegationResponse, StepStatus
 from app.agents.provider_agent import ProviderAgent, _Watchdog
 from app.core import constants
-from app.core.config import settings
 from app.providers.base import ModelProvider
 
 logger = logging.getLogger("agents.coding")
@@ -76,7 +75,14 @@ class CodingAgent(ProviderAgent):
     cost_class = "low"
 
     system_prompt = CODING_SYSTEM_PROMPT
-    default_budget = settings.coding_max_tokens
+
+    @property
+    def default_budget(self) -> int:
+        # Live read (see ReasoningAgent): admin budget edits apply to the
+        # next step without a restart.
+        from app.core.config import settings
+
+        return settings.coding_max_tokens
 
     def __init__(self, provider: ModelProvider):
         super().__init__(provider)

@@ -87,14 +87,16 @@ _reg(FieldSpec("ollama_default_model", "model", "Default model",
 _reg(FieldSpec("default_temperature", "model", "Temperature",
                "Sampling temperature for generation calls.", "float", "live", min=0.0, max=2.0))
 _reg(FieldSpec("default_max_tokens", "model", "Default max tokens",
-               "Shared generation cap unless a task budget overrides it.", "int", "live", min=128, max=16384))
+               "Shared fallback cap when a step sets no task budget. NOTE: plain chat uses "
+               "Chat budget and code generation uses Coding budget — lowering only this "
+               "key will not cap those paths.", "int", "live", min=128, max=16384))
 _reg(FieldSpec("default_timeout_ms", "model", "Default step timeout",
                "Fallback deadline for a single model call.", "int", "live", min=5000, max=600000))
 # — Budgets (live) —
 _reg(FieldSpec("coding_max_tokens", "budgets", "Coding budget",
-               "Output cap for code generation tasks.", "int", "live", min=256, max=16384))
+               "Output cap for code generation steps (overrides the shared default).", "int", "live", min=256, max=16384))
 _reg(FieldSpec("chat_max_tokens", "budgets", "Chat budget",
-               "Output cap for plain chat answers.", "int", "live", min=128, max=8192))
+               "Output cap for plain chat answers (overrides the shared default).", "int", "live", min=128, max=8192))
 _reg(FieldSpec("router_timeout_ms", "budgets", "Router deadline",
                "L1 intent classification fails open fast under saturation.", "int", "live", min=1000, max=300000))
 _reg(FieldSpec("planner_timeout_ms", "budgets", "Planner deadline",

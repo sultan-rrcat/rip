@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.agents.base import Agent
 from app.agents.provider_agent import ProviderAgent
-from app.core.config import settings
 from app.providers.base import ModelProvider
 
 #: User-facing voice for every reasoning output (chat, grounded QA,
@@ -35,7 +33,15 @@ class ReasoningAgent(ProviderAgent):
     cost_class = "low"
 
     system_prompt = REASONING_SYSTEM_PROMPT
-    default_budget = settings.default_max_tokens
+
+    @property
+    def default_budget(self) -> int:
+        # Live read (never a class-level `= settings.…` capture): the admin
+        # console mutates the singleton at runtime and the next step must
+        # see the new budget without a backend restart.
+        from app.core.config import settings
+
+        return settings.default_max_tokens
 
     def __init__(self, provider: ModelProvider):
         super().__init__(provider)
