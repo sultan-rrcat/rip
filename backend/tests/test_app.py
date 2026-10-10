@@ -166,6 +166,80 @@ class TestMessages:
             for m in messages
         )
 
+    def _post_message(self, client, notebook_id, role, text):
+        response = client.post(
+            f"/api/notebooks/{notebook_id}/messages",
+            json={"role": role, "text": text},
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    def test_update_user_message_truncates_tail(self, client, test_notebook):
+        first = self._post_message(client, test_notebook, "user", "first q")
+        self._post_message(client, test_notebook, "assistant", "first a")
+        self._post_message(client, test_notebook, "user", "second q")
+
+        response = client.put(
+            f"/api/notebooks/{test_notebook}/messages/{first['id']}",
+            json={"text": "first q edited"},
+        )
+        assert response.status_code == 200
+        assert response.json()["text"] == "first q edited"
+
+        remaining = client.get(
+            f"/api/notebooks/{test_notebook}/messages"
+        ).json()
+        assert [m["id"] for m in remaining] == [first["id"]]
+        assert remaining[0]["text"] == "first q edited"
+
+    def test_update_last_message_keeps_only_it(self, client, test_notebook):
+        only = self._post_message(client, test_notebook, "user", "solo q")
+
+        response = client.put(
+            f"/api/notebooks/{test_notebook}/messages/{only['id']}",
+            json={"text": "solo q edited"},
+        )
+        assert response.status_code == 200
+
+        remaining = client.get(
+            f"/api/notebooks/{test_notebook}/messages"
+        ).json()
+        assert [m["id"] for m in remaining] == [only["id"]]
+
+    def test_update_non_user_message_rejected(self, client, test_notebook):
+        reply = self._post_message(client, test_notebook, "assistant", "answer")
+
+        response = client.put(
+            f"/api/notebooks/{test_notebook}/messages/{reply['id']}",
+            json={"text": "rewritten history"},
+        )
+        assert response.status_code == 422
+
+    def test_update_blank_text_rejected(self, client, test_notebook):
+        asked = self._post_message(client, test_notebook, "user", "real q")
+
+        response = client.put(
+            f"/api/notebooks/{test_notebook}/messages/{asked['id']}",
+            json={"text": "   "},
+        )
+        assert response.status_code == 422
+
+    def test_update_missing_message_404(self, client, test_notebook):
+        response = client.put(
+            f"/api/notebooks/{test_notebook}/messages/00000000-0000-0000-0000-000000000000",
+            json={"text": "ghost edit"},
+        )
+        assert response.status_code == 404
+
+    def test_update_missing_notebook_404(self, client, test_notebook):
+        asked = self._post_message(client, test_notebook, "user", "real q")
+
+        response = client.put(
+            f"/api/notebooks/00000000-0000-0000-0000-000000000000/messages/{asked['id']}",
+            json={"text": "ghost edit"},
+        )
+        assert response.status_code == 404
+
 
 class TestRetrieval:
     def test_retrieve_context_empty_notebook(self, client, test_notebook):

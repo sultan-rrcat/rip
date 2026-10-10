@@ -17,3 +17,14 @@ export function createMessageAPI(
     jsonInit('POST', { role, text, sources, artifacts }),
   )
 }
+
+export function updateMessageAPI(
+  notebookId: string,
+  messageId: string,
+  text: string,
+): Promise<Message> {
+  return request<Message>(
+    `/api/notebooks/${notebookId}/messages/${messageId}`,
+    jsonInit('PUT', { text }),
+  )
+}

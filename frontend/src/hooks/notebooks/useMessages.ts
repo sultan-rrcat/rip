@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { getMessagesAPI, createMessageAPI } from '@/services/messages'
+import { getMessagesAPI, createMessageAPI, updateMessageAPI } from '@/services/messages'
 import { createRun, subscribeToRunEvents, cancelRun } from '@/services/runs'
 import type { Artifact, Message, Source } from '@/types'
 import type { RunEvent, RunView, PlanStep, StepResultView } from '@/types/runs'
@@ -569,12 +569,74 @@ export function useMessages(notebook_id: string | undefined) {
     // stays open for it.
   }, [activeRun])
 
+  // Edit + resend: persist the rewritten user message (the backend also
+  // truncates the stale tail), drop the tail locally, and start a fresh
+  // run from the edited text. Throws on PUT failure so the inline
+  // editor can surface it; nothing is truncated locally until the
+  // server confirms.
+  const handleEditMessage = useCallback(
+    async (messageId: string, text: string) => {
+      if (!notebook_id || isRunningRef.current) return
+      const next = text.trim()
+      if (!next) return
+      isRunningRef.current = true
+      nbRef.current = notebook_id
+      setIsRunning(true)
+      const assistantTempId = uuidv4()
+
+      try {
+        // 1. Persist the edit (backend truncates the stale tail).
+        const updated = await updateMessageAPI(notebook_id, messageId, text)
+
+        // 2. Swap in the edited row, drop the stale tail + its run
+        // snapshots, and append a fresh streaming placeholder.
+        const tailIdx = messages.findIndex((m) => m.id === messageId)
+        const removedIds =
+          tailIdx >= 0
+            ? messages.slice(tailIdx + 1).map((m) => m.id)
+            : []
+        setPastRuns((prev) => {
+          if (removedIds.length === 0) return prev
+          const kept = { ...prev }
+          for (const id of removedIds) delete kept[id]
+          delete kept[messageId]
+          return kept
+        })
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === messageId)
+          const head = idx >= 0 ? prev.slice(0, idx) : prev
+          return [
+            ...head,
+            updated,
+            {
+              id: assistantTempId,
+              role: 'assistant',
+              text: '',
+              status: 'streaming',
+              sources: [],
+            },
+          ]
+        })
+
+        // 3. Fresh run from the edited text.
+        const runId = await createRun(notebook_id, updated.text)
+        attach(runId, assistantTempId, '')
+      } catch (err) {
+        isRunningRef.current = false
+        setIsRunning(false)
+        throw err
+      }
+    },
+    [notebook_id, attach, messages],
+  )
+
   return {
     messages,
     activeRun,
     pastRuns,
     isRunning,
     handleSendMessage,
+    handleEditMessage,
     handleCancelRun,
   }
 }

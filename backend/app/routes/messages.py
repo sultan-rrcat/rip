@@ -21,6 +21,10 @@ class MessageCreate(BaseModel):
     artifacts: Any | None = None
 
 
+class MessageUpdate(BaseModel):
+    text: str
+
+
 _ARTIFACTS_DDL = "ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS artifacts jsonb"
 
 
@@ -178,3 +182,115 @@ def create_message(id: str, data: MessageCreate, user: UserResponse = Depends(ge
     except Exception:
         logger.exception(f"Error creating message for notebook: {id}")
         raise HTTPException(status_code=500, detail="Failed to create message")
+
+
+@router.put("/api/notebooks/{id}/messages/{message_id}")
+def update_message(id: str, message_id: str, data: MessageUpdate, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical
+    """Edit a user message and truncate everything after it (edit + resend).
+
+    The frontend deletes the stale reply locally and starts a fresh run
+    from the edited text. Only `user` rows are editable; assistant/error
+    rows are rejected so run history can't be rewritten.
+    """
+    logger.info(f"Updating message {message_id} for notebook: {id}")
+
+    new_text = (data.text or "").strip()
+    if not new_text:
+        raise HTTPException(status_code=422, detail="Message text must not be empty")
+
+    try:
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute("""
+                    SELECT m.message_id, m.role
+                    FROM messages m
+                    JOIN notebooks n ON n.notebook_id = m.notebook_id
+                    WHERE m.notebook_id = %s AND m.message_id = %s
+                      AND n.owner_id = %s
+                """, (id, message_id, user.user_id))
+            target = cur.fetchone()
+            if not target:
+                raise HTTPException(status_code=404, detail="Message not found")
+            if target[1] != "user":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Only user messages can be edited",
+                )
+
+            cur.execute(
+                "UPDATE messages SET text = %s WHERE message_id = %s",
+                (data.text, message_id),
+            )
+
+            # Truncate the stale tail. created_at ties are possible, so
+            # order by (created_at, message_id) and delete by id, never by
+            # timestamp comparison.
+            cur.execute("""
+                    SELECT message_id FROM messages
+                    WHERE notebook_id = %s
+                    ORDER BY created_at ASC, message_id ASC
+                """, (id,))
+            ordered = [str(r[0]) for r in cur.fetchall()]
+            try:
+                tail = ordered[ordered.index(message_id) + 1:]
+            except ValueError:
+                tail = []
+            if tail:
+                cur.execute(
+                    "DELETE FROM messages WHERE message_id = ANY(%s::uuid[])",
+                    (tail,),
+                )
+                logger.info(
+                    f"Truncated {len(tail)} message(s) after {message_id} "
+                    f"for notebook: {id}"
+                )
+
+            try:
+                cur.execute("""
+                        SELECT message_id, role, text, sources,
+                               COALESCE(artifacts, '[]'::jsonb), created_at
+                        FROM messages WHERE message_id = %s
+                    """, (message_id,))
+            except pg_errors.UndefinedColumn:
+                conn.rollback()
+                # The UPDATE above rolled back too: re-apply it bare, then
+                # re-apply the truncation the same way.
+                cur.execute(
+                    "UPDATE messages SET text = %s WHERE message_id = %s",
+                    (data.text, message_id),
+                )
+                if tail:
+                    cur.execute(
+                        "DELETE FROM messages WHERE message_id = ANY(%s::uuid[])",
+                        (tail,),
+                    )
+                cur.execute("""
+                        SELECT message_id, role, text, sources, created_at
+                        FROM messages WHERE message_id = %s
+                    """, (message_id,))
+                r = cur.fetchone()
+                return {
+                    "id": r[0],
+                    "role": r[1],
+                    "text": r[2],
+                    "sources": r[3],
+                    "artifacts": [],
+                    "created_at": r[4],
+                }
+            r = cur.fetchone()
+
+        logger.info(f"Message updated: {message_id} for notebook: {id}")
+
+        return {
+            "id": r[0],
+            "role": r[1],
+            "text": r[2],
+            "sources": r[3],
+            "artifacts": r[4],
+            "created_at": r[5],
+        }
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Error updating message {message_id} for notebook: {id}")
+        raise HTTPException(status_code=500, detail="Failed to update message")

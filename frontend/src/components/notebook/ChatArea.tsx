@@ -1,6 +1,7 @@
 import SmartToyIcon from '@mui/icons-material/SmartToy'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import CheckIcon from '@mui/icons-material/Check'
+import EditIcon from '@mui/icons-material/Edit'
 import { useRef, useState, useLayoutEffect, useEffect, memo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -18,6 +19,8 @@ interface ChatAreaProps {
   messages: Message[]
   activeRun?: RunView | null
   pastRuns?: Record<string, RunView>
+  isRunning?: boolean
+  onEditMessage?: (messageId: string, text: string) => Promise<void>
 }
 
 const markdownComponents: Components = {
@@ -242,7 +245,7 @@ function CodeBlock({
   )
 }
 
-const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns }: ChatAreaProps) {
+const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunning, onEditMessage }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only stick to the bottom while the user is already near it, so scrolling
@@ -332,7 +335,15 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns }: ChatA
           )
         }
         if (message.role === 'user') {
-          return <UserMessage key={message.id} text={message.text} />
+          return (
+            <UserMessage
+              key={message.id}
+              id={message.id}
+              text={message.text}
+              disabled={isRunning}
+              onSave={onEditMessage}
+            />
+          )
         }
         if (message.role === 'error') {
           return <ErrorMessage key={message.id} text={message.text} />
@@ -476,14 +487,123 @@ interface TextMessageProps {
   text: string
 }
 
-function UserMessage({ text }: TextMessageProps) {
+interface UserMessageProps {
+  id: string
+  text: string
+  disabled?: boolean
+  onSave?: (messageId: string, text: string) => Promise<void>
+}
+
+function UserMessage({ id, text, disabled, onSave }: UserMessageProps) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(text)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const canEdit = Boolean(onSave) && !disabled
+
+  function startEdit() {
+    setDraft(text)
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  function cancelEdit() {
+    setDraft(text)
+    setSaveError(null)
+    setSaving(false)
+    setEditing(false)
+  }
+
+  async function saveEdit() {
+    if (!onSave || saving) return
+    const next = draft.trim()
+    if (!next || next === text) {
+      setEditing(false)
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await onSave(id, draft)
+      setEditing(false)
+    } catch {
+      setSaveError('Could not save the edit. Try again.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="flex gap-4 items-start justify-end">
+        <div className="flex-1 space-y-2 text-right">
+          <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">EDIT MESSAGE</p>
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                void saveEdit()
+              }
+              if (e.key === 'Escape') cancelEdit()
+            }}
+            rows={3}
+            aria-label="Edit message"
+            className="w-full rounded-lg border border-ledger/50 bg-card px-4 py-2.5 text-left text-[13px] leading-relaxed text-ink outline-none resize-y"
+          />
+          {saveError && (
+            <p role="alert" className="text-left text-xs text-rust">
+              {saveError}
+            </p>
+          )}
+          <p className="font-ledger text-left text-[10px] tracking-wide text-ink-soft/50">
+            SAVING RESENDS FROM HERE AND DROPS THE REPLIES AFTER IT
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={cancelEdit}
+              disabled={saving}
+              className="h-8 rounded-md border border-line bg-card px-3 text-[13px] font-medium text-ink-soft transition-colors hover:bg-paper disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveEdit()}
+              disabled={saving || !draft.trim()}
+              className="h-8 rounded-md bg-ink px-4 text-[13px] font-semibold text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {saving ? 'Saving…' : 'Save & resend'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex gap-4 items-start justify-end">
+    <div className="group/usermsg flex gap-4 items-start justify-end">
       <div className="flex-1 space-y-1 text-right">
         <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">YOU</p>
         <div className="inline-block text-paper bg-ink px-5 py-2.5 rounded-lg rounded-tr-sm text-[13px] leading-relaxed shadow-sm max-w-2xl text-left">
           {text}
         </div>
+        {canEdit && (
+          <div>
+            <button
+              type="button"
+              onClick={startEdit}
+              title="Edit and resend"
+              aria-label="Edit message and resend"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-soft/50 opacity-0 transition-all hover:bg-paper hover:text-ink focus-visible:opacity-100 group-hover/usermsg:opacity-100"
+            >
+              <EditIcon sx={{ fontSize: 15 }} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
