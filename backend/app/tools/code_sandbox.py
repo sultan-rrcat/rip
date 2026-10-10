@@ -164,6 +164,11 @@ def _extract_text(stdout: str) -> str:
             continue
         if not isinstance(event, dict):
             continue
+        if event.get("type") == "error" and isinstance(event.get("error"), dict):
+            message = event["error"].get("message")
+            if isinstance(message, str) and message.strip():
+                errors.append(f"provider error: {message.strip()[:500]}")
+            continue
         part = event.get("part")
         if not isinstance(part, dict):
             continue
@@ -421,8 +426,14 @@ class CodeSandboxTool(Tool):
                 return self._fail(f"sandbox spawn failed: {e}")
             if proc.returncode != 0:
                 tail = (proc.stderr or "")[-_SANDBOX_STDERR_TAIL:]
+                # opencode prints provider errors (bad model, context
+                # overflow, auth) as JSON events on STDOUT with empty
+                # stderr — surface the first of those so the failure names
+                # its cause instead of reporting "no stderr".
+                hint = _extract_text(proc.stdout or "")[:500]
+                detail = tail or hint or "no stderr"
                 return self._fail(
-                    f"sandbox exited {proc.returncode}: {tail or 'no stderr'}")
+                    f"sandbox exited {proc.returncode}: {detail}")
 
             output = _extract_text(proc.stdout or "")[:_SANDBOX_OUTPUT_MAX_CHARS]
             changed: list[str] = []

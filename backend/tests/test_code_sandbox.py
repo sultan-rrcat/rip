@@ -296,6 +296,41 @@ def test_extract_text_drops_pure_event_noise():
     assert sbx._extract_text(noise + "\n") == ""
 
 
+def test_extract_text_surfaces_provider_error():
+    err = json.dumps({"type": "error",
+                      "error": {"type": "provider.invalid-request",
+                                "message": "request exceeds context"}})
+    assert sbx._extract_text(err + "\n") == \
+        "provider error: request exceeds context"
+
+
+def test_nonzero_exit_names_stdout_cause(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("fid-0", "a.py")])
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("m", True))
+    err = json.dumps({"type": "error",
+                      "error": {"type": "x", "message": "boom-cause"}})
+
+    def fake_run(cmd, timeout_s):
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "create":
+            return _FakeCompleted(0, CID + "\n", "")
+        if sub == "cp":
+            return _FakeCompleted(0, "", "")
+        if sub == "start":
+            return _FakeCompleted(1, err + "\n", "")
+        if sub == "rm":
+            return _FakeCompleted(0, "", "")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(sbx, "_run_container", fake_run)
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is False
+    assert "boom-cause" in (resp.error or "")
+
+
 def test_model_probe_uses_host_view_not_gateway(monkeypatch, tmp_path):
     # Host-local backend with a loopback OLLAMA_BASE_URL: the pulled-model
     # probe must hit the host-view URL (reachable from this process), while
