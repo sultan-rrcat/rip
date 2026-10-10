@@ -8,17 +8,34 @@ import Button from '@mui/material/Button'
 import LogoutButton from '@/components/LogoutButton'
 import SectionCard from '@/components/admin/SectionCard'
 import ConfigField from '@/components/admin/ConfigField'
+import PromptEditor from '@/components/admin/PromptEditor'
+import ToolConfigRow from '@/components/admin/ToolConfigRow'
+import ConfirmModal from '@/components/admin/ConfirmModal'
 import { useRuntimeConfig } from '@/hooks/useRuntimeConfig'
+import { usePromptConfig } from '@/hooks/usePromptConfig'
 import { getHostedModels } from '@/services/admin'
 import type { HostedModel } from '@/types/admin'
 
 type Drafts = Record<string, string | boolean>
+type Section = 'variables' | 'prompts' | 'tools'
 
 function toDraft(raw: string | number | boolean): string | boolean {
   return typeof raw === 'boolean' ? raw : String(raw)
 }
 
+/// Static blast-radius map for the disable confirm modal: which builders
+/// and loop paths reference each tool.
+const TOOL_REFERENCED_BY: Record<string, string[]> = {
+  'rag.query': ['QA / Summarize / Compare / Quiz builders', 'ReAct retrieval steps'],
+  'plot.chart': ['Chart builders', 'ReAct chart steps'],
+  'doc.generate': ['Report builders', 'ReAct report steps'],
+  'doc.convert': ['Convert builders', 'ReAct convert guard'],
+  'notebook.inspect': ['Code-task routing', 'ReAct code steps'],
+  'code.read': ['Code builders', 'ReAct code steps'],
+}
+
 export default function Admin() {
+  // ── Variables (runtime config) ──
   const { snapshot, loading, saving, error, setError, save, reset } = useRuntimeConfig()
   const [drafts, setDrafts] = useState<Drafts>({})
   const [confirmRestart, setConfirmRestart] = useState<null | { keys: string[]; values: Record<string, string | number | boolean> }>(null)
@@ -28,13 +45,35 @@ export default function Admin() {
   const [modelsReachable, setModelsReachable] = useState(false)
   const [modelsLoading, setModelsLoading] = useState(false)
 
+  // ── Prompts + Tools ──
+  const prompt = usePromptConfig()
+  const [section, setSection] = useState<Section>('variables')
+  const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({})
+  const [activePromptGroup, setActivePromptGroup] = useState<string | null>(null)
+  const [toolDescDrafts, setToolDescDrafts] = useState<Record<string, string>>({})
+  const [pNotice, setPNotice] = useState('')
+  const [disableTarget, setDisableTarget] = useState<string | null>(null)
+
   const entries = snapshot?.entries ?? {}
   const groups = snapshot?.groups ?? []
   const pending = useMemo(() => new Set(snapshot?.pending_restart ?? []), [snapshot])
 
+  const pEntries = prompt.snapshot?.prompts ?? {}
+  const pGroups = prompt.snapshot?.groups ?? []
+  const tools = prompt.snapshot?.tools ?? {}
+  const toolIds = useMemo(() => Object.keys(tools), [prompt.snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
+  const enabledCount = useMemo(
+    () => Object.values(tools).filter((t) => t.enabled).length,
+    [tools],
+  )
+
   useEffect(() => {
     if (!activeGroup && groups.length > 0) setActiveGroup(groups[0].id)
   }, [groups, activeGroup])
+
+  useEffect(() => {
+    if (!activePromptGroup && pGroups.length > 0) setActivePromptGroup(pGroups[0].id)
+  }, [pGroups, activePromptGroup])
 
   const fetchModels = useCallback(async () => {
     setModelsLoading(true)
@@ -55,11 +94,22 @@ export default function Admin() {
   }, [fetchModels])
 
   const active = groups.find((g) => g.id === activeGroup) ?? groups[0]
+  const activePrompts = pGroups.find((g) => g.id === activePromptGroup) ?? pGroups[0]
 
   function draftFor(key: string): string | boolean {
     if (key in drafts) return drafts[key]
     const e = entries[key]
     return e ? toDraft(e.value as string | number | boolean) : ''
+  }
+
+  function promptDraftFor(key: string): string {
+    if (key in promptDrafts) return promptDrafts[key]
+    return pEntries[key]?.value ?? ''
+  }
+
+  function toolDescFor(toolId: string): string {
+    if (toolId in toolDescDrafts) return toolDescDrafts[toolId]
+    return tools[toolId]?.description ?? ''
   }
 
   function dirtyKeysFor(fields: string[]): string[] {
@@ -71,6 +121,10 @@ export default function Admin() {
       if (typeof d === 'boolean' || typeof e.value === 'boolean') return d !== e.value
       return String(d) !== String(e.value)
     })
+  }
+
+  function dirtyPromptsFor(keys: string[]): string[] {
+    return keys.filter((k) => k in promptDrafts && promptDrafts[k] !== pEntries[k]?.value)
   }
 
   function pendingCountFor(fields: string[]): number {
@@ -148,11 +202,111 @@ export default function Admin() {
     }
   }
 
+  async function savePrompts(keys: string[]) {
+    setPNotice('')
+    const updates: Record<string, string> = {}
+    for (const k of keys) updates[k] = promptDraftFor(k)
+    try {
+      await prompt.save(updates)
+      setPromptDrafts((prev) => {
+        const next = { ...prev }
+        for (const k of keys) delete next[k]
+        return next
+      })
+      setPNotice(`Saved ${keys.length} prompt(s) — live on the next run.`)
+    } catch {
+      // hook sets error
+    }
+  }
+
+  async function resetPrompts(keys?: string[]) {
+    setPNotice('')
+    try {
+      await prompt.reset(keys)
+      setPromptDrafts((prev) => {
+        const next = { ...prev }
+        for (const k of keys ?? Object.keys(pEntries)) delete next[k]
+        return next
+      })
+      setPNotice(keys ? `Reset ${keys.length} prompt(s) to code seeds.` : 'Reset all prompts to code seeds.')
+    } catch {
+      // hook sets error
+    }
+  }
+
+  async function toggleTool(toolId: string, enabled: boolean) {
+    setPNotice('')
+    try {
+      await prompt.toggleTool(toolId, enabled)
+      setPNotice(`Tool ${toolId} ${enabled ? 'enabled' : 'disabled'}.`)
+    } catch {
+      // hook sets error
+    }
+  }
+
+  function requestToggle(toolId: string, enabled: boolean) {
+    // Disabling the LAST enabled tool needs the explicit custom modal.
+    if (!enabled && tools[toolId]?.enabled && enabledCount <= 1) {
+      setDisableTarget(toolId)
+      return
+    }
+    toggleTool(toolId, enabled)
+  }
+
+  async function saveToolDesc(toolId: string) {
+    setPNotice('')
+    try {
+      await prompt.saveToolDescription(toolId, toolDescFor(toolId))
+      setToolDescDrafts((prev) => {
+        const next = { ...prev }
+        delete next[toolId]
+        return next
+      })
+      setPNotice(`Saved menu text for ${toolId}.`)
+    } catch {
+      // hook sets error
+    }
+  }
+
+  async function resetToolDesc(toolId: string) {
+    setPNotice('')
+    try {
+      await prompt.resetToolSet([toolId])
+      setToolDescDrafts((prev) => {
+        const next = { ...prev }
+        delete next[toolId]
+        return next
+      })
+      setPNotice(`Reset ${toolId} to code seed.`)
+    } catch {
+      // hook sets error
+    }
+  }
+
+  async function resetAllTools() {
+    setPNotice('')
+    try {
+      await prompt.resetToolSet()
+      setToolDescDrafts({})
+      setPNotice('Reset all tools to code seeds.')
+    } catch {
+      // hook sets error
+    }
+  }
+
   const allDirty = useMemo(() => dirtyKeysFor(Object.keys(entries)), [entries, drafts]) // eslint-disable-line react-hooks/exhaustive-deps
+  const allPromptDirty = useMemo(() => dirtyPromptsFor(Object.keys(pEntries)), [pEntries, promptDrafts]) // eslint-disable-line react-hooks/exhaustive-deps
+  const disabledCount = toolIds.length - enabledCount
+
+  const sectionTabs: { id: Section; label: string; badge?: string }[] = [
+    { id: 'variables', label: 'Variables', badge: pending.size > 0 ? `${pending.size}↻` : undefined },
+    { id: 'prompts', label: 'Prompts', badge: allPromptDirty.length > 0 ? `${allPromptDirty.length}` : undefined },
+    { id: 'tools', label: 'Tools', badge: disabledCount > 0 ? `${disabledCount} OFF` : undefined },
+  ]
 
   return (
     <div className="h-screen overflow-y-auto bg-bench">
-      <div className="mx-auto w-full max-w-5xl px-4 pb-10 pt-6 sm:px-6 sm:pt-10">
+      <div className="mx-auto w-full max-w-none px-4 pb-10 pt-6 sm:px-6 sm:pt-10">
         <header className="rounded-xl bg-ink px-6 py-7 text-paper shadow-[0_18px_50px_-24px_rgba(21,39,54,0.7)] sm:px-8">
           <div className="flex items-start justify-between gap-4">
             <p className="font-ledger text-[11px] font-semibold tracking-[0.22em] text-paper/70">
@@ -172,7 +326,7 @@ export default function Admin() {
             Runtime variables.
           </h1>
           <p className="mt-3 max-w-xl text-sm leading-relaxed text-paper/75">
-            Live keys apply to the next request. Restart keys rebind on backend restart.
+            Variables, prompts and tool wiring — stored in the DB, live on the next run.
           </p>
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <Link
@@ -181,13 +335,41 @@ export default function Admin() {
             >
               ← STACK
             </Link>
+            <nav aria-label="Admin sections" className="flex items-center gap-2">
+              {sectionTabs.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setSection(t.id)}
+                  aria-current={section === t.id ? 'page' : undefined}
+                  className={`font-ledger flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-semibold tracking-[0.14em] transition-colors ${
+                    section === t.id
+                      ? 'border-paper bg-paper text-ink'
+                      : 'border-paper/25 text-paper/70 hover:border-paper/60 hover:text-paper'
+                  }`}
+                >
+                  {t.label.toUpperCase()}
+                  {t.badge && (
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${
+                        section === t.id ? 'bg-brass text-ink' : 'bg-paper/15 text-paper'
+                      }`}
+                    >
+                      {t.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </nav>
             <span className="font-ledger text-[11px] tracking-[0.14em] text-paper/60">
-              {loading ? 'READING CONFIG…' : snapshot ? `${Object.keys(entries).length} KEYS · ${pending.size} PENDING RESTART` : ''}
+              {section === 'variables' && (loading ? 'READING CONFIG…' : snapshot ? `${Object.keys(entries).length} KEYS · ${pending.size} PENDING RESTART` : '')}
+              {section === 'prompts' && (prompt.loading ? 'READING PROMPTS…' : prompt.snapshot ? `${Object.keys(pEntries).length} PROMPTS` : '')}
+              {section === 'tools' && (prompt.loading ? 'READING TOOLS…' : prompt.snapshot ? `${enabledCount}/${toolIds.length} ENABLED` : '')}
             </span>
           </div>
         </header>
 
-        {pending.size > 0 && (
+        {pending.size > 0 && section === 'variables' && (
           <div role="status" className="mt-4 rounded-lg border border-brass-deep/50 bg-brass/[0.12] px-5 py-4">
             <p className="font-ledger text-[11px] font-semibold tracking-[0.18em] text-brass-deep">
               RESTART REQUIRED — {pending.size} KEY(S)
@@ -202,7 +384,7 @@ export default function Admin() {
           </div>
         )}
 
-        {(error || notice) && (
+        {(error || notice) && section === 'variables' && (
           <div className="mt-4 space-y-2">
             {error && (
               <div role="alert" className="rounded-md border border-rust/50 bg-rust/[0.07] px-3 py-2.5 text-[13px] text-rust">
@@ -218,7 +400,23 @@ export default function Admin() {
           </div>
         )}
 
-        {loading && (
+        {(prompt.error || pNotice) && section !== 'variables' && (
+          <div className="mt-4 space-y-2">
+            {prompt.error && (
+              <div role="alert" className="rounded-md border border-rust/50 bg-rust/[0.07] px-3 py-2.5 text-[13px] text-rust">
+                <span className="font-ledger mb-0.5 block text-[10px] font-semibold tracking-[0.18em]">REQUEST FAILED</span>
+                {prompt.error}
+              </div>
+            )}
+            {pNotice && (
+              <div role="status" className="rounded-md border border-ledger/40 bg-ledger/[0.07] px-3 py-2.5 text-[13px] text-ledger">
+                {pNotice}
+              </div>
+            )}
+          </div>
+        )}
+
+        {(loading || prompt.loading) && (
           <div className="mt-4 space-y-3" aria-hidden="true">
             {[0, 1, 2].map((i) => (
               <div key={i} className="rounded-lg border border-line/70 bg-card/60 px-5 py-6">
@@ -230,7 +428,8 @@ export default function Admin() {
           </div>
         )}
 
-        {!loading && snapshot && active && (
+        {/* ═══ VARIABLES ═══ */}
+        {!loading && snapshot && active && section === 'variables' && (
           <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
             {/* Mobile: horizontal tab bar */}
             <nav aria-label="Config groups" className="flex gap-2 overflow-x-auto pb-1 sm:hidden">
@@ -340,7 +539,137 @@ export default function Admin() {
           </div>
         )}
 
-        {!loading && snapshot && (
+        {/* ═══ PROMPTS ═══ */}
+        {!prompt.loading && prompt.snapshot && activePrompts && section === 'prompts' && (
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
+            <nav aria-label="Prompt groups" className="flex gap-2 overflow-x-auto pb-1 sm:hidden">
+              {pGroups.map((g) => {
+                const dirty = dirtyPromptsFor(g.prompts).length
+                const isActive = g.id === activePrompts.id
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => setActivePromptGroup(g.id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+                      isActive
+                        ? 'border-ink bg-ink text-paper'
+                        : 'border-line bg-card text-ink-soft hover:border-ink-soft/50'
+                    }`}
+                  >
+                    {g.title}
+                    {dirty > 0 && <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-brass' : 'bg-brass-deep'}`} aria-label={`${dirty} unsaved`} />}
+                  </button>
+                )
+              })}
+            </nav>
+
+            <nav aria-label="Prompt groups" className="hidden w-60 shrink-0 flex-col gap-1.5 sm:flex">
+              {pGroups.map((g, gi) => {
+                const dirty = dirtyPromptsFor(g.prompts).length
+                const isActive = g.id === activePrompts.id
+                return (
+                  <button
+                    key={g.id}
+                    type="button"
+                    onClick={() => setActivePromptGroup(g.id)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`drawer-row group rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                      isActive
+                        ? 'border-ink bg-ink text-paper shadow-[0_8px_24px_-16px_rgba(21,39,54,0.6)]'
+                        : 'border-line bg-card text-ink hover:border-ink-soft/50'
+                    }`}
+                  >
+                    <span className={`font-ledger block text-[9px] font-semibold tracking-[0.2em] ${isActive ? 'text-paper/60' : 'text-ink-soft/55'}`}>
+                      {String(gi + 1).padStart(2, '0')} · LIVE
+                    </span>
+                    <span className="mt-0.5 flex items-center gap-2">
+                      <span className="font-display block flex-1 truncate text-[13px] font-semibold">{g.title}</span>
+                      {dirty > 0 && (
+                        <span className="font-ledger rounded-full bg-brass px-1.5 py-0.5 text-[9px] font-bold text-ink" title={`${dirty} unsaved`}>
+                          {dirty}
+                        </span>
+                      )}
+                    </span>
+                    <span className={`mt-0.5 block truncate text-[11px] ${isActive ? 'text-paper/65' : 'text-ink-soft/65'}`}>
+                      {g.prompts.length} prompts
+                    </span>
+                  </button>
+                )
+              })}
+            </nav>
+
+            <main className="min-w-0 flex-1" aria-label="Prompt configuration" aria-live="polite">
+              {(() => {
+                const keys = activePrompts.prompts.filter((k) => pEntries[k])
+                const dirty = dirtyPromptsFor(keys)
+                const gi = pGroups.indexOf(activePrompts)
+                const dbKeys = keys.filter((k) => pEntries[k]?.source === 'db')
+                return (
+                  <SectionCard
+                    key={activePrompts.id}
+                    eyebrow={`PROMPTS ${String(gi + 1).padStart(2, '0')} / ${String(pGroups.length).padStart(2, '0')} · ${activePrompts.id.toUpperCase()}`}
+                    title={activePrompts.title}
+                    description={activePrompts.description}
+                    apply="live"
+                    dirtyCount={dirty.length}
+                    saving={prompt.saving}
+                    onSave={keys.length > 0 ? () => savePrompts(dirty.length > 0 ? dirty : keys.filter((k) => k in promptDrafts)) : undefined}
+                    onReset={dbKeys.length > 0 ? () => resetPrompts(dbKeys) : undefined}
+                  >
+                    <div className="grid grid-cols-1 items-start gap-2 xl:grid-cols-2">
+                      {keys.map((k) => (
+                        <PromptEditor
+                          key={k}
+                          entry={pEntries[k]}
+                          draft={promptDraftFor(k)}
+                          onChange={(v) => setPromptDrafts((prev) => ({ ...prev, [k]: v }))}
+                          onReset={() => resetPrompts([k])}
+                          onSave={() => savePrompts([k])}
+                          saving={prompt.saving}
+                        />
+                      ))}
+                    </div>
+                  </SectionCard>
+                )
+              })()}
+            </main>
+          </div>
+        )}
+
+        {/* ═══ TOOLS ═══ */}
+        {!prompt.loading && prompt.snapshot && section === 'tools' && (
+          <main className="mt-4" aria-label="Tool configuration" aria-live="polite">
+            <SectionCard
+              eyebrow="TOOLS · KILL-SWITCHES + MENU TEXT"
+              title="Tool configuration"
+              description="Disabled tools are rejected by the validator and fail honest at execution. Menu text shapes planner routing. All live on the next run."
+              apply="live"
+              dirtyCount={0}
+              saving={prompt.saving}
+              onReset={disabledCount > 0 || toolIds.some((t) => tools[t]?.description_source === 'db') ? () => resetAllTools() : undefined}
+            >
+              <div className="grid grid-cols-1 items-start gap-2 xl:grid-cols-2">
+                {toolIds.map((toolId) => (
+                  <ToolConfigRow
+                    key={toolId}
+                    entry={tools[toolId]}
+                    referencedBy={TOOL_REFERENCED_BY[toolId] ?? ['ReAct steps']}
+                    descDraft={toolDescFor(toolId)}
+                    onDescChange={(v) => setToolDescDrafts((prev) => ({ ...prev, [toolId]: v }))}
+                    onDescSave={() => saveToolDesc(toolId)}
+                    onDescReset={() => resetToolDesc(toolId)}
+                    onToggle={(enabled) => requestToggle(toolId, enabled)}
+                    saving={prompt.saving}
+                  />
+                ))}
+              </div>
+            </SectionCard>
+          </main>
+        )}
+
+        {section === 'variables' && !loading && snapshot && (
           <footer className="mt-6 flex flex-wrap items-center justify-between gap-3">
             <p className="font-ledger text-[10px] tracking-[0.2em] text-ink-soft/60">
               WRITE-THROUGH · DB IS TRUTH, MEMORY SERVES
@@ -366,6 +695,32 @@ export default function Admin() {
           </footer>
         )}
 
+        {section === 'prompts' && !prompt.loading && prompt.snapshot && (
+          <footer className="mt-6 flex flex-wrap items-center justify-between gap-3">
+            <p className="font-ledger text-[10px] tracking-[0.2em] text-ink-soft/60">
+              PROMPTS LIVE · TEMPLATES VALIDATED ON SAVE
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={prompt.saving || allPromptDirty.length === 0}
+                onClick={() => savePrompts(allPromptDirty)}
+                className="h-9 rounded-md bg-ink px-4 text-[13px] font-semibold text-paper hover:bg-ink-soft disabled:opacity-40"
+              >
+                {prompt.saving ? 'Saving…' : `Save all (${allPromptDirty.length})`}
+              </button>
+              <button
+                type="button"
+                disabled={prompt.saving}
+                onClick={() => resetPrompts()}
+                className="h-9 rounded-md border border-line bg-card px-4 text-[13px] font-semibold text-ink-soft hover:bg-paper disabled:opacity-40"
+              >
+                Reset all to seeds
+              </button>
+            </div>
+          </footer>
+        )}
+
         <Dialog open={confirmRestart !== null} onClose={() => setConfirmRestart(null)} maxWidth="sm" fullWidth>
           <DialogTitle>Restart-apply keys included</DialogTitle>
           <DialogContent>
@@ -385,6 +740,33 @@ export default function Admin() {
             </Button>
           </DialogActions>
         </Dialog>
+
+        <ConfirmModal
+          open={disableTarget !== null}
+          eyebrow="LAST TOOL STANDING"
+          title={`Disable ${disableTarget ?? ''}?`}
+          onCancel={() => setDisableTarget(null)}
+          onConfirm={() => {
+            const t = disableTarget
+            setDisableTarget(null)
+            if (t) toggleTool(t, false)
+          }}
+          confirmLabel="Disable anyway"
+        >
+          <p>
+            This is the last enabled tool. Disabling it means every plan that needs a tool will fail
+            honest until something is re-enabled — only the reasoning agent keeps answering.
+          </p>
+          {disableTarget && (
+            <ul className="mt-3 space-y-1">
+              {(TOOL_REFERENCED_BY[disableTarget] ?? []).map((ref) => (
+                <li key={ref} className="font-ledger rounded bg-paper px-2 py-1 text-[11px]">
+                  → {ref}
+                </li>
+              ))}
+            </ul>
+          )}
+        </ConfirmModal>
       </div>
     </div>
   )

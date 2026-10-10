@@ -32,6 +32,18 @@ def execute_tool(
     cancel_event: threading.Event | None = None,
 ) -> ToolResponse:
     tool = registry.get(tool_id)
+    from app.core.promptstore import is_tool_enabled
+
+    if not is_tool_enabled(tool_id):
+        # Honest failure (never raise): the plan graph maps ok=False to a
+        # normal step FAILURE, and the validator rejects disabled tools
+        # upfront — this guard covers races (disabled mid-run).
+        return ToolResponse(
+            tool_id=tool_id,
+            ok=False,
+            output=None,
+            error=f"tool '{tool_id}' is disabled by admin (Admin → Tools to re-enable)",
+        )
     request = ToolRequest(
         tool_id=tool_id,
         step_id=step_id,

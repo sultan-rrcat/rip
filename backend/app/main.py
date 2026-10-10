@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # server starts from rip/ or rip/backend/.
 load_dotenv(find_dotenv(usecwd=True))
 
-from app.api import admin, deps, health, runs
+from app.api import admin, deps, health, prompt_admin, runs
 from app.core.logging import setup_logging
 from app.observability.langfuse import flush as langfuse_flush
 from app.observability.langfuse import init_langfuse
@@ -69,6 +69,20 @@ async def lifespan(app: FastAPI):
             logger.info("runtime overrides applied: %d key(s) from DB", _n)
     except Exception:
         logger.warning("runtime overrides failed, continuing with env/defaults", exc_info=True)
+
+    try:
+        from app.core.promptstore import ensure_seeds, load_store
+
+        ensure_seeds()
+        _np, _nt = load_store()
+        if _np or _nt:
+            logger.info(
+                "prompt store loaded: %d prompt override(s), %d tool row(s) from DB",
+                _np, _nt,
+            )
+    except Exception:
+        logger.warning(
+            "prompt store init failed, continuing with code seeds", exc_info=True)
 
     logger.info(
         "BGE m3=%s reranker=%s",
@@ -159,9 +173,10 @@ app.include_router(messages.router, dependencies=[Depends(auth.get_current_user)
 # NOTE (Phase 4.3): app/routes/llm.py deleted — the old prompt endpoints are
 # gone with no shim. Replacement: POST /v1/runs + GET /v1/runs/{id}/events.
 
-# Run lifecycle + admin stub (/v1/*, bare JSON — no envelope).
+# Run lifecycle + admin (/v1/*, bare JSON — no envelope).
 app.include_router(runs.router, dependencies=[Depends(auth.get_current_user)])
 app.include_router(admin.router, dependencies=[Depends(auth.get_current_user)])
+app.include_router(prompt_admin.router, dependencies=[Depends(auth.get_current_user)])
 
 # Liveness probes: /api/health (RIP alias, kept) + /health (canonical).
 app.include_router(health.router)

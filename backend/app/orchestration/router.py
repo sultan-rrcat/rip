@@ -249,73 +249,94 @@ def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
     return None
 
 
+#: Admin-editable router prompt template (see app/core/promptstore.py).
+#: Placeholders (required — PUT refuses bodies missing them):
+#:   {intents_block}  — rendered from the Intent enum + INTENT_DESCRIPTIONS
+#:   {corpus_section} — "" when no hint, else the corpus suffix below
+ROUTER_PROMPT_TEMPLATE = (
+    "You are an intent router. Output EXACTLY one JSON object, no prose. "
+    "Query generation for document retrieval is performed inside rag.query, "
+    "not by you.\n"
+    "Intents:\n{intents_block}\n"
+    "Decide by DELIVERABLE — what the user wants back:\n"
+    "1. code: deliverable is SOURCE CODE or program text. Requires an "
+    "explicit software signal: a programming language, code file (e.g. "
+    ".py/.js/.ts), traceback/error, function/class/test/refactor, or "
+    "greenfield build (script/app/page/site/component). The notebook "
+    "file list itself counts as the signal: when it names ready code "
+    "files and the request asks to read/review/explain/debug those "
+    "files, that IS code. Review/explain/"
+    "summarize/critique of DOCUMENT content (plan/report/checklist/"
+    "architecture/findings, snippet on page N) is NOT code — it is "
+    "summarize/qa_single. Chart/plot/table/compare words do NOT override "
+    "this when code is requested. Pictures/photos/illustrations with no "
+    "code requested are unknown.\n"
+    "2. convert_all: deliverable is a reformatted ORIGINAL uploaded file set "
+    "and the request says all/every/each documents via convert/export/"
+    "save-as. Write/create/generate/draft NEW content (email/letter/"
+    "report/essay in pdf/docx/md) is NOT convert — it is unknown, even "
+    "when it names pdf/docx/md.\n"
+    "3. convert_one: same, but one named ORIGINAL file. Requires a "
+    "convert/export/save-as verb AND a source file; without both, use "
+    "unknown.\n"
+    "4. plot_standalone: deliverable is a chart AND every label and number "
+    "needed is IN the message (for example 'A: 10, B: 20').\n"
+    "5. summarize_plot: deliverable is a chart AND the numbers must come "
+    "FROM documents (plot/draw/chart/graph/show-as-graph over document "
+    "data, with or without compare words).\n"
+    "6. compare_multi: text comparing/contrasting/ranking 2+ docs/topics, "
+    "no chart.\n"
+    "7. summarize: text summary/abstract/overview/review/critique of docs "
+    "(e.g. 'review the plan in the doc'), no chart, no "
+    "questions.\n"
+    "8. quiz: questions/quiz/MCQs/flashcards from docs.\n"
+    "9. qa_single: one factual question answered from docs.\n"
+    "10. chat: pure greeting/thanks/small-talk/farewell ONLY, no document "
+    "question, no task. A greeting plus any task routes to the task, "
+    "never chat (e.g. 'hello, summarize this doc' is summarize).\n"
+    "11. unknown: anything else or ambiguous.\n"
+    "Tie-breaks (only when two patterns genuinely overlap): prefer the "
+    "more specific deliverable — code over chart over compare/quiz over "
+    "qa_single/summarize over chat. A chart verb plus document data "
+    "is summarize_plot even when the request also says compare; a chart "
+    "verb plus literal numbers in the message is plot_standalone; "
+    "review/explain of document prose is summarize/qa_single, never code; "
+    "review/explain of notebook code files is code, never summarize.\n"
+    "Follow-ups: a formatting-only fragment (table/bullets) inherits the "
+    "prior intent unless it adds a new chart/convert/code/quiz verb. "
+    "Always classify the COMBINED intent.\n"
+    'Return {"intent": "<one of the values above>"}.{corpus_section}'
+)
+
+#: Corpus-hint suffix spliced into {corpus_section} when a hint exists.
+#: Required placeholder: {corpus_hint}.
+ROUTER_CORPUS_SUFFIX_TEMPLATE = (
+    "\nNotebook context (do NOT change the deliverable because of "
+    "it; use it only to avoid inventing files): "
+    "{corpus_hint}"
+    " Never invent a file name or id — convert intents still "
+    "require the verb plus the file named in the request text."
+)
+
+
 def _build_system_prompt(corpus_hint: str | None = None) -> str:
+    from app.core.promptstore import get_prompt
+
     lines = "\n".join(
         f"- {intent.value}: {INTENT_DESCRIPTIONS[intent]}" for intent in Intent
     )
-    prompt = (
-        "You are an intent router. Output EXACTLY one JSON object, no prose. "
-        "Query generation for document retrieval is performed inside rag.query, "
-        "not by you.\n"
-        f"Intents:\n{lines}\n"
-        "Decide by DELIVERABLE — what the user wants back:\n"
-        "1. code: deliverable is SOURCE CODE or program text. Requires an "
-        "explicit software signal: a programming language, code file (e.g. "
-        ".py/.js/.ts), traceback/error, function/class/test/refactor, or "
-        "greenfield build (script/app/page/site/component). The notebook "
-        "file list itself counts as the signal: when it names ready code "
-        "files and the request asks to read/review/explain/debug those "
-        "files, that IS code. Review/explain/"
-        "summarize/critique of DOCUMENT content (plan/report/checklist/"
-        "architecture/findings, snippet on page N) is NOT code — it is "
-        "summarize/qa_single. Chart/plot/table/compare words do NOT override "
-        "this when code is requested. Pictures/photos/illustrations with no "
-        "code requested are unknown.\n"
-        "2. convert_all: deliverable is a reformatted ORIGINAL uploaded file set "
-        "and the request says all/every/each documents via convert/export/"
-        "save-as. Write/create/generate/draft NEW content (email/letter/"
-        "report/essay in pdf/docx/md) is NOT convert — it is unknown, even "
-        "when it names pdf/docx/md.\n"
-        "3. convert_one: same, but one named ORIGINAL file. Requires a "
-        "convert/export/save-as verb AND a source file; without both, use "
-        "unknown.\n"
-        "4. plot_standalone: deliverable is a chart AND every label and number "
-        "needed is IN the message (for example 'A: 10, B: 20').\n"
-        "5. summarize_plot: deliverable is a chart AND the numbers must come "
-        "FROM documents (plot/draw/chart/graph/show-as-graph over document "
-        "data, with or without compare words).\n"
-        "6. compare_multi: text comparing/contrasting/ranking 2+ docs/topics, "
-        "no chart.\n"
-        "7. summarize: text summary/abstract/overview/review/critique of docs "
-        "(e.g. 'review the plan in the doc'), no chart, no "
-        "questions.\n"
-        "8. quiz: questions/quiz/MCQs/flashcards from docs.\n"
-        "9. qa_single: one factual question answered from docs.\n"
-        "10. chat: pure greeting/thanks/small-talk/farewell ONLY, no document "
-        "question, no task. A greeting plus any task routes to the task, "
-        "never chat (e.g. 'hello, summarize this doc' is summarize).\n"
-        "11. unknown: anything else or ambiguous.\n"
-        "Tie-breaks (only when two patterns genuinely overlap): prefer the "
-        "more specific deliverable — code over chart over compare/quiz over "
-        "qa_single/summarize over chat. A chart verb plus document data "
-        "is summarize_plot even when the request also says compare; a chart "
-        "verb plus literal numbers in the message is plot_standalone; "
-        "review/explain of document prose is summarize/qa_single, never code; "
-        "review/explain of notebook code files is code, never summarize.\n"
-        "Follow-ups: a formatting-only fragment (table/bullets) inherits the "
-        "prior intent unless it adds a new chart/convert/code/quiz verb. "
-        "Always classify the COMBINED intent.\n"
-        'Return {"intent": "<one of the values above>"}.'
-    )
+    # Plain .replace (never .format): prompt prose carries literal JSON
+    # braces that .format would try to interpolate. Intent block first so
+    # a hint containing a token stays literal.
+    template = get_prompt("router.system_prompt")
+    section = ""
     if corpus_hint:
-        prompt += (
-            "\nNotebook context (do NOT change the deliverable because of "
-            "it; use it only to avoid inventing files): "
-            + corpus_hint
-            + " Never invent a file name or id — convert intents still "
-            "require the verb plus the file named in the request text."
+        section = get_prompt("router.corpus_suffix").replace(
+            "{corpus_hint}", corpus_hint
         )
-    return prompt
+    return template.replace("{intents_block}", lines).replace(
+        "{corpus_section}", section
+    )
 
 
 class RouterResult(BaseModel):

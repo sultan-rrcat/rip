@@ -78,7 +78,10 @@ class ReActEngine:
         self._tools = tools
         self._trace_id = trace_id
         self._known_agents = {a["agent_id"] for a in agents.manifest()}
-        self._known_tools = {t["tool_id"] for t in tools.manifest()}
+        # Enabled-only (see ReactLoop): disabled tools repair, never execute.
+        self._known_tools = {
+            t["tool_id"] for t in tools.manifest() if t.get("enabled", True)
+        }
         self._agent_ids = sorted(self._known_agents)
         self._tool_ids = sorted(self._known_tools)
         self._model = settings.ollama_default_model

@@ -20,19 +20,35 @@ REASONING_SYSTEM_PROMPT = (
 )
 
 
+REASONING_DESCRIPTION = (
+    "General conversational assistance, explanation, and brainstorming; "
+    "fallback when no specialized capability fits."
+)
+
+
 class ReasoningAgent(ProviderAgent):
     agent_id = "reasoning"
     name = "Reasoning Agent"
-    description = (
-        "General conversational assistance, explanation, and brainstorming; "
-        "fallback when no specialized capability fits."
-    )
     input_schema: ClassVar[dict] = {"message": "str", "history": "optional list of {role, content}"}
     requires_permission = False
     side_effecting = False
     cost_class = "low"
 
-    system_prompt = REASONING_SYSTEM_PROMPT
+    @property
+    def description(self) -> str:
+        # Live read like default_budget below: admin description edits
+        # shape planner menus on the next run. The subclass check in
+        # Agent.__init_subclass__ still passes (a property object is not
+        # None at class level).
+        from app.core.promptstore import get_prompt
+
+        return get_prompt("agent.reasoning.description")
+
+    @property
+    def system_prompt(self) -> str:
+        from app.core.promptstore import get_prompt
+
+        return get_prompt("agent.reasoning.system_prompt")
 
     @property
     def default_budget(self) -> int:

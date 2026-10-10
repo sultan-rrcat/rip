@@ -194,3 +194,30 @@ CREATE TABLE IF NOT EXISTS public.runtime_config
     updated_by text,
     updated_at timestamptz NOT NULL DEFAULT NOW()
 ) TABLESPACE pg_default;
+
+-- ─── runtime_prompts ─────────────────────────────────────────────────────────
+-- Admin-tunable prompts + fragments (Option A write-through, same as
+-- runtime_config). DB override wins over the code seed; code seeds are the
+-- fallback when no row exists. Templated prompts (router/react) carry
+-- {placeholders}; PUT refuses (422) bodies missing a required slot.
+
+CREATE TABLE IF NOT EXISTS public.runtime_prompts
+(
+    key        text PRIMARY KEY,
+    body       text NOT NULL,
+    updated_by text,
+    updated_at timestamptz NOT NULL DEFAULT NOW()
+) TABLESPACE pg_default;
+
+-- ─── tool_config ─────────────────────────────────────────────────────────────
+-- Per-tool kill-switch + description override. Seeds (enabled=TRUE, no
+-- override) are inserted on boot; the registry reads this store live.
+
+CREATE TABLE IF NOT EXISTS public.tool_config
+(
+    tool_id              text PRIMARY KEY,
+    enabled              boolean NOT NULL DEFAULT TRUE,
+    description_override text,
+    updated_by           text,
+    updated_at           timestamptz NOT NULL DEFAULT NOW()
+) TABLESPACE pg_default;

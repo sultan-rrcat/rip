@@ -96,7 +96,11 @@ _EXT_TO_LANG: dict[str, str] = {
 #: answers, no placeholder leaks) come first; this only styles HOW the
 #: honest answer reads in chat. Kept short — the reasoning system prompt
 #: carries the full voice.
-_PRESENTATION_SUFFIX = (
+#: Seed prose for the admin-editable fragments below (see
+#: app/core/promptstore.py). The live values are read per build via
+#: _presentation_suffix() / _empty_answer_guidance() so admin edits apply
+#: to the next run without a restart.
+_PRESENTATION_SUFFIX_SEED = (
     " Present like a world-class assistant: lead with the direct answer, "
     "then supporting detail in clear Markdown (short headings, bullets, "
     "numbered steps, or a table when it helps)."
@@ -108,7 +112,7 @@ _PRESENTATION_SUFFIX = (
 #: bubble). The replacement keeps the grounding invariant — never invent
 #: coverage — but demands complete, professional sentences: what was
 #: searched, what is missing, one concrete next step.
-_EMPTY_ANSWER_GUIDANCE = (
+_EMPTY_ANSWER_GUIDANCE_SEED = (
     "Ground every claim in the chunks; for anything they do not cover, "
     "say so honestly in complete sentences — never a bare fragment. "
     "If the chunks are empty or read '(no chunks retrieved)', say you "
@@ -116,6 +120,20 @@ _EMPTY_ANSWER_GUIDANCE = (
     "request, name the topic briefly, and suggest one concrete next step "
     "(rephrasing the question or uploading a relevant document). "
 )
+
+
+def _presentation_suffix() -> str:
+    """Live presentation fragment (admin override or code seed)."""
+    from app.core.promptstore import get_prompt
+
+    return get_prompt("builders.presentation_suffix")
+
+
+def _empty_answer_guidance() -> str:
+    """Live empty-answer fragment (admin override or code seed)."""
+    from app.core.promptstore import get_prompt
+
+    return get_prompt("builders.empty_answer_guidance")
 
 
 
@@ -238,9 +256,9 @@ def build_qa_single(query: str, request_text: str) -> Plan:
                     "message": (
                         "Answer the user's request using ONLY these retrieved "
                         "chunks {{1}}. "
-                        + _EMPTY_ANSWER_GUIDANCE
+                        + _empty_answer_guidance()
                         + "Never mention chunk ids or placeholders. "
-                        f"Request: {request_text}{_PRESENTATION_SUFFIX}"
+                        f"Request: {request_text}{_presentation_suffix()}"
                     )
                 },
                 depends_on=["1"],
@@ -313,9 +331,9 @@ def build_compare_multi(
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), address the "
                     f"request. "
-                    + _EMPTY_ANSWER_GUIDANCE
+                    + _empty_answer_guidance()
                     + f"Never mention chunk ids or placeholders. "
-                    f"Request: {request_text}{_PRESENTATION_SUFFIX}"
+                    f"Request: {request_text}{_presentation_suffix()}"
                 )
             },
             depends_on=dep_ids,
@@ -376,9 +394,9 @@ def build_summarize(request_text: str, notebook_context: str | None = None) -> P
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), write the "
                     f"requested summary. "
-                    + _EMPTY_ANSWER_GUIDANCE
+                    + _empty_answer_guidance()
                     + f"Never mention chunk ids or placeholders. "
-                    f"Request: {request_text}{_PRESENTATION_SUFFIX}"
+                    f"Request: {request_text}{_presentation_suffix()}"
                 )
             },
             depends_on=dep_ids,
@@ -482,9 +500,9 @@ def build_summarize_plot(
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), write the "
                     f"requested summary. "
-                    + _EMPTY_ANSWER_GUIDANCE
+                    + _empty_answer_guidance()
                     + f"Never mention chunk ids or placeholders. "
-                    f"Request: {request_text}{_PRESENTATION_SUFFIX}"
+                    f"Request: {request_text}{_presentation_suffix()}"
                 )
             },
             depends_on=dep_ids,
@@ -534,9 +552,9 @@ def build_quiz(
                     "message": (
                         f"Using ONLY these retrieved chunks ({refs}), "
                         f"write the requested questions/quiz. "
-                        + _EMPTY_ANSWER_GUIDANCE
+                        + _empty_answer_guidance()
                         + f"Never mention chunk ids or placeholders. "
-                        f"Request: {request_text}{_PRESENTATION_SUFFIX}"
+                        f"Request: {request_text}{_presentation_suffix()}"
                     )
                 },
                 depends_on=dep_ids,
@@ -567,9 +585,9 @@ def build_quiz(
                     "message": (
                         "Using ONLY these retrieved chunks {{1}}, "
                         "write the requested questions/quiz. "
-                        + _EMPTY_ANSWER_GUIDANCE
+                        + _empty_answer_guidance()
                         + "Never mention chunk ids or placeholders. "
-                        f"Request: {request_text}{_PRESENTATION_SUFFIX}"
+                        f"Request: {request_text}{_presentation_suffix()}"
                     )
                 },
                 depends_on=["1"],

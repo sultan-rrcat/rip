@@ -91,7 +91,13 @@ class PlanValidator:
     def _check_executors_exist(self, plan: Plan) -> None:
         manifest = self._registry.manifest()
         known_agent = {agent["agent_id"] for agent in manifest}
-        known_tool = {tool["tool_id"] for tool in self._tool_registry.manifest()}
+        # Derived from manifest entries (missing flag = enabled) so doubles
+        # that stub manifest() keep working.
+        tool_entries = self._tool_registry.manifest()
+        known_tool = {t["tool_id"] for t in tool_entries if t.get("enabled", True)}
+        disabled_tool = {
+            t["tool_id"] for t in tool_entries if not t.get("enabled", True)
+        }
 
         for step in plan.steps:
             has_agent = bool(step.agent_id)
@@ -114,6 +120,11 @@ class PlanValidator:
                 )
             if has_agent and step.agent_id not in known_agent:
                 raise PlanValidationError(f"step {step.step_id} references unknown agent")
+            if has_tool and step.tool_id in disabled_tool:
+                raise PlanValidationError(
+                    f"step {step.step_id} references disabled tool "
+                    f"{step.tool_id!r} (re-enable it in Admin → Tools)"
+                )
             if has_tool and step.tool_id not in known_tool:
                 raise PlanValidationError(f"step {step.step_id} references unknown tool")
 

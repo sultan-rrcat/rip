@@ -35,13 +35,16 @@ class ToolRegistry:
         return tool_id in self._tools
 
     def manifest(self) -> list[dict]:
+        from app.core.promptstore import get_tool_description, is_tool_enabled
+
         result: list[dict] = []
         for tool in self._tools.values():
             result.append(
                 {
                     "tool_id": tool.tool_id,
                     "name": tool.name,
-                    "description": tool.description,
+                    "description": get_tool_description(tool.tool_id),
+                    "enabled": is_tool_enabled(tool.tool_id),
                     "input_schema": tool.input_schema,
                     "output_schema": tool.output_schema,
                     "effect_class": tool.effect_class,
@@ -50,6 +53,12 @@ class ToolRegistry:
                 }
             )
         return result
+
+    def enabled_ids(self) -> set[str]:
+        """Ids of admin-enabled tools (unknown = enabled; validator owns unknown)."""
+        from app.core.promptstore import is_tool_enabled
+
+        return {tid for tid in self._tools if is_tool_enabled(tid)}
 
 
 def get_default_tool_registry(

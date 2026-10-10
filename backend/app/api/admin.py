@@ -38,6 +38,12 @@ def admin_health():
         except Exception:  # noqa: BLE001 - stub reports, never 500s
             body["tools"] = []
         try:
+            body["disabled_tools"] = sorted(
+                t["tool_id"] for t in tools.manifest() if not t.get("enabled", True)
+            )
+        except Exception:  # noqa: BLE001
+            body["disabled_tools"] = []
+        try:
             body["pending_restart"] = _pending_keys()
         except Exception:  # noqa: BLE001
             body["pending_restart"] = []

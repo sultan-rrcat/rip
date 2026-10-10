@@ -290,10 +290,12 @@ class RagQueryTool(Tool):
             return None, "no_provider"
         try:
             formatted = format_context_for_llm({"results": results})
+            from app.core.promptstore import get_prompt
+
             raw = self._provider.generate_structured(
                 model=getattr(settings, "ollama_default_model", "qwen2.5:14b"),
                 messages=[
-                    {"role": "system", "content": _FILTER_SYSTEM_PROMPT},
+                    {"role": "system", "content": get_prompt("rag.filter_prompt")},
                     {
                         "role": "user",
                         "content": (

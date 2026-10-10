@@ -545,50 +545,67 @@ def _redundant_convert_hint(
     )
 
 
+#: Admin-editable ReAct prompt template (see app/core/promptstore.py).
+#: Placeholders (required — PUT refuses bodies missing them):
+#:   {agent_ids}         — sorted agent ids for this run
+#:   {tool_ids}          — sorted ENABLED tool ids for this run
+#:   {notebook_context}  — snapshot text or "(no documents)"
+#: Rendered with plain .replace (never .format): the prose carries literal
+#: JSON braces and {{id}} placeholders that .format would interpolate.
+REACT_PROMPT_TEMPLATE = (
+    "You are a ReAct agent. Output EXACTLY one JSON object per turn: "
+    '{"thought","steps","is_final","answer"}. '
+    "One COMPLETE DAG per turn (1-5 steps); if it fails you get the next iteration to repair it.\n"
+    "Agents: {agent_ids}\nTools: {tool_ids}\n"
+    "Shape (mandatory, never violated):\n"
+    '- each steps[] element is {"step_id": "1", "executor": "<one of coding, reasoning, code.read, doc.convert, doc.generate, notebook.inspect, plot.chart, rag.query>", "input": {...}, '
+    '"depends_on": ["1"], "expected_output_type": "answer|text|chunks|numbers|chart|document"}. '
+    'Legacy single-step {"executor","input"} is still accepted as a 1-step DAG.\n'
+    '- input is a FLAT object, never nested under \'agent\'. WRONG: {"agent": {"message": "..."}}. RIGHT: {"query": "..."}.\n'
+    '- agent step REQUIRES {"message": "<full task text>"} with observations inlined verbatim — never reference steps by number. A turn with an agent step but no input.message is INVALID.\n'
+    "- tool step REQUIRES its flat fields: "
+    'rag.query {"query": "...", "file_id": "..."}, '
+    'plot.chart {"chart_type": "bar", "labels": [...], "values": [...], "title": "<metric>: A vs B"}, '
+    'doc.convert {"file_id": "...", "target_format": "md|docx|pdf"}, '
+    'doc.generate {"title": "...", "sections": [{"heading": ..., "body": ...}], "target_format": "md|docx|pdf"}, '
+    "notebook.inspect {}, "
+    'code.read {"file_id": "..."} or {"file_name": "..."}.\n'
+    '- wire dataflow with depends_on + {{id}} placeholders: downstream input must contain {{1}} for depends_on ["1"]. '
+    "A step with depends_on but no placeholder, or a placeholder with no edge, is INVALID.\n"
+    "Decide in order, stop at the first match:\n"
+    "1. Greeting/small talk with no task: is_final=true, answer directly, no steps.\n"
+    "2. Empty notebook (snapshot shows no documents/files): NEVER rag.query/code.read/doc.convert — they return nothing. "
+    "For write/create/generate/draft asks (email/letter/report in pdf/docx/md): "
+    'emit ONE DAG with 2 steps: step 1 reasoning {"message": "Draft <deliverable> for: <request>. Use [brackets] for unknown details (name/date/recipient)."}, '
+    'step 2 doc.generate {"title", "sections": [{"heading","body": full draft verbatim}], "target_format": pdf/docx/md from the request} '
+    'with depends_on ["1"] — do NOT emit the draft alone and wait; the DAG must contain both steps. '
+    "Draft with placeholders FIRST — never ask clarifying questions INSTEAD of drafting; put follow-ups in the final answer.\n"
+    "3. CODE tasks (write/test/explain/review/debug code): notebook.inspect once, then code.read each needed file, "
+    "then ONE coding step with file content inlined verbatim in {\"message\": \"...\"}. "
+    "Never coding without file content in an observation (empty notebook with no files: write directly with coding, no code.read).\n"
+    "4. Retrieval when documents exist: rag.query first "
+    "(overview for summarize/compare/quiz/overall-content, specific default otherwise). "
+    "doc.generate creates a NEW report file from answer text (its pdf/docx output IS the deliverable); "
+    "doc.convert only re-renders an ORIGINAL upload named in the snapshot — never convert a source file to satisfy a report ask.\n"
+    "5. Charts: bar/line MUST use plot.chart with literal numbers from observations (or a prior reasoning step) plus a short title naming metric and comparison. "
+    "When the notebook has no documents and no observation holds numbers, recall approximate figures with a reasoning step first (state they are approximate), then plot.chart. "
+    "Each plot.chart covers a DIFFERENT metric; grouped comparisons use series:[{label, values}] with shared labels, never nested values arrays.\n"
+    "6. Final: is_final=true carries the polished user-facing Markdown answer (direct answer first, then detail; never expose thought/executor/step numbers). Empty answer is invalid.\n"
+    "doc.generate sections must carry the COMPLETE user-visible answer (full text verbatim, never a stub) — the file renders ONLY sections.\n"
+    "Notebook documents:\n{notebook_context}"
+)
+
+
 def _build_react_system_prompt(
     agent_ids: list[str], tool_ids: list[str], notebook_context: str | None
 ) -> str:
+    from app.core.promptstore import get_prompt
+
+    template = get_prompt("react.system_prompt")
     return (
-        "You are a ReAct agent. Output EXACTLY one JSON object per turn: "
-        '{"thought","steps","is_final","answer"}. '
-        "One COMPLETE DAG per turn (1-5 steps); if it fails you get the next iteration to repair it.\n"
-        f"Agents: {agent_ids}\nTools: {tool_ids}\n"
-        "Shape (mandatory, never violated):\n"
-        '- each steps[] element is {"step_id": "1", "executor": "<one of coding, reasoning, code.read, doc.convert, doc.generate, notebook.inspect, plot.chart, rag.query>", "input": {...}, '
-        '"depends_on": ["1"], "expected_output_type": "answer|text|chunks|numbers|chart|document"}. '
-        'Legacy single-step {"executor","input"} is still accepted as a 1-step DAG.\n'
-        '- input is a FLAT object, never nested under \'agent\'. WRONG: {"agent": {"message": "..."}}. RIGHT: {"query": "..."}.\n'
-        '- agent step REQUIRES {"message": "<full task text>"} with observations inlined verbatim — never reference steps by number. A turn with an agent step but no input.message is INVALID.\n'
-        "- tool step REQUIRES its flat fields: "
-        'rag.query {"query": "...", "file_id": "..."}, '
-        'plot.chart {"chart_type": "bar", "labels": [...], "values": [...], "title": "<metric>: A vs B"}, '
-        'doc.convert {"file_id": "...", "target_format": "md|docx|pdf"}, '
-        'doc.generate {"title": "...", "sections": [{"heading": ..., "body": ...}], "target_format": "md|docx|pdf"}, '
-        "notebook.inspect {}, "
-        'code.read {"file_id": "..."} or {"file_name": "..."}.\n'
-        '- wire dataflow with depends_on + {{id}} placeholders: downstream input must contain {{1}} for depends_on ["1"]. '
-        "A step with depends_on but no placeholder, or a placeholder with no edge, is INVALID.\n"
-        "Decide in order, stop at the first match:\n"
-        "1. Greeting/small talk with no task: is_final=true, answer directly, no steps.\n"
-        "2. Empty notebook (snapshot shows no documents/files): NEVER rag.query/code.read/doc.convert — they return nothing. "
-        "For write/create/generate/draft asks (email/letter/report in pdf/docx/md): "
-        'emit ONE DAG with 2 steps: step 1 reasoning {"message": "Draft <deliverable> for: <request>. Use [brackets] for unknown details (name/date/recipient)."}, '
-        'step 2 doc.generate {"title", "sections": [{"heading","body": full draft verbatim}], "target_format": pdf/docx/md from the request} '
-        'with depends_on ["1"] — do NOT emit the draft alone and wait; the DAG must contain both steps. '
-        "Draft with placeholders FIRST — never ask clarifying questions INSTEAD of drafting; put follow-ups in the final answer.\n"
-        "3. CODE tasks (write/test/explain/review/debug code): notebook.inspect once, then code.read each needed file, "
-        "then ONE coding step with file content inlined verbatim in {\"message\": \"...\"}. "
-        "Never coding without file content in an observation (empty notebook with no files: write directly with coding, no code.read).\n"
-        "4. Retrieval when documents exist: rag.query first "
-        "(overview for summarize/compare/quiz/overall-content, specific default otherwise). "
-        "doc.generate creates a NEW report file from answer text (its pdf/docx output IS the deliverable); "
-        "doc.convert only re-renders an ORIGINAL upload named in the snapshot — never convert a source file to satisfy a report ask.\n"
-        "5. Charts: bar/line MUST use plot.chart with literal numbers from observations (or a prior reasoning step) plus a short title naming metric and comparison. "
-        "When the notebook has no documents and no observation holds numbers, recall approximate figures with a reasoning step first (state they are approximate), then plot.chart. "
-        "Each plot.chart covers a DIFFERENT metric; grouped comparisons use series:[{label, values}] with shared labels, never nested values arrays.\n"
-        "6. Final: is_final=true carries the polished user-facing Markdown answer (direct answer first, then detail; never expose thought/executor/step numbers). Empty answer is invalid.\n"
-        "doc.generate sections must carry the COMPLETE user-visible answer (full text verbatim, never a stub) — the file renders ONLY sections.\n"
-        f"Notebook documents:\n{notebook_context or '(no documents)'}"
+        template.replace("{agent_ids}", str(agent_ids))
+        .replace("{tool_ids}", str(tool_ids))
+        .replace("{notebook_context}", notebook_context or "(no documents)")
     )
 
 
@@ -624,7 +641,13 @@ class ReactLoop:
         self._trace_id = trace_id
         self._synth_fn = synth_fn
         self._known_agents = {a["agent_id"] for a in agents.manifest()}
-        self._known_tools = {t["tool_id"] for t in tools.manifest()}
+        # Enabled-only: a disabled tool reads as an unknown executor, so the
+        # loop repairs instead of executing it (executor also guards races).
+        # Derived from manifest entries (missing flag = enabled) so doubles
+        # that stub manifest() keep working.
+        self._known_tools = {
+            t["tool_id"] for t in tools.manifest() if t.get("enabled", True)
+        }
         self._agent_ids = sorted(self._known_agents)
         self._tool_ids = sorted(self._known_tools)
         self._model = settings.ollama_default_model

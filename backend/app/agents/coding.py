@@ -61,20 +61,33 @@ def _provider_reasoning_chars(provider: ModelProvider) -> int:
     return chars if isinstance(chars, int) else 0
 
 
+CODING_DESCRIPTION = (
+    "Any software task in any language: write new code from scratch "
+    "(web pages, apps, scripts) or explain, review, debug, test, or "
+    "modify uploaded code files. Generate-and-present only, no execution."
+)
+
+
 class CodingAgent(ProviderAgent):
     agent_id = "coding"
     name = "Coding Agent"
-    description = (
-        "Any software task in any language: write new code from scratch "
-        "(web pages, apps, scripts) or explain, review, debug, test, or "
-        "modify uploaded code files. Generate-and-present only, no execution."
-    )
     input_schema: ClassVar[dict] = {"message": "str", "history": "optional list of {role, content}"}
     requires_permission = False
     side_effecting = False
     cost_class = "low"
 
-    system_prompt = CODING_SYSTEM_PROMPT
+    @property
+    def description(self) -> str:
+        # Live read (see ReasoningAgent.description).
+        from app.core.promptstore import get_prompt
+
+        return get_prompt("agent.coding.description")
+
+    @property
+    def system_prompt(self) -> str:
+        from app.core.promptstore import get_prompt
+
+        return get_prompt("agent.coding.system_prompt")
 
     @property
     def default_budget(self) -> int:
