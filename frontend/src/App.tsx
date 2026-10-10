@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Home from '@/pages/Home'
 import Notebook from '@/pages/Notebook'
 import Login from '@/pages/Login'
+import Admin from '@/pages/Admin'
 import ErrorBoundary from '@/components/ErrorBoundary'
 
 export default function App() {
@@ -50,6 +51,10 @@ export default function App() {
               <Navigate to="/login" replace />
             )
           }
+        />
+        <Route
+          path="/admin"
+          element={isAuthenticated ? <Admin /> : <Navigate to="/login" replace />}
         />
       </Routes>
     </BrowserRouter>

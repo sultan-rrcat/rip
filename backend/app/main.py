@@ -61,6 +61,15 @@ async def lifespan(app: FastAPI):
     logger.info("Initiating ML models...")
     from app.core.config import settings as _settings
 
+    try:
+        from app.core.runtime import load_runtime_overrides
+
+        _n = load_runtime_overrides()
+        if _n:
+            logger.info("runtime overrides applied: %d key(s) from DB", _n)
+    except Exception:
+        logger.warning("runtime overrides failed, continuing with env/defaults", exc_info=True)
+
     logger.info(
         "BGE m3=%s reranker=%s",
         _settings.bge_m3_model_path,

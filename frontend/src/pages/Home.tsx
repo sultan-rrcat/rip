@@ -1,5 +1,7 @@
 import Card from '@/components/home/Card'
 import LogoutButton from '@/components/LogoutButton'
+import { Link } from 'react-router-dom'
+import SettingsIcon from '@mui/icons-material/Settings'
 import { useState, useEffect, useMemo } from 'react'
 import { getNotebooksAPI } from '@/services/notebooks'
 import type { Notebook } from '@/types'
@@ -93,6 +95,14 @@ export default function Home() {
                 />
                 LOCAL ONLY
               </span>
+              <Link
+                to="/admin"
+                title="Runtime config"
+                aria-label="Open admin runtime config"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-paper/80 transition-colors hover:bg-paper/10 hover:text-paper"
+              >
+                <SettingsIcon fontSize="small" />
+              </Link>
               <span className="text-paper/80 [&_button]:text-paper">
                 <LogoutButton />
               </span>

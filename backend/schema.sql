@@ -178,3 +178,19 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires
     ON public.sessions (expires_at);
+
+-- ─── runtime_config ──────────────────────────────────────────────────────────
+-- Admin-tunable runtime variables (Option A: write-through cache).
+-- DB is the source of truth; the process mirrors rows onto the Settings
+-- singleton at boot (load_runtime_overrides) and on every PUT (strong
+-- consistency within this instance — NOT eventual). Restart-apply keys take
+-- full effect after `docker compose restart backend`; live keys apply to the
+-- next request immediately.
+
+CREATE TABLE IF NOT EXISTS public.runtime_config
+(
+    key        text PRIMARY KEY,
+    value      text NOT NULL,
+    updated_by text,
+    updated_at timestamptz NOT NULL DEFAULT NOW()
+) TABLESPACE pg_default;

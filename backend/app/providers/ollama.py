@@ -483,10 +483,15 @@ class OllamaProvider(ModelProvider):
         model,
         messages,
         *,
-        temperature=settings.default_temperature,
-        max_tokens: int | None = settings.default_max_tokens,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
         cancel_event: threading.Event | None = None,
     ) -> str:
+        # Defaults resolve LIVE from settings (never frozen at import): admin
+        # PUTs to default_temperature/default_max_tokens apply to callers
+        # that omit these args.
+        if temperature is None:
+            temperature = settings.default_temperature
         data = self._chat(
             model,
             messages,
@@ -505,10 +510,12 @@ class OllamaProvider(ModelProvider):
         model,
         messages,
         *,
-        temperature=settings.default_temperature,
-        max_tokens: int | None = settings.default_max_tokens,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
         cancel_event: threading.Event | None = None,
     ) -> Iterator[str]:
+        if temperature is None:
+            temperature = settings.default_temperature
         # Reset first: usage is only meaningful if this stream reports it
         # (a stale value from a previous call would lie).
         self._last_usage = None
