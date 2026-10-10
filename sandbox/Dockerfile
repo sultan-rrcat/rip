@@ -8,7 +8,7 @@
 # the full `opencode run …` command per execution.
 FROM node:22-slim
 
-RUN npm i -g opencode@2.0.24 \
+RUN npm i -g @opencode/cli@2.0.24 \
     && npm cache clean --force \
     && opencode --version
 
