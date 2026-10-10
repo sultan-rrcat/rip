@@ -57,7 +57,7 @@ copy .env.example .env
 | `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
 | `UPLOAD_DIR` | `./backend/uploads` host-local; `/app/uploads` in compose (overridden in `docker-compose.yml`, image `ENV` fallback matches) |
 | `LANGFUSE_ENABLED` | `true` (opt-in tracing; keys from `.env`) |
-| `BACKEND_CPUS` | Backend CPU quota (compose `cpus:` time quota, not core pinning). Dynamic default via `scripts/rip.*`: host cores − 1 (min 2); explicit shell/`.env` wins; raw compose falls back to `2.0`. Raise on big hosts for faster Docling/BGE ingestion |
+| `BACKEND_CPUS` | Backend CPU quota (compose `cpus:` time quota, not core pinning). Dynamic default via `scripts/rip.py`: host cores − 1 (min 2); explicit shell/`.env` wins; raw compose falls back to `2.0`. Raise on big hosts for faster Docling/BGE ingestion |
 
 No `LLM_URL`, no `NEO4J_*`, no `DATABASE_URL`.
 
@@ -76,16 +76,15 @@ only on an empty `pgdata` volume; re-apply via `psql` after DDL changes.
 
 ## 4. Run (Required: Postgres + Ollama. Optional: Langfuse)
 
-Use the lifecycle scripts (`scripts/rip.ps1` on Windows, `scripts/rip.sh`
-on Linux/macOS — same commands). On first run the script copies
+Use the lifecycle script (`python scripts/rip.py` — single cross-platform
+entrypoint). On first run the script copies
 `.env.example → .env` for you; edit it for your run mode (host-local
 Ollama stays `OLLAMA_BASE_URL=http://localhost:11434`; for compose point
 it at the host gateway or a LAN remote — the `.env` value flows into the
 container, gateway is only the fallback when unset), then run again:
 
 ```powershell
-scripts/rip.ps1 up
-# scripts/rip.sh up   (Linux/macOS)
+python scripts/rip.py up
 ```
 
 | Command | Effect |
@@ -125,7 +124,7 @@ Vite dev (`npm run dev`, port `5178` per `vite.config.ts`) proxies `/api/` + `/v
 
 ## 5. Smoke test
 
-0. `scripts/rip.ps1 health` — backend, frontend, postgres all OK.
+0. `python scripts/rip.py health` — backend, frontend, postgres all OK.
 1. Login (`POST /api/auth/login`, cookies kept) — all `/api/*` + `/v1/*` except health require it.
 2. Create notebook, upload PDF → `ready`.
 3. `POST /v1/runs {notebook_id, message}` → `202 {run_id}`.
@@ -142,7 +141,7 @@ Vite dev (`npm run dev`, port `5178` per `vite.config.ts`) proxies `/api/` + `/v
 
 ## Troubleshooting
 
-- **DB connect fail** → check `DB_*`, pgvector extension, `scripts/rip.ps1 migrate` to re-apply `schema.sql` (compose init runs once — see CAVEATS).
+- **DB connect fail** → check `DB_*`, pgvector extension, `python scripts/rip.py migrate` to re-apply `schema.sql` (compose init runs once — see CAVEATS).
 - **Ollama empty** → `OLLAMA_BASE_URL` reachable (host-local: `http://localhost:11434`; in-compose: your `.env` value — host gateway or LAN remote, gateway is the fallback), planner model pulled.
 - **Startup crash (models)** → BGE paths wrong; fix env.
 - **Upload stuck `processing`** → background `run_rag_pipeline` has no retry; re-`POST /process`.

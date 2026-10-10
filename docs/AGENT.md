@@ -66,7 +66,7 @@ frontend/src/
 | Backend tests | `pytest` | root |
 | Backend lint | `ruff` | root |
 | Frontend install/dev/lint/build | `npm install` / `npm run dev` / `npm run lint` / `npm run build` | `frontend/` |
-| Compose lifecycle | `scripts/rip.ps1 <up\|down\|fresh\|restart\|rebuild\|logs\|ps\|status\|migrate\|health\|help>` (`.sh` mirror on Linux/macOS; host remaps via `HOST_*_PORT`) — canonical; `up` rebuilds by default (`VITE_API_URL` bake); raw `docker compose` only for one-offs | root |
+| Compose lifecycle | `python scripts/rip.py <up\|down\|fresh\|restart\|rebuild\|logs\|ps\|status\|migrate\|health\|help>` (single cross-platform entrypoint; host remaps via `HOST_*_PORT`) — canonical; `up` rebuilds by default (`VITE_API_URL` bake); raw `docker compose` only for one-offs | root |
 
 ## 5.1 Host environments (`agent_env` vs `ml_env`)
 

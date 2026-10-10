@@ -63,7 +63,7 @@ services:
       start_period: 180s
     restart: unless-stopped
     mem_limit: ${BACKEND_MEM:-8g}
-    # Host-aware CPU quota: scripts/rip.* auto-export BACKEND_CPUS as
+    # Host-aware CPU quota: scripts/rip.py auto-exports BACKEND_CPUS as
     # (host logical cores - 1, min 2) unless already set in shell or .env.
     # Raw `docker compose` without the wrapper falls back to 2.0.
     cpus: ${BACKEND_CPUS:-2.0}
