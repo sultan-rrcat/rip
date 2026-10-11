@@ -79,7 +79,7 @@ _FENCED_CODE_SPLIT = re.compile(r"(```.*?```)", re.DOTALL)
 #: Machine outputs that never need conversation context even when terminal
 #: (a lone numbers/chunks step is shown via the aggregator's anti-blank
 #: fallback, but the step itself runs on task + upstream data alone).
-_MACHINE_OUTPUT_TYPES = frozenset({"chunks", "numbers"})
+_MACHINE_OUTPUT_TYPES = frozenset({"chunks", "numbers", "quiz_json"})
 
 # Athena default kept as a code constant (no new Settings key): attempts
 # beyond the first only help flaky steps; honest failure follows.
@@ -524,7 +524,7 @@ def _make_step_node(
     _eot = (step.expected_output_type or "text").lower()
     _visibility = (
         "hide"
-        if _eot in ("chunks", "numbers")
+        if _eot in ("chunks", "numbers", "quiz_json")
         or step.executor_id in ("notebook.inspect", "code.read", "code.sandbox")
         else "show"
     )

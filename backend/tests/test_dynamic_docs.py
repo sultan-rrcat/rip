@@ -88,7 +88,8 @@ class TestNotebookInspect:
         assert "notebook.inspect" in reg
         assert "doc.convert" in reg
         assert "code.read" in reg
-        assert len(reg) == 6
+        assert "quiz.generate" in reg
+        assert len(reg) == 8
 
 
 class TestDocConvert:

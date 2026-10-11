@@ -78,11 +78,13 @@ def get_default_tool_registry(
     from app.tools.doc_generate import DocGenerateTool
     from app.tools.notebook_inspect import NotebookInspectTool
     from app.tools.plot_chart import PlotChartTool
+    from app.tools.quiz_generate import QuizGenerateTool
     from app.tools.rag_query import RagQueryTool
 
     registry = ToolRegistry()
     registry.register(RagQueryTool(rag=rag, provider=provider))
     registry.register(PlotChartTool())
+    registry.register(QuizGenerateTool())
     registry.register(DocGenerateTool())
     registry.register(DocConvertTool())
     registry.register(NotebookInspectTool())

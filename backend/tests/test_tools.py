@@ -18,10 +18,12 @@ from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 EXPECTED_IDS = [
     "code.read",
+    "code.sandbox",
     "doc.convert",
     "doc.generate",
     "notebook.inspect",
     "plot.chart",
+    "quiz.generate",
     "rag.query",
 ]
 
@@ -92,7 +94,7 @@ class TestRegistry:
     def test_all_five_registered(self):
         reg = get_default_tool_registry(rag=FakeRAG())
         assert sorted(t["tool_id"] for t in reg.manifest()) == EXPECTED_IDS
-        assert len(reg) == 6
+        assert len(reg) == 8
 
     def test_all_inherit_tool(self):
         reg = get_default_tool_registry(rag=FakeRAG())

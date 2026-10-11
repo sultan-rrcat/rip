@@ -537,86 +537,155 @@ def build_summarize_plot(
     return Plan(plan_id=str(uuid.uuid4()), goal=request_text, steps=steps)
 
 
+_QUIZ_COUNT_RE = re.compile(r"(\d{1,2})\s*(?:mcqs?|msqs?|questions?|items?|problems?)", re.IGNORECASE)
+_QUIZ_TYPE_RE = re.compile(r"\b(msq|multiple[ -]select|multi[ -]select|multiple[ -]choice|mcq|true[ -]?false|tf)\b", re.IGNORECASE)
+
+
+def parse_quiz_params(request_text: str) -> tuple[int, str]:
+    """Deterministic quiz slots: (count, kind) from raw text (never LLM).
+
+    Count: first N in "N questions/MCQs/MSQs", clamped 2..50, default 10.
+    Kind: msq when the text says MSQ/multiple-select/multi-select,
+    truefalse when it says true/false / TF, else mcq (mixed requests also
+    land on mcq — the extraction prompt asks for a mix).
+    """
+    from app.tools.quiz_generate import (
+        QUIZ_MAX_QUESTIONS,
+        QUIZ_MAX_QUESTIONS_DEFAULT,
+        QUIZ_MIN_QUESTIONS,
+    )
+
+    count = QUIZ_MAX_QUESTIONS_DEFAULT
+    m = _QUIZ_COUNT_RE.search(request_text or "")
+    if m:
+        try:
+            count = max(QUIZ_MIN_QUESTIONS, min(QUIZ_MAX_QUESTIONS, int(m.group(1))))
+        except ValueError:
+            pass
+    lowered = (request_text or "").lower()
+    if re.search(r"\bmsqs?\b|multiple[ -]select|multi[ -]select", lowered):
+        kind = "msq"
+    elif re.search(r"\btrue[ -]?false\b|\btf\b", lowered):
+        kind = "truefalse"
+    else:
+        kind = "mcq"
+    return count, kind
+
+
+def _quiz_extraction_message(refs: str, request_text: str, count: int, kind: str, grounded: bool) -> str:
+    ground = (
+        f"Using ONLY these retrieved chunks ({refs}), "
+        if grounded
+        else "Using your general knowledge on the requested topic, "
+    )
+    type_line = {
+        "mcq": 'each with "type": "mcq", exactly 4 options and exactly 1 answer',
+        "msq": 'each with "type": "msq", exactly 4 options and 2-3 answers',
+        "truefalse": 'each with "type": "truefalse", exactly 2 options ("True", "False") and exactly 1 answer',
+    }[kind]
+    return (
+        f"{ground}write exactly {count} test questions covering the request. "
+        'Output EXACTLY one JSON object of the form {"questions": '
+        '[{"type": ..., "stem": ..., "options": [{"id": "o1", "text": ...}], '
+        '"answers": ["o1"], "explanation": ...}]} and NOTHING else — no prose, '
+        "no code fences. "
+        f"Question rules: {type_line}; every option a non-empty string with a "
+        'unique id ("o1".."o4"); every answer id must match one option; each '
+        "question a one-sentence explanation. "
+        + (_empty_answer_guidance() if grounded else "")
+        + f"Request: {request_text}"
+    )
+
+
 def build_quiz(
     query: str,
     request_text: str,
     notebook_context: str | None = None,
+    *,
+    count: int = 10,
+    kind: str = "mcq",
 ) -> Plan:
-    """Per-file overview shards, then ONE writer step.
+    """Per-file overview shards → ONE quiz_json extraction → quiz.generate.
 
-    Single writer (never fan-out) per planner Rule 9: splitting by
-    difficulty costs more and contends the single Ollama server.
-    Overview mode gives breadth for question coverage.
+    Single extractor (never fan-out): splitting by difficulty costs more
+    and contends the single Ollama server. Overview mode gives breadth for
+    question coverage. Pairing is by construction (one JSON object), the
+    same pattern as summarize_plot's numbers step (ADR-041).
     """
+
+    def _rag_step(sid: str, **kw: object) -> PlanStep:
+        base: dict = {
+            "query": query or request_text,
+            "top_k": _PER_FILE_TOP_K,
+            "mode": "overview",
+            # Builders ground on full text: never filter our evidence.
+            "verbatim": True,
+        }
+        base.update(kw)
+        return PlanStep(
+            step_id=sid, tool_id="rag.query", input=base,
+            expected_output_type="chunks",
+        )
+
     ready = _ready_files(notebook_context)[:5]
     steps: list[PlanStep] = []
-    if ready and len(ready) > 1:
+    if ready:
         for i, (_name, fid) in enumerate(ready, start=1):
-            steps.append(
-                PlanStep(
-                    step_id=str(i),
-                    tool_id="rag.query",
-                    input={
-                        "query": query or request_text,
-                        "top_k": _PER_FILE_TOP_K,
-                        "file_id": fid,
-                        "mode": "overview",
-                        # Builders ground on full text: never filter our evidence.
-                        "verbatim": True,
-                    },
-                    expected_output_type="chunks",
-                )
-            )
-        dep_ids = [s.step_id for s in steps]
-        refs = " ".join(f"{{{{{sid}}}}}" for sid in dep_ids)
-        steps.append(
-            PlanStep(
-                step_id=str(len(steps) + 1),
-                agent_id="reasoning",
-                input={
-                    "message": (
-                        f"Using ONLY these retrieved chunks ({refs}), "
-                        f"write the requested questions/quiz. "
-                        + _empty_answer_guidance()
-                        + f"Never mention chunk ids or placeholders. "
-                        f"Request: {request_text}{_presentation_suffix()}"
-                    )
-                },
-                depends_on=dep_ids,
-                expected_output_type="answer",
-            )
+            steps.append(_rag_step(str(i), file_id=fid))
+    else:
+        steps.append(_rag_step("1"))
+    dep_ids = [s.step_id for s in steps]
+    refs = " ".join(f"{{{{{sid}}}}}" for sid in dep_ids)
+    extract_id = str(len(steps) + 1)
+    steps.append(
+        PlanStep(
+            step_id=extract_id,
+            agent_id="reasoning",
+            input={"message": _quiz_extraction_message(refs, request_text, count, kind, grounded=True)},
+            depends_on=dep_ids,
+            expected_output_type="quiz_json",
         )
-        return Plan(plan_id=str(uuid.uuid4()), goal=request_text, steps=steps)
+    )
+    steps.append(
+        PlanStep(
+            step_id=str(len(steps) + 1),
+            tool_id="quiz.generate",
+            input={
+                "data": f"{{{{{extract_id}}}}}",
+                "title": " ".join((request_text or "").split())[:160] or "Quiz",
+            },
+            depends_on=[extract_id],
+            expected_output_type="quiz",
+        )
+    )
+    return Plan(plan_id=str(uuid.uuid4()), goal=request_text, steps=steps)
+
+
+def build_quiz_general(request_text: str, *, count: int = 10, kind: str = "mcq") -> Plan:
+    """General-knowledge quiz: no documents, answer from parametric knowledge.
+
+    Mirrors build_qa_no_docs: emitting rag.query would provably return
+    "(no chunks retrieved)" — ask the model to write the test directly.
+    """
     return Plan(
         plan_id=str(uuid.uuid4()),
         goal=request_text,
         steps=[
             PlanStep(
                 step_id="1",
-                tool_id="rag.query",
-                input={
-                    "query": query or request_text,
-                    "top_k": _PER_FILE_TOP_K,
-                    "mode": "overview",
-                    # Builders ground on full text: never filter our evidence.
-                    "verbatim": True,
-                },
-                expected_output_type="chunks",
+                agent_id="reasoning",
+                input={"message": _quiz_extraction_message("", request_text, count, kind, grounded=False)},
+                expected_output_type="quiz_json",
             ),
             PlanStep(
                 step_id="2",
-                agent_id="reasoning",
+                tool_id="quiz.generate",
                 input={
-                    "message": (
-                        "Using ONLY these retrieved chunks {{1}}, "
-                        "write the requested questions/quiz. "
-                        + _empty_answer_guidance()
-                        + "Never mention chunk ids or placeholders. "
-                        f"Request: {request_text}{_presentation_suffix()}"
-                    )
+                    "data": "{{1}}",
+                    "title": " ".join((request_text or "").split())[:160] or "Quiz",
                 },
                 depends_on=["1"],
-                expected_output_type="answer",
+                expected_output_type="quiz",
             ),
         ],
     )
@@ -1297,15 +1366,28 @@ def build(
         return build_plot_standalone(request_text)
     if route.intent is Intent.QUIZ:
         state = get_corpus_state(notebook_context)
-        if state in ("empty", "processing"):
+        count, kind = parse_quiz_params(request_text)
+        # Router slots win when explicitly set (ReAct/tests may carry them).
+        if getattr(route, "quiz_count", 0):
+            try:
+                count = max(2, min(50, int(route.quiz_count)))
+            except (TypeError, ValueError):
+                pass
+        if getattr(route, "quiz_kind", "") in ("mcq", "msq", "truefalse"):
+            kind = route.quiz_kind
+        if state == "processing":
             return build_no_docs_clarification(
-                request_text, processing=(state == "processing"),
+                request_text, processing=True,
                 intent=route.intent,
             )
+        if state == "empty":
+            # General-knowledge test (no documents): write from parametric
+            # knowledge instead of refusing — mirrors qa_single no-docs path.
+            return build_quiz_general(request_text, count=count, kind=kind)
         ready = _ready_files(notebook_context)
         if ready and len(ready) > 5:
             return None
-        return build_quiz(request_text, request_text, notebook_context)
+        return build_quiz(request_text, request_text, notebook_context, count=count, kind=kind)
     if route.intent is Intent.CONVERT_ALL:
         if not route.target_format:
             return None

@@ -170,6 +170,12 @@ def _collect_from_data(
             return _slug(title)
         return _safe(step_id)
 
+    def _quiz_filename() -> str:
+        stem = _stem()
+        if stem == _safe(step_id):
+            return f"{stem}.quiz.json"
+        return f"{_safe(step_id)}_{stem}.quiz.json"
+
     def _is_report() -> bool:
         """True for doc.generate payloads (title, no conversion markers)."""
         return (
@@ -257,6 +263,18 @@ def _collect_from_data(
     rows = data.get("rows")
     if isinstance(rows, list) and "row_count" in data:
         add("data", MIME_JSON, f"{step_id}.json", json.dumps(rows).encode("utf-8"))
+
+    quiz_json = data.get("quiz_json")
+    if isinstance(quiz_json, str) and quiz_json.strip():
+        try:
+            parsed = json.loads(quiz_json)
+            valid = isinstance(parsed, dict) and isinstance(parsed.get("questions"), list)
+        except ValueError:
+            valid = False
+        if valid:
+            add("quiz", MIME_JSON, _quiz_filename(), quiz_json.encode("utf-8"))
+        else:
+            logger.warning("artifact quiz_json undecodable run=%s step=%s", run_id, step_id)
 
     # code.sandbox review artifacts (ADR-050): changed-file bytes ride the
     # tool payload so the run worker persists them without re-executing.

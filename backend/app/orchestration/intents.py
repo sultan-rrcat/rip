@@ -40,7 +40,7 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
     Intent.PLOT_STANDALONE: "draw a chart from numbers given in the message",
     Intent.CONVERT_ONE: "re-render one ORIGINAL uploaded file to md/docx/pdf via convert/export/save-as (requires a named source file; write/create/generate/draft new content such as an email/letter/report in pdf is NOT convert)",
     Intent.CONVERT_ALL: "re-render all ORIGINAL uploaded files to md/docx/pdf via convert/export/save-as (requires all/every/each; new content is NOT convert)",
-    Intent.QUIZ: "generate questions, quiz, or MCQs from documents",
+    Intent.QUIZ: "generate questions, quiz, MCQs/MSQs, test or exam from documents or general knowledge",
     Intent.CODE: "software task with an explicit signal (language, code file e.g. .py/.js, data file e.g. .csv for analysis, traceback, function/class/test): write new code from scratch, analyze data files with pandas, or explain/review/debug/test/modify uploaded CODE files. Review/explain of document text (plan/report/checklist/architecture) is NOT code",
     Intent.UNKNOWN: "anything else or unclear",
 }

@@ -12,7 +12,8 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import type { Message, Source } from '@/types'
 import type { Artifact, PlanStep, RunView } from '@/types/runs'
 import ArtifactItem from '@/components/notebook/ChartArtifact'
-import { stripSvgFromText } from '@/components/notebook/artifact'
+import QuizArtifact from '@/components/notebook/QuizArtifact'
+import { stripArtifactsFromText } from '@/components/notebook/artifact'
 import AgentStatus from '@/components/notebook/AgentStatus'
 
 interface ChatAreaProps {
@@ -429,7 +430,7 @@ function AssistantMessage({
   }, [])
 
   async function handleCopyAnswer() {
-    const ok = await copyText(stripSvgFromText(text) ?? '')
+    const ok = await copyText(stripArtifactsFromText(text) ?? '')
     if (!ok) return
     setCopied(true)
     if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
@@ -477,7 +478,7 @@ function AssistantMessage({
               remarkPlugins={[remarkGfm]}
               components={markdownComponents}
             >
-              {stripSvgFromText(text)}
+              {stripArtifactsFromText(text)}
             </ReactMarkdown>
           )}
 
@@ -514,9 +515,9 @@ function AssistantMessage({
                   const sr = stepResults[step.step_id]
                   if (!sr) return null
                   const raw = sr.status === 'running' ? sr.delta || '' : sr.output || sr.delta || ''
-                  // Never dump raw chart SVG into the panel (same guard as
-                  // the main bubble): the chart renders via Artifacts <img>.
-                  const content = stripSvgFromText(raw) || ''
+                  // Never dump raw chart SVG / quiz JSON into the panel (same guard as
+                  // the main bubble): charts render via Artifacts <img>, quizzes via QuizArtifact.
+                  const content = stripArtifactsFromText(raw) || ''
                   const vis = sr.visibility ?? step.visibility ?? null
                   const eot = sr.expected_output_type ?? step.expected_output_type ?? null
                   const badge = vis === 'hide' ? 'hidden' : vis === 'show' ? 'shown' : null
@@ -545,7 +546,11 @@ function AssistantMessage({
               <ul className="space-y-2">
                 {artifacts.map((a) => (
                   <li key={a.artifact_id} className="text-[11px]">
-                    <ArtifactItem artifact={a} />
+                    {a.kind === 'quiz' ? (
+                      <QuizArtifact artifact={a} />
+                    ) : (
+                      <ArtifactItem artifact={a} />
+                    )}
                   </li>
                 ))}
               </ul>

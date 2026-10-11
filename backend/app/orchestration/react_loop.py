@@ -75,6 +75,7 @@ MAX_DAG_STEPS_PER_ITERATION = 5
 _TOOL_OUTPUT_TYPES = {
     "rag.query": "chunks",
     "plot.chart": "chart",
+    "quiz.generate": "quiz",
     "doc.generate": "document",
     "doc.convert": "document",
     "code.read": "text",
@@ -89,6 +90,9 @@ _TOOL_INPUT_HINTS = {
     'plus a short "title" naming the metric and comparison '
     '(e.g. {"title": "mAP@50-95: FASDD_CV vs AgniNetra"}) '
     "with literal numbers from observations",
+    "quiz.generate": 'quiz.generate needs {"questions": [{type: mcq|msq|truefalse, '
+    'stem, options: [{id, text}], answers: [option_id], explanation?}]} '
+    '(2-50 questions) or {"data": "<prior quiz_json step output>"}',
     "doc.convert": 'doc.convert needs {"file_id": "...", '
     '"target_format": "md|docx|pdf"}',
     "doc.generate": 'doc.generate needs {"title": "...", '
@@ -251,6 +255,12 @@ def _validate_react_input(
         ):
             return None
         return _TOOL_INPUT_HINTS["doc.generate"]
+    if executor == "quiz.generate":
+        if isinstance(action_input.get("questions"), list) and action_input.get("questions"):
+            return None
+        if isinstance(action_input.get("data"), str) and action_input.get("data").strip():
+            return None
+        return _TOOL_INPUT_HINTS["quiz.generate"]
     if executor == "code.read":
         if not has_files:
             return _code_read_hint(False)
@@ -277,6 +287,8 @@ def _infer_generic_executor(action_input: dict) -> str | None:
     keys = set(action_input or {})
     if "sections" in keys and "title" in keys:
         return "doc.generate"
+    if "questions" in keys or "quiz_json" in keys:
+        return "quiz.generate"
     if "chart_type" in keys:
         return "plot.chart"
     if "query" in keys:
@@ -493,6 +505,11 @@ def _synthesis_evidence_line(result, fingerprint: str = "") -> str:
         if fingerprint:
             return f"[{result.step_id} (plot.chart)] chart already generated: {fingerprint}"
         return f"[{result.step_id} (plot.chart)] chart already generated and shown in Artifacts"
+    if result.agent_id == "quiz.generate":
+        data = getattr(result, "data", None) or {}
+        count = data.get("question_count", "?")
+        title = data.get("title", "quiz")
+        return f"[{result.step_id} (quiz.generate)] quiz ready: {title} ({count} questions, interactive test in Artifacts)"
     limit = (
         _RETRIEVAL_SCRATCHPAD_LIMIT
         if result.agent_id in _RETRIEVAL_EXECUTORS
@@ -558,14 +575,15 @@ REACT_PROMPT_TEMPLATE = (
     "One COMPLETE DAG per turn (1-5 steps); if it fails you get the next iteration to repair it.\n"
     "Agents: {agent_ids}\nTools: {tool_ids}\n"
     "Shape (mandatory, never violated):\n"
-    '- each steps[] element is {"step_id": "1", "executor": "<one of coding, reasoning, code.read, code.sandbox, doc.convert, doc.generate, notebook.inspect, plot.chart, rag.query>", "input": {...}, '
-    '"depends_on": ["1"], "expected_output_type": "answer|text|chunks|numbers|chart|document"}. '
+    '- each steps[] element is {"step_id": "1", "executor": "<one of coding, reasoning, code.read, code.sandbox, doc.convert, doc.generate, notebook.inspect, plot.chart, quiz.generate, rag.query>", "input": {...}, '
+    '"depends_on": ["1"], "expected_output_type": "answer|text|chunks|numbers|quiz_json|quiz|chart|document"}. '
     'Legacy single-step {"executor","input"} is still accepted as a 1-step DAG.\n'
     '- input is a FLAT object, never nested under \'agent\'. WRONG: {"agent": {"message": "..."}}. RIGHT: {"query": "..."}.\n'
     '- agent step REQUIRES {"message": "<full task text>"} with observations inlined verbatim — never reference steps by number. A turn with an agent step but no input.message is INVALID.\n'
     "- tool step REQUIRES its flat fields: "
     'rag.query {"query": "...", "file_id": "..."}, '
     'plot.chart {"chart_type": "bar", "labels": [...], "values": [...], "title": "<metric>: A vs B"}, '
+    'quiz.generate {"questions": [{"type": "mcq|msq|truefalse", "stem": "...", "options": [{"id": "o1", "text": "..."}], "answers": ["o1"]}], "title": "..."} (or {"data": prior quiz_json output}), '
     'doc.convert {"file_id": "...", "target_format": "md|docx|pdf"}, '
     'doc.generate {"title": "...", "sections": [{"heading": ..., "body": ...}], "target_format": "md|docx|pdf"}, '
     "notebook.inspect {}, "
@@ -591,10 +609,13 @@ REACT_PROMPT_TEMPLATE = (
     "(overview for summarize/compare/quiz/overall-content, specific default otherwise). "
     "doc.generate creates a NEW report file from answer text (its pdf/docx output IS the deliverable); "
     "doc.convert only re-renders an ORIGINAL upload named in the snapshot — never convert a source file to satisfy a report ask.\n"
-    "5. Charts: bar/line MUST use plot.chart with literal numbers from observations (or a prior reasoning step) plus a short title naming metric and comparison. "
+    "5. Quiz/test/exam asks: write questions with a reasoning step emitting strict "
+    '{"questions": [...]} JSON (expected_output_type quiz_json), then ONE quiz.generate '
+    'step with {"data": {{id}}} (expected_output_type quiz) — never prose-only questions.\n'
+    "6. Charts: bar/line MUST use plot.chart with literal numbers from observations (or a prior reasoning step) plus a short title naming metric and comparison. "
     "When the notebook has no documents and no observation holds numbers, recall approximate figures with a reasoning step first (state they are approximate), then plot.chart. "
     "Each plot.chart covers a DIFFERENT metric; grouped comparisons use series:[{label, values}] with shared labels, never nested values arrays.\n"
-    "6. Final: is_final=true carries the polished user-facing Markdown answer (direct answer first, then detail; never expose thought/executor/step numbers). Empty answer is invalid.\n"
+    "7. Final: is_final=true carries the polished user-facing Markdown answer (direct answer first, then detail; never expose thought/executor/step numbers). Empty answer is invalid.\n"
     "doc.generate sections must carry the COMPLETE user-visible answer (full text verbatim, never a stub) — the file renders ONLY sections.\n"
     "Notebook documents:\n{notebook_context}"
 )

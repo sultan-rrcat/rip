@@ -47,12 +47,24 @@ from app.orchestration.placeholder import has_unresolved_placeholder
 #: never renders raw `<svg>` markup.
 CHART_PLACEHOLDER = "Chart generated — see Artifacts below."
 
+#: Placeholder replacing raw quiz JSON in the user-visible summary. The
+#: quiz payload travels via StepResult.data → SSE `artifacts` as a .quiz.json
+#: file and renders inline as an interactive test; the summary (and the
+#: persisted assistant message) carries only this short text.
+QUIZ_PLACEHOLDER = "Quiz ready — take the test below."
+
 
 def _summarizable(output: str | None) -> str:
     """Return placeholder when output carries chart SVG, else verbatim."""
     text = output or ""
     if "<svg" in text.lower():
         return CHART_PLACEHOLDER
+    # quiz.generate emits a short human summary as output, but ReAct or a
+    # legacy path may leak the raw quiz JSON into a terminal step — never
+    # render multi-KB JSON in chat; the interactive test renders via artifact.
+    stripped = text.strip()
+    if stripped.startswith("{") and '"questions"' in stripped:
+        return QUIZ_PLACEHOLDER
     return text
 
 
@@ -184,7 +196,7 @@ class Aggregator:
             if meta is None:
                 return False  # unknown step: fail-visible, never fail-blank
             eot = (meta.expected_output_type or "text").lower()
-            if eot in ("chunks", "numbers"):
+            if eot in ("chunks", "numbers", "quiz_json"):
                 return True
             # Evidence-gathering steps: the terminal synthesis carries the
             # answer; raw stdout/listings stay in the Steps panel. The

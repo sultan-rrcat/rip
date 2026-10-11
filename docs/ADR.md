@@ -354,6 +354,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-053: quiz.generate tool + interactive Test UI (MCQ/MSQ)
+
+- **Status:** Accepted (2026-10-11)
+- **Context:** QUIZ was prose-only: `build_quiz` fanned overview shards into one `reasoning` step writing markdown questions — no structure, no answers key, no scoring, and empty notebooks got an upload clarification even for general-knowledge tests.
+- **Decision:** (1) New `quiz.generate` tool: validates strict `{"questions": [...]}` JSON (`mcq|msq|truefalse`, 2–50 questions, 2–6 options, answer ids ⊆ option ids, mcq/truefalse exactly 1 answer) from literal `questions` or extracted `data` (fence-tolerant parse, same philosophy as plot.chart `data`); normalizes to `quiz_json` + `question_count`. (2) Builder becomes a 3-step DAG mirroring summarize_plot (ADR-041): overview shards → ONE `quiz_json` reasoning extraction (count/kind slots parsed deterministically: `N questions/MCQs/MSQs` clamped 2–50 default 10; msq/truefalse/mcq from text) → `quiz.generate {data: {{extract}}}`. Empty corpus goes general-knowledge (`build_quiz_general`, no rag.query — mirrors `build_qa_no_docs`); processing still clarifies. (3) Validator: `quiz_json`/`quiz` join the known types; `quiz.generate` with deps must reference a lone `{{id}}` to a `quiz_json` step, never rag chunks (copy of the plot `data` rule). Aggregator hides `quiz_json`, shows `quiz` as `Quiz ready — take the test below.` (raw JSON never reaches chat). Artifacts persist `quiz_json` as `kind: "quiz"` `.quiz.json`. (4) Frontend `QuizArtifact.tsx` renders inline in the chat bubble: radio (MCQ/truefalse) vs checkbox (MSQ), Submit → instant client-side score + explanations + Retry + Show-answers; JSON fetch by artifact URL so tests survive reload. No new API, no schema change.
+- **Consequences:** Tests resolve in a fixed DAG (one router call + shards + one extraction + validation); ReAct reaches `quiz.generate` via the manifest with one prompt rule. Scoring is client-side and ephemeral (no attempt history). Pinned by `test_quiz_generate.py` (tool/parse/builder/validator/aggregator/artifact) + updated `test_builders.py` quiz shapes.
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

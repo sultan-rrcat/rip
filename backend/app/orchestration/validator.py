@@ -43,7 +43,7 @@ _PROSE_STEP_REF = re.compile(
 #: variant of "answer" (both are terminal prose). Unknown types are allowed
 #: (forward-compatible — the aggregator treats them as SHOW) but logged.
 _KNOWN_OUTPUT_TYPES = frozenset({
-    "chunks", "answer", "numbers", "chart", "document", "text",
+    "chunks", "answer", "numbers", "quiz_json", "quiz", "chart", "document", "text",
     "clarification", "summary",
 })
 
@@ -357,6 +357,75 @@ class PlanValidator:
                             "rag.query chunks — route through a numbers-producing "
                             "reasoning step instead"
                         )
+            elif step.tool_id == "quiz.generate":
+                step_input = step.input if isinstance(step.input, dict) else {}
+                questions = step_input.get("questions")
+                data = step_input.get("data")
+                provided = sum(x is not None for x in (questions, data))
+                if provided == 0:
+                    raise PlanValidationError(
+                        f"step {step.step_id} (quiz.generate) is missing required "
+                        "input field 'questions' (or 'data' for extracted JSON) — "
+                        "refusing to execute an unguarded tool call"
+                    )
+                if provided > 1:
+                    raise PlanValidationError(
+                        f"step {step.step_id} (quiz.generate) passes both "
+                        "'questions' and 'data' — pass exactly one "
+                        "(literal questions vs extracted JSON)"
+                    )
+                if data is not None:
+                    # Extracted-JSON path (quiz builder): ONE upstream
+                    # reasoning step emits the whole {"questions": [...]}
+                    # object, so pairing is by construction.
+                    if step.depends_on:
+                        refs = placeholders_in(data)
+                        if not refs:
+                            raise PlanValidationError(
+                                f"step {step.step_id} (quiz.generate) depends on "
+                                f"{sorted(step.depends_on)} but its data carries no "
+                                "{{{id}}} placeholder — dependent quiz steps must reference "
+                                "upstream quiz_json, never hardcoded literals"
+                            )
+                        if len(refs) != 1:
+                            raise PlanValidationError(
+                                f"step {step.step_id} (quiz.generate) data references "
+                                f"multiple upstream steps {sorted(refs)} — fan them "
+                                "into ONE extraction step first, then reference only it"
+                            )
+                        if (
+                            isinstance(data, str)
+                            and _PLACEHOLDER.search(data)
+                            and not _PLACEHOLDER.fullmatch(data.strip())
+                        ):
+                            raise PlanValidationError(
+                                f"step {step.step_id} (quiz.generate) data mixes a "
+                                "placeholder with surrounding text — data must be a "
+                                "lone {{{id}}} placeholder or pure JSON text"
+                            )
+                        for ref in refs:
+                            target = by_id.get(ref)
+                            if target is None:
+                                continue
+                            target_eot = (target.expected_output_type or "text").lower()
+                            if target_eot != "quiz_json":
+                                raise PlanValidationError(
+                                    f"step {step.step_id} (quiz.generate) data references "
+                                    f"step {ref} ({target_eot or 'text'}), but quiz data "
+                                    "must reference a quiz_json-producing step"
+                                )
+                        direct = [by_id[d] for d in step.depends_on if d in by_id]
+                        if any(
+                            d.tool_id == "rag.query"
+                            and (d.expected_output_type or "").lower() == "chunks"
+                            for d in direct
+                        ):
+                            raise PlanValidationError(
+                                f"step {step.step_id} (quiz.generate) depends directly on "
+                                "rag.query chunks — route through a quiz_json-producing "
+                                "reasoning step instead"
+                            )
+                    continue
             elif step.tool_id == "doc.generate":
                 if step.depends_on:
                     ups = upstream(step.step_id)

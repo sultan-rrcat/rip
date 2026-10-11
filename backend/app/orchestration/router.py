@@ -72,9 +72,15 @@ _CHAT_RE = re.compile(
     r"good morning|good afternoon|good evening|bye|goodbye)[.!]*$",
     re.IGNORECASE,
 )
-_QUIZ_RE = re.compile(r"\b(quiz|mcqs?|multiple[ -]choice|flashcards)\b", re.IGNORECASE)
+_QUIZ_RE = re.compile(
+    r"\b(quiz|quizzes|mcqs?|msqs?|multiple[ -]choice|multiple[ -]select|flashcards|practice[ -]test|exam)\b|\btest me\b|\btest\b.{0,20}\b(on|over|about|covering)\b",
+    re.IGNORECASE,
+)
 _QUIZ_VERB_RE = re.compile(
-    r"\b(generate|create|make|write|give|produce)\b", re.IGNORECASE
+    r"\b(generate|create|make|write|give|produce|test|quiz)\b", re.IGNORECASE
+)
+_QUIZ_COUNT_SLOT_RE = re.compile(
+    r"(\d{1,2})\s*(?:mcqs?|msqs?|questions?|items?|problems?)", re.IGNORECASE
 )
 _CODE_EXPLICIT_RE = re.compile(
     r"(self-contained\s+(html|page|website)"
@@ -120,6 +126,27 @@ def _extract_target_format(request_text: str) -> str:
     if token == "markdown":
         return "md"
     return token if token in _CONVERT_FORMATS else ""
+
+
+def _extract_quiz_slots(request_text: str) -> tuple[int, str]:
+    """Deterministic quiz slots: (count 0=unstated, kind ""=unstated)."""
+    count = 0
+    m = _QUIZ_COUNT_SLOT_RE.search(request_text or "")
+    if m:
+        try:
+            count = max(2, min(50, int(m.group(1))))
+        except ValueError:
+            count = 0
+    lowered = (request_text or "").lower()
+    if re.search(r"\bmsqs?\b|multiple[ -]select|multi[ -]select", lowered):
+        kind = "msq"
+    elif re.search(r"\btrue[ -]?false\b", lowered):
+        kind = "truefalse"
+    elif re.search(r"\bmcq\b|multiple[ -]choice\b", lowered):
+        kind = "mcq"
+    else:
+        kind = ""
+    return count, kind
 
 
 def _extract_file_hint(request_text: str, intent: Intent) -> str:
@@ -340,7 +367,7 @@ ROUTER_PROMPT_TEMPLATE = (
     "7. summarize: text summary/abstract/overview/review/critique of docs "
     "(e.g. 'review the plan in the doc'), no chart, no "
     "questions.\n"
-    "8. quiz: questions/quiz/MCQs/flashcards from docs.\n"
+    "8. quiz: questions/quiz/MCQs/MSQs/test/exam/flashcards from docs or general knowledge.\n"
     "9. qa_single: one factual question answered from docs.\n"
     "10. chat: pure greeting/thanks/small-talk/farewell ONLY, no document "
     "question, no task. A greeting plus any task routes to the task, "
@@ -407,6 +434,11 @@ class RouterResult(BaseModel):
     # covers greenfield generation with no files attached).
     file_hint: str = ""
     target_format: str = ""
+    # Quiz slots (deterministic, parsed from raw text): quiz_count 2..50
+    # (0 = unstated → builder default 10), quiz_kind mcq|msq|truefalse
+    # ("" = unstated → builder parses kind from text).
+    quiz_count: int = 0
+    quiz_kind: str = ""
 
 
 class Router:
@@ -433,6 +465,7 @@ class Router:
         except Exception:  # noqa: BLE001 - regex must never break routing
             rule_intent = None
         if rule_intent is not None:
+            qc, qk = _extract_quiz_slots(request_text) if rule_intent is Intent.QUIZ else (0, "")
             return RouterResult(
                 intent=rule_intent,
                 confidence=1.0,
@@ -444,6 +477,8 @@ class Router:
                     in (Intent.CONVERT_ONE, Intent.CONVERT_ALL)
                     else ""
                 ),
+                quiz_count=qc,
+                quiz_kind=qk,
             )
 
         system_prompt = _build_system_prompt(_corpus_hint_for_router(notebook_context))
@@ -500,6 +535,7 @@ class Router:
             if intent in (Intent.CONVERT_ONE, Intent.CONVERT_ALL)
             else ""
         )
+        quiz_count, quiz_kind = _extract_quiz_slots(request_text) if intent is Intent.QUIZ else (0, "")
         if intent in (Intent.CONVERT_ONE, Intent.CONVERT_ALL) and (
             not file_hint or not target_format
         ):
@@ -529,4 +565,6 @@ class Router:
             routed_by="llm",
             file_hint=file_hint,
             target_format=target_format,
+            quiz_count=quiz_count,
+            quiz_kind=quiz_kind,
         )

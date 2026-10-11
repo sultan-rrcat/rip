@@ -94,8 +94,10 @@ def test_quiz_multi_file_overview() -> None:
     from app.orchestration.builders import build_quiz
 
     plan = build_quiz("key concepts", "make quiz", _SNAPSHOT)
-    assert len(plan.steps) == 3
+    assert len(plan.steps) == 4  # 2 shards + quiz_json extract + quiz.generate
     assert all(s.input.get("mode") == "overview" for s in plan.steps[:2])
+    assert plan.steps[2].expected_output_type == "quiz_json"
+    assert plan.steps[3].tool_id == "quiz.generate"
     _validator().validate(plan)
 
 
@@ -172,10 +174,27 @@ def test_quiz_single_writer_shape() -> None:
         routed_by="llm",
     )
     plan = build("make 10 MCQs", route)
-    assert plan is not None and len(plan.steps) == 2
+    assert plan is not None and len(plan.steps) == 3
     assert plan.steps[0].tool_id == "rag.query"
+    assert plan.steps[1].expected_output_type == "quiz_json"
     assert plan.steps[1].depends_on == ["1"]
     assert "{{1}}" in str(plan.steps[1].input)
+    assert plan.steps[2].tool_id == "quiz.generate"
+    assert plan.steps[2].depends_on == ["2"]
+    assert "{{2}}" in str(plan.steps[2].input)
+    _validator().validate(plan)
+
+
+def test_quiz_empty_corpus_goes_general_knowledge() -> None:
+    route = RouterResult(
+        intent=Intent.QUIZ, confidence=0.85,
+        routed_by="llm",
+    )
+    plan = build("quiz me on python", route, "(no documents)")
+    assert plan is not None and len(plan.steps) == 2
+    assert plan.steps[0].expected_output_type == "quiz_json"
+    assert plan.steps[1].tool_id == "quiz.generate"
+    assert all(s.tool_id != "rag.query" for s in plan.steps)
     _validator().validate(plan)
 
 
@@ -428,7 +447,7 @@ def test_qa_single_unknown_snapshot_still_retrieves() -> None:
 
 
 def test_doc_intents_empty_corpus_yield_clarification() -> None:
-    for intent in (Intent.SUMMARIZE, Intent.COMPARE_MULTI, Intent.QUIZ):
+    for intent in (Intent.SUMMARIZE, Intent.COMPARE_MULTI):
         route = RouterResult(
             intent=intent, confidence=0.9, routed_by="llm",
         )
@@ -436,6 +455,13 @@ def test_doc_intents_empty_corpus_yield_clarification() -> None:
         assert plan is not None and len(plan.steps) == 1, intent
         assert (plan.steps[0].expected_output_type or "").lower() == "clarification"
         _validator().validate(plan)
+    # QUIZ on empty corpus goes general-knowledge (parametric test, no rag.query)
+    # instead of a clarification — mirrors qa_single no-docs behavior.
+    quiz_route = RouterResult(intent=Intent.QUIZ, confidence=0.9, routed_by="llm")
+    quiz_plan = build("quiz me on python", quiz_route, "(no documents)")
+    assert quiz_plan is not None and len(quiz_plan.steps) == 2
+    assert quiz_plan.steps[1].tool_id == "quiz.generate"
+    _validator().validate(quiz_plan)
 
 
 def test_corpus_state_tristate() -> None:

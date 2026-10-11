@@ -52,6 +52,7 @@ MAX_LEN: dict[str, int] = {
 TOOL_IDS: tuple[str, ...] = (
     "rag.query",
     "plot.chart",
+    "quiz.generate",
     "doc.generate",
     "doc.convert",
     "notebook.inspect",
@@ -159,11 +160,13 @@ def _tool_seed_descriptions() -> dict[str, str]:
     from app.tools.doc_generate import DocGenerateTool
     from app.tools.notebook_inspect import NotebookInspectTool
     from app.tools.plot_chart import PlotChartTool
+    from app.tools.quiz_generate import QuizGenerateTool
     from app.tools.rag_query import RagQueryTool
 
     return {
         "rag.query": RagQueryTool.description,
         "plot.chart": PlotChartTool.description,
+        "quiz.generate": QuizGenerateTool.description,
         "doc.generate": DocGenerateTool.description,
         "doc.convert": DocConvertTool.description,
         "notebook.inspect": NotebookInspectTool.description,
@@ -181,10 +184,11 @@ def _tool_meta() -> dict[str, dict[str, Any]]:
     from app.tools.doc_generate import DocGenerateTool
     from app.tools.notebook_inspect import NotebookInspectTool
     from app.tools.plot_chart import PlotChartTool
+    from app.tools.quiz_generate import QuizGenerateTool
     from app.tools.rag_query import RagQueryTool
 
     out: dict[str, dict[str, Any]] = {}
-    for cls in (RagQueryTool, PlotChartTool, DocGenerateTool,
+    for cls in (RagQueryTool, PlotChartTool, QuizGenerateTool, DocGenerateTool,
                 DocConvertTool, NotebookInspectTool, CodeReadTool,
                 CodeSandboxTool):
         out[cls.tool_id] = {

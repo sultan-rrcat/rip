@@ -77,7 +77,7 @@ A named capability (reasoning). Agents execute steps that require LLM reasoning.
 _Avoid_: AgentPlugin, model, brain
 
 **Tool**:
-A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `doc.generate` (make reports from answer text), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless). Tools receive structured input and return structured output.
+A named function that performs a specific action: `rag.query` (search documents), `notebook.inspect` (list notebook files), `plot.chart` (make charts), `quiz.generate` (validate quiz JSON into an interactive test), `doc.generate` (make reports from answer text), `doc.convert` (exact PDF→md/docx/pdf conversion, lossless). Tools receive structured input and return structured output.
 _Avoid_: ToolPlugin, function, capability
 
 **Plan DAG**:
