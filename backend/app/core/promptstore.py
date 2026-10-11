@@ -44,6 +44,7 @@ REQUIRED_PLACEHOLDERS: dict[str, tuple[str, ...]] = {
 MAX_LEN: dict[str, int] = {
     "builders.presentation_suffix": MAX_FRAGMENT_LEN,
     "builders.empty_answer_guidance": MAX_FRAGMENT_LEN,
+    "router.code_hint": MAX_FRAGMENT_LEN,
     "agent.reasoning.description": MAX_DESCRIPTION_LEN,
     "agent.coding.description": MAX_DESCRIPTION_LEN,
 }
@@ -99,6 +100,9 @@ PROMPT_SPECS: dict[str, tuple[str, str, str]] = {
     "router.corpus_suffix": (
         "router", "Corpus-hint suffix",
         "Appended when a notebook hint exists. Requires {corpus_hint}."),
+    "router.code_hint": (
+        "router", "Code-only hint",
+        "CODE-ONLY sentence spliced into the notebook hint. Names the verbs that keep code tasks on CODE (run/test/execute/fix + review/explain)."),
     "react.system_prompt": (
         "react", "ReAct template",
         "Requires {agent_ids}, {tool_ids} (enabled tools only), {notebook_context}."),
@@ -125,6 +129,7 @@ def _seed_map() -> dict[str, str]:
     )
     from app.orchestration.react_loop import REACT_PROMPT_TEMPLATE
     from app.orchestration.router import (
+        _CODE_ONLY_HINT_SEED,
         ROUTER_CORPUS_SUFFIX_TEMPLATE,
         ROUTER_PROMPT_TEMPLATE,
     )
@@ -137,6 +142,7 @@ def _seed_map() -> dict[str, str]:
         "agent.coding.description": CODING_DESCRIPTION,
         "router.system_prompt": ROUTER_PROMPT_TEMPLATE,
         "router.corpus_suffix": ROUTER_CORPUS_SUFFIX_TEMPLATE,
+        "router.code_hint": _CODE_ONLY_HINT_SEED,
         "react.system_prompt": REACT_PROMPT_TEMPLATE,
         "rag.filter_prompt": _FILTER_SYSTEM_PROMPT,
         "builders.presentation_suffix": _PRESENTATION_SUFFIX_SEED,

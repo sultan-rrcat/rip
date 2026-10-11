@@ -89,6 +89,27 @@ _CHART_WORD_RE = re.compile(
 )
 _LABEL_VALUE_RE = re.compile(r"[A-Za-z][\w ]*\s*:\s*\d+(?:\.\d+)?")
 
+#: Seed prose for the admin-editable router.code_hint fragment (see
+#: app/core/promptstore.py). The live value is read per route via
+#: _code_only_hint() so admin edits apply to the next run without a
+#: restart. Must name run/test/execute — the 86967c65 trace showed a
+#: "run app.py and test" ask over a CODE-ONLY notebook routing to
+#: unknown because the old hint listed only read/review/explain/debug.
+_CODE_ONLY_HINT_SEED = (
+    " A request to run/test/execute/fix or read/review/explain/debug/"
+    "identify issues in THOSE files is a CODE task, not summarize."
+)
+
+
+def _code_only_hint() -> str:
+    """Live CODE-ONLY sentence (admin override or code seed)."""
+    from app.core.promptstore import get_prompt
+
+    try:
+        return get_prompt("router.code_hint")
+    except KeyError:
+        return _CODE_ONLY_HINT_SEED
+
 
 def _extract_target_format(request_text: str) -> str:
     """Deterministic format slot: md|docx|pdf or "" when unstated."""
@@ -233,8 +254,7 @@ def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
                 f"Notebook file state: CODE-ONLY — no searchable documents, "
                 f"but {len(code)} ready code file(s) present."
                 + (f" Names: {code_names}." if code_names else "")
-                + " A request to read/review/explain/debug/identify issues "
-                "in THOSE files is a CODE task, not summarize."
+                + _code_only_hint()
             )
         if data and not code:
             return (
@@ -293,7 +313,8 @@ ROUTER_PROMPT_TEMPLATE = (
     "traceback/error, function/class/test/refactor, or "
     "greenfield build (script/app/page/site/component). The notebook "
     "file list itself counts as the signal: when it names ready code "
-    "files and the request asks to read/review/explain/debug those "
+    "files and the request asks to run/test/execute/fix or "
+    "read/review/explain/debug those "
     "files, that IS code; when it names ready data (CSV) files and the "
     "request asks to analyze/summarize/plot them, that IS code too. Review/explain/"
     "summarize/critique of DOCUMENT content (plan/report/checklist/"
@@ -331,7 +352,7 @@ ROUTER_PROMPT_TEMPLATE = (
     "is summarize_plot even when the request also says compare; a chart "
     "verb plus literal numbers in the message is plot_standalone; "
     "review/explain of document prose is summarize/qa_single, never code; "
-    "review/explain of notebook code files is code, never summarize.\n"
+    "run/test/execute/review/explain of notebook code files is code, never summarize.\n"
     "Follow-ups: a formatting-only fragment (table/bullets) inherits the "
     "prior intent unless it adds a new chart/convert/code/quiz verb. "
     "Always classify the COMBINED intent.\n"
