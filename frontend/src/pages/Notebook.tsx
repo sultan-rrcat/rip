@@ -97,8 +97,15 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [studioOpen, setStudioOpen] = useState(false)
+  // Both side panels visible on first paint at desktop widths; closed on
+  // small screens where they are slide-over drawers. Initialized from the
+  // viewport once (not a live media query) so a resize never yanks panels.
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window === 'undefined' || window.innerWidth >= 768,
+  )
+  const [studioOpen, setStudioOpen] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth >= 1024,
+  )
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
   const studio = useStudio(notebook_id)
 
@@ -118,7 +125,7 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
     }
   }, [])
 
-  // Keyboard: `/` focuses the composer, `Esc` closes the sources drawer.
+  // Keyboard: `/` focuses the composer, `Esc` closes the side drawers.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null
@@ -187,7 +194,7 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
         className={
           sidebarOpen
             ? 'sidebar-enter fixed inset-y-0 left-0 z-40 w-[300px] max-w-[85vw] p-2 md:static md:z-auto md:block md:w-auto md:max-w-none md:p-0'
-            : 'hidden md:block'
+            : 'hidden'
         }
       >
         <div className="h-full md:h-full">
@@ -226,7 +233,8 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
               onClick={() => setSidebarOpen((v) => !v)}
               aria-label={sidebarOpen ? 'Hide sources panel' : 'Show sources panel'}
               aria-expanded={sidebarOpen}
-              className="flex h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink md:hidden"
+              title="Sources — knowledge base"
+              className={`flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-paper hover:text-ink ${sidebarOpen ? 'bg-paper text-ink' : 'text-ink-soft/70'}`}
             >
               <MenuIcon sx={{ fontSize: 18 }} />
             </button>
