@@ -9,6 +9,11 @@
 # the full `opencode run …` command per execution.
 FROM node:22-slim
 
+# Build-time proxy (ARG only, not persisted): npm reads env during RUN.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+
 RUN npm i -g @opencode/cli@2.0.24 \
     && npm cache clean --force \
     && opencode --version
