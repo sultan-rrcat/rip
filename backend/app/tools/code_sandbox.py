@@ -64,6 +64,39 @@ _EMBED_MARKERS = ("bge", "embed")
 _SBX_ARTIFACT_MAX_FILES = 8
 _SBX_ARTIFACT_MAX_BYTES = 100 * 1024
 
+#: Ephemeral runner debris never kept as review artifacts: the sandbox agent
+#: typically runs pytest/linters inside /work, which scatters bytecode and
+#: cache files next to the real deliverable (e.g. test_cal.py + __pycache__/
+#: + .pytest_cache/). Only opencode.json was skipped before, so a green run
+#: reported changed=8 and filled Artifacts with .pyc/README/CACHEDIR files.
+_SBX_IGNORE_DIRS = frozenset({
+    "__pycache__", ".pytest_cache", ".hypothesis", ".mypy_cache",
+    ".ruff_cache", ".tox", ".nox", ".venv", "venv", "node_modules",
+    ".git", ".eggs",
+})
+_SBX_IGNORE_FILES = frozenset({
+    ".coverage", ".coverage.*", "coverage.xml",
+})
+_SBX_IGNORE_SUFFIXES = (".pyc", ".pyo")
+
+
+def _is_ephemeral_rel(rel: str) -> bool:
+    """True when a /work-relative path is runner debris, not a deliverable."""
+    parts = (rel or "").replace("\\", "/").split("/")
+    for part in parts:
+        lowered = part.lower()
+        if lowered in _SBX_IGNORE_DIRS:
+            return True
+        if lowered.endswith(".egg-info"):
+            return True
+    name = parts[-1] if parts else ""
+    lowered_name = name.lower()
+    if lowered_name in _SBX_IGNORE_FILES:
+        return True
+    if lowered_name.startswith(".coverage."):
+        return True
+    return lowered_name.endswith(_SBX_IGNORE_SUFFIXES)
+
 
 def _run_container(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess:
     """Run one sandbox container (monkeypatched in tests).
@@ -446,12 +479,16 @@ class CodeSandboxTool(Tool):
                 if fetched.returncode != 0:
                     notes.append("change-scan incomplete: docker cp back failed")
                 else:
-                    for root, _, filenames in os.walk(fetch):
+                    skipped_ephemeral = 0
+                    for root, _dirnames, filenames in os.walk(fetch):
                         for filename in filenames:
                             if filename == "opencode.json":
                                 continue
                             full = os.path.join(root, filename)
                             rel = os.path.relpath(full, fetch).replace(os.sep, "/")
+                            if _is_ephemeral_rel(rel):
+                                skipped_ephemeral += 1
+                                continue
                             with open(full, "rb") as f:
                                 blob = f.read()
                             if originals.get(rel) != blob:
@@ -471,6 +508,10 @@ class CodeSandboxTool(Tool):
                                     "filename": rel,
                                     "b64": base64.b64encode(blob).decode("ascii"),
                                 })
+                    if skipped_ephemeral:
+                        notes.append(
+                            f"skipped {skipped_ephemeral} ephemeral file(s) "
+                            "(__pycache__/.pytest_cache/bytecode, not review artifacts)")
             except FileNotFoundError:
                 notes.append("change-scan incomplete: docker CLI went away")
             except OSError as e:

@@ -270,6 +270,30 @@ def test_oversize_change_observed_but_not_kept(monkeypatch, tmp_path):
     assert "exceeds" in (resp.output or "")
 
 
+def test_ephemeral_pytest_debris_ignored(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("fid-0", "cal.py")])
+    monkeypatch.setattr(sbx, "_match_scope",
+                        lambda scope, files: ([("fid-0", "cal.py")], []))
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+    _make_daemon(monkeypatch, out_files={
+        "test_cal.py": "def test_a(): pass\n",
+        "__pycache__/test_cal.cpython-311-pytest-9.1.1.pyc": "bytecode",
+        "__pycache__/cal.cpython-311.pyc": "bytecode",
+        ".pytest_cache/README.md": "readme",
+        ".pytest_cache/CACHEDIR.TAG": "tag",
+        ".pytest_cache/v/cache/lastfailed": "{}",
+        ".pytest_cache/v/cache/nodeids": "[]",
+    })
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is True
+    assert resp.data["changed_files"] == ["test_cal.py"]
+    assert [e["filename"] for e in resp.data["sandbox_files"]] == ["test_cal.py"]
+    assert "skipped" in (resp.output or "") and "ephemeral" in (resp.output or "")
+
+
 def test_pick_model_unreachable_falls_back():
     model, reachable = sbx._pick_model("http://127.0.0.1:9", "pref-model")
     assert (model, reachable) == ("pref-model", False)
