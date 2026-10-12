@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import { getMessagesAPI, createMessageAPI, updateMessageAPI } from '@/services/messages'
+import { getMessagesAPI, createMessageAPI, updateMessageAPI, clearMessagesAPI } from '@/services/messages'
 import { createRun, subscribeToRunEvents, cancelRun } from '@/services/runs'
 import type { Artifact, Message, Source } from '@/types'
 import type { RunEvent, RunView, PlanStep, StepResultView } from '@/types/runs'
@@ -569,6 +569,68 @@ export function useMessages(notebook_id: string | undefined) {
     // stays open for it.
   }, [activeRun])
 
+  // Regenerate: fresh run from the last user message (no new row).
+  // Disabled while a run is in flight or when there is no user message.
+  // `isRunning` state (not the ref) drives the flag so render stays pure.
+  const lastUserText = [...messages].reverse().find((m) => m.role === 'user')?.text ?? null
+  const canRegenerate = !isRunning && lastUserText !== null && lastUserText.trim().length > 0
+
+  const handleRegenerate = useCallback(async () => {
+    if (!notebook_id || isRunningRef.current) return
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user')
+    if (!lastUser || !lastUser.text.trim()) return
+    isRunningRef.current = true
+    nbRef.current = notebook_id
+    setIsRunning(true)
+    const assistantTempId = uuidv4()
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantTempId,
+        role: 'assistant',
+        text: '',
+        status: 'streaming',
+        sources: [],
+      },
+    ])
+    try {
+      const runId = await createRun(notebook_id, lastUser.text)
+      attach(runId, assistantTempId, '')
+    } catch (err) {
+      isRunningRef.current = false
+      setIsRunning(false)
+      const errorText = `Something went wrong. Error: ${err}`
+      try {
+        const errorMessage = await createMessageAPI(notebook_id, 'error', errorText)
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantTempId ? errorMessage : m)),
+        )
+      } catch {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantTempId
+              ? { ...m, role: 'error' as const, text: errorText, status: 'done' as const }
+              : m,
+          ),
+        )
+      }
+    }
+  }, [notebook_id, attach, messages])
+
+  // Clear chat: server-side delete (owner-scoped) + local reset.
+  // Runs/run_events are untouched (replay stays valid); local run
+  // snapshots and pending-run keys are dropped with the messages.
+  const handleClearChat = useCallback(async () => {
+    if (!notebook_id || isRunningRef.current) return
+    nbRef.current = notebook_id
+    await clearMessagesAPI(notebook_id)
+    detach()
+    setPastRuns({})
+    localStorage.removeItem(activeKey(notebook_id))
+    localStorage.removeItem(persistedKey(notebook_id))
+    setMessages(DEFAULT_MESSAGES)
+  }, [notebook_id, detach])
+
   // Edit + resend: persist the rewritten user message (the backend also
   // truncates the stale tail), drop the tail locally, and start a fresh
   // run from the edited text. Throws on PUT failure so the inline
@@ -638,5 +700,9 @@ export function useMessages(notebook_id: string | undefined) {
     handleSendMessage,
     handleEditMessage,
     handleCancelRun,
+    handleRegenerate,
+    handleClearChat,
+    canRegenerate,
+    lastUserText,
   }
 }

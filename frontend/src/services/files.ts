@@ -2,6 +2,24 @@ import { API } from '@/config'
 import { request, jsonInit } from '@/services/http'
 import type { FileStatus, NotebookFile, FilePreview } from '@/types'
 
+// Must stay in sync with backend/app/core/config.py:
+// allowed_extensions + max_upload_size_mb. Single source for the
+// file input accept list, the empty-state hint, and client guards.
+export const MAX_UPLOAD_SIZE_MB = 50
+export const MAX_UPLOAD_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+export const ALLOWED_EXTENSIONS = [
+  '.pdf', '.doc', '.docx', '.txt', '.md', '.csv',
+  '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.c', '.cpp', '.h', '.hpp',
+  '.cs', '.go', '.rs', '.rb', '.php', '.swift', '.kt', '.scala', '.r',
+  '.m', '.sh', '.ps1', '.sql', '.html', '.css', '.scss', '.less',
+  '.json', '.xml', '.yaml', '.yml', '.toml', '.ini',
+] as const
+export const FILE_ACCEPT = ALLOWED_EXTENSIONS.join(',')
+export function extensionOfFile(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.slice(dot).toLowerCase() : ''
+}
+
 export function getFilesAPI(notebookId: string): Promise<NotebookFile[]> {
   return request<NotebookFile[]>(`/api/notebooks/${notebookId}/files`)
 }

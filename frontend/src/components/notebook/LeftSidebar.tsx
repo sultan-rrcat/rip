@@ -8,14 +8,22 @@ import TableChartIcon from '@mui/icons-material/TableChart'
 import CodeIcon from '@mui/icons-material/Code'
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
 import DeleteIcon from '@mui/icons-material/Delete'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import CloseIcon from '@mui/icons-material/Close'
 import { useState, memo } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import type { NotebookFile } from '@/types'
+import { FILE_ACCEPT } from '@/services/files'
 
 interface LeftSidebarProps {
   files: NotebookFile[]
+  uploadError: string | null
+  onDismissUploadError: () => void
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void
   onDelete: (fileId: string) => void
+  onRetry: (fileId: string) => void
+  onReprocess: (fileId: string) => void
+  onDismissFileError: (fileId: string) => void
   onPreview: (file: NotebookFile) => void
   onRenameNotebook: (name: string) => void
   notebookName: string
@@ -23,8 +31,13 @@ interface LeftSidebarProps {
 
 const LeftSidebar = memo(function LeftSidebar({
   files,
+  uploadError,
+  onDismissUploadError,
   onUpload,
   onDelete,
+  onRetry,
+  onReprocess,
+  onDismissFileError,
   onPreview,
   onRenameNotebook,
   notebookName,
@@ -101,7 +114,7 @@ const LeftSidebar = memo(function LeftSidebar({
             <input
               id="file-upload"
               type="file"
-              accept=".pdf,.doc,.docx,.md,.txt,.py,.csv"
+              accept={FILE_ACCEPT}
               multiple
               className="hidden"
               onChange={onUpload}
@@ -114,6 +127,19 @@ const LeftSidebar = memo(function LeftSidebar({
               <AddIcon fontSize="small" />
               Add sources
             </label>
+            {uploadError && (
+              <div role="alert" className="mt-2 flex items-start gap-2 rounded-md border border-rust/50 bg-rust/[0.07] px-2.5 py-2 text-[11px] leading-snug text-rust">
+                <span className="min-w-0 flex-1">{uploadError}</span>
+                <button
+                  type="button"
+                  onClick={onDismissUploadError}
+                  aria-label="Dismiss upload error"
+                  className="rounded p-0.5 hover:bg-rust/10"
+                >
+                  <CloseIcon sx={{ fontSize: 14 }} />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* file list  */}
@@ -126,7 +152,10 @@ const LeftSidebar = memo(function LeftSidebar({
                 <FolderOpenIcon />
                 <p className="mt-2 text-xs">No files uploaded yet</p>
                 <p className="font-ledger mt-1 text-[10px] tracking-wide">
-                  PDF · DOC · MD · TXT · PY · CSV
+                  PDF · DOC · DOCX · MD · TXT · CSV · CODE
+                </p>
+                <p className="font-ledger mt-1 text-[9px] tracking-wide text-ink-soft/50">
+                  MAX 50 MB PER FILE
                 </p>
               </div>
             )}
@@ -136,6 +165,9 @@ const LeftSidebar = memo(function LeftSidebar({
                   key={file.id}
                   file={file}
                   onDelete={onDelete}
+                  onRetry={onRetry}
+                  onReprocess={onReprocess}
+                  onDismissFileError={onDismissFileError}
                   onPreview={onPreview}
                 />
               ))}
@@ -206,10 +238,14 @@ function FileTypeIcon({ name }: { name: string }) {
 interface FileItemProps {
   file: NotebookFile
   onDelete: (fileId: string) => void
+  onRetry: (fileId: string) => void
+  onReprocess: (fileId: string) => void
+  onDismissFileError: (fileId: string) => void
   onPreview: (file: NotebookFile) => void
 }
 
-function FileItem({ file, onDelete, onPreview }: FileItemProps) {
+function FileItem({ file, onDelete, onRetry, onReprocess, onDismissFileError, onPreview }: FileItemProps) {
+  const [confirming, setConfirming] = useState(false)
   const tone = {
     uploading: 'border-brass/50 bg-brass/10',
     processing: 'border-brass/50 bg-brass/10',
@@ -217,6 +253,7 @@ function FileItem({ file, onDelete, onPreview }: FileItemProps) {
     error: 'border-rust/50 bg-rust/[0.07]',
   }[file.status]
   const canPreview = file.status === 'ready' && !file.id.startsWith('temp-')
+  const isTempError = file.status === 'error' && file.id.startsWith('temp-')
   return (
     <div className={`rounded-md border ${tone}`}>
       <div
@@ -258,6 +295,19 @@ function FileItem({ file, onDelete, onPreview }: FileItemProps) {
                 <>
                   <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-line border-t-brass-deep"></span>
                   <span className="text-brass-deep">PROCESSING</span>
+                  {!file.id.startsWith('temp-') && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onReprocess(file.id)
+                      }}
+                      title="Re-trigger processing (recovery for stuck files)"
+                      className="ml-1 underline hover:text-ink"
+                    >
+                      RE-RUN
+                    </button>
+                  )}
                 </>
               )}
 
@@ -271,22 +321,89 @@ function FileItem({ file, onDelete, onPreview }: FileItemProps) {
                 </span>
               )}
             </p>
+            {file.status === 'error' && file.errorDetail && (
+              <p className="mt-1 break-words text-[10px] leading-snug text-rust/90" title={file.errorDetail}>
+                {file.errorDetail}
+              </p>
+            )}
+            {file.status === 'error' && !isTempError && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onRetry(file.id)
+                  }}
+                  title="Retry processing"
+                  aria-label={`Retry processing ${file.name}`}
+                  className="font-ledger inline-flex items-center gap-1 rounded border border-rust/40 bg-card px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-rust hover:bg-rust/10"
+                >
+                  <RefreshIcon sx={{ fontSize: 12 }} />
+                  RETRY
+                </button>
+              </div>
+            )}
+            {isTempError && (
+              <div className="mt-1.5">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDismissFileError(file.id)
+                  }}
+                  className="font-ledger text-[9px] tracking-wide text-ink-soft/70 underline hover:text-ink"
+                >
+                  DISMISS
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete(file.id)
-          }}
-          className="rounded p-1 opacity-0 transition-opacity duration-200 hover:bg-rust/10 focus:opacity-100 group-hover:opacity-100"
-          aria-label={`Delete ${file.name}`}
-        >
-          <DeleteIcon
-            fontSize="small"
-            className="text-ink-soft/60 hover:text-rust"
-          />
-        </button>
+        {confirming ? (
+          <div className="flex items-center justify-between gap-2 border-t border-rust/30 px-2.5 py-1.5">
+            <span className="font-ledger text-[9px] font-semibold tracking-wide text-rust">
+              DELETE?
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setConfirming(false)
+                }}
+                className="font-ledger rounded px-1.5 py-0.5 text-[9px] text-ink-soft hover:bg-paper"
+              >
+                KEEP
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDelete(file.id)
+                }}
+                aria-label={`Confirm delete ${file.name}`}
+                className="font-ledger rounded bg-rust px-1.5 py-0.5 text-[9px] font-semibold text-white hover:bg-rust/85"
+              >
+                YES
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setConfirming(true)
+            }}
+            className="rounded p-1 opacity-0 transition-opacity duration-200 hover:bg-rust/10 focus:opacity-100 group-hover:opacity-100"
+            aria-label={`Delete ${file.name}`}
+          >
+            <DeleteIcon
+              fontSize="small"
+              className="text-ink-soft/60 hover:text-rust"
+            />
+          </button>
+        )}
       </div>
     </div>
   )

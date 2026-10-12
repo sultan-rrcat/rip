@@ -28,3 +28,12 @@ export function updateMessageAPI(
     jsonInit('PUT', { text }),
   )
 }
+
+export function clearMessagesAPI(
+  notebookId: string,
+): Promise<{ message: string; deleted: number }> {
+  return request<{ message: string; deleted: number }>(
+    `/api/notebooks/${notebookId}/messages`,
+    { method: 'DELETE' },
+  )
+}

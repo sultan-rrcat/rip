@@ -17,6 +17,8 @@ export interface NotebookFile {
   name: string
   size: number
   status: FileStatus
+  /** Human-readable failure reason (413/415/503, client guards). Never sent to the API. */
+  errorDetail?: string
 }
 
 export type FilePreviewKind = 'text' | 'pdf' | 'unsupported'

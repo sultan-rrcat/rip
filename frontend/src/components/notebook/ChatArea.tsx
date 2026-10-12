@@ -21,7 +21,18 @@ interface ChatAreaProps {
   pastRuns?: Record<string, RunView>
   isRunning?: boolean
   onEditMessage?: (messageId: string, text: string) => Promise<void>
+  onSourceClick?: (source: Source) => void
+  onSendMessage?: (text: string) => void
 }
+
+// Shown when the notebook has no real conversation yet (only the
+// default greeting). One click sends the prompt — no typing needed.
+const STARTER_PROMPTS = [
+  'Summarize my documents',
+  'What are the key findings across my sources?',
+  'Compare my documents',
+  'List the main topics covered',
+]
 
 const markdownComponents: Components = {
   // Headings: Tailwind preflight resets h1-h6 to inherit (same size/weight
@@ -245,7 +256,7 @@ function CodeBlock({
   )
 }
 
-const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunning, onEditMessage }: ChatAreaProps) {
+const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunning, onEditMessage, onSourceClick, onSendMessage }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only stick to the bottom while the user is already near it, so scrolling
@@ -331,6 +342,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunni
               goal={runView?.goal ?? null}
               artifacts={artifacts}
               stepResults={runView?.stepResults}
+              onSourceClick={onSourceClick}
             />
           )
         }
@@ -349,6 +361,20 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunni
           return <ErrorMessage key={message.id} text={message.text} />
         }
       })}
+      {messages.length <= 1 && onSendMessage && !isRunning && (
+        <div className="flex flex-wrap gap-2 pt-2" aria-label="Suggested prompts">
+          {STARTER_PROMPTS.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => onSendMessage(prompt)}
+              className="rounded-full border border-line bg-card px-3 py-1.5 text-[12px] font-medium text-ink-soft transition-colors hover:border-ledger/60 hover:text-ink"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      )}
       <div ref={bottomRef} />
     </div>
   )
@@ -364,6 +390,7 @@ interface AssistantMessageProps {
   goal?: string | null
   artifacts?: Artifact[]
   stepResults?: Record<string, {executor:string,status:string,output:string,delta:string,expected_output_type?:string,visibility?:'show'|'hide'}>
+  onSourceClick?: (source: Source) => void
 }
 
 function AssistantMessage({
@@ -374,16 +401,54 @@ function AssistantMessage({
   goal = null,
   artifacts = [],
   stepResults = {},
+  onSourceClick,
 }: AssistantMessageProps) {
+  const [copied, setCopied] = useState(false)
+  const copyTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+    }
+  }, [])
+
+  async function handleCopyAnswer() {
+    const ok = await copyText(stripSvgFromText(text) ?? '')
+    if (!ok) return
+    setCopied(true)
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current)
+    copyTimer.current = window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  const canCopy = !children && (text?.trim() ? true : false)
   return (
-    <div className="flex gap-4 items-start">
+    <div className="group/assistant flex gap-4 items-start">
       {/* avatar  */}
       <div className="w-8 h-8 rounded-full bg-ink text-paper flex items-center justify-center shrink-0">
         <SmartToyIcon fontSize="small" />
       </div>
       {/* content */}
       <div className="flex-1 min-w-0 space-y-1">
-        <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">ASSISTANT</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">ASSISTANT</p>
+          {canCopy && (
+            <button
+              type="button"
+              onClick={handleCopyAnswer}
+              title={copied ? 'Copied' : 'Copy answer'}
+              aria-label={copied ? 'Copied to clipboard' : 'Copy answer to clipboard'}
+              className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-all hover:bg-paper hover:text-ink focus-visible:opacity-100 ${
+                copied ? 'text-ledger opacity-100' : 'text-ink-soft/50 opacity-0 group-hover/assistant:opacity-100'
+              }`}
+            >
+              {copied ? (
+                <CheckIcon sx={{ fontSize: 15 }} />
+              ) : (
+                <ContentCopyIcon sx={{ fontSize: 15 }} />
+              )}
+            </button>
+          )}
+        </div>
         <div className="text-sm text-ink/90 leading-relaxed max-w-2xl border border-line p-4 rounded-lg rounded-tl-sm bg-card shadow-[0_1px_0_rgba(21,39,54,0.1)]">
           {children ? (
             children
@@ -468,12 +533,26 @@ function AssistantMessage({
               </p>
               <ul className="flex flex-wrap gap-1.5">
                 {sources.length > 0 &&
-                  sources.map((s, i) => (
-                    <li key={i} className="font-ledger inline-flex max-w-full items-center gap-1.5 rounded border border-line bg-paper px-2 py-1 text-[10px] text-ink-soft">
-                      <span className="font-semibold text-brass-deep">[{i + 1}]</span>
-                      <span className="truncate">{s.source} — {s.section}</span>
-                    </li>
-                  ))}
+                  sources.map((s, i) =>
+                    onSourceClick ? (
+                      <li key={i} className="max-w-full">
+                        <button
+                          type="button"
+                          onClick={() => onSourceClick(s)}
+                          title={`Preview ${s.source}`}
+                          className="font-ledger inline-flex max-w-full items-center gap-1.5 rounded border border-line bg-paper px-2 py-1 text-[10px] text-ink-soft transition-colors hover:border-ledger/60 hover:text-ink"
+                        >
+                          <span className="font-semibold text-brass-deep">[{i + 1}]</span>
+                          <span className="truncate">{s.source} — {s.section}</span>
+                        </button>
+                      </li>
+                    ) : (
+                      <li key={i} className="font-ledger inline-flex max-w-full items-center gap-1.5 rounded border border-line bg-paper px-2 py-1 text-[10px] text-ink-soft">
+                        <span className="font-semibold text-brass-deep">[{i + 1}]</span>
+                        <span className="truncate">{s.source} — {s.section}</span>
+                      </li>
+                    ),
+                  )}
               </ul>
             </div>
           )}
