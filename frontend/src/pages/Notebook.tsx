@@ -4,6 +4,7 @@ import DownloadIcon from '@mui/icons-material/Download'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep'
 import MenuIcon from '@mui/icons-material/Menu'
+import TuneIcon from '@mui/icons-material/Tune'
 import SettingsIcon from '@mui/icons-material/Settings'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
@@ -13,6 +14,7 @@ import Button from '@mui/material/Button'
 import ChatArea from '@/components/notebook/ChatArea'
 import Footer from '@/components/notebook/Footer'
 import LeftSidebar from '@/components/notebook/LeftSidebar'
+import RightStudio from '@/components/notebook/RightStudio'
 import FilePreviewModal from '@/components/notebook/FilePreviewModal'
 import LogoutButton from '@/components/LogoutButton'
 import ToastHost from '@/components/ToastHost'
@@ -20,6 +22,7 @@ import { API } from '@/config'
 import { useNotebook } from '@/hooks/notebooks/useNotebook'
 import { useFiles } from '@/hooks/notebooks/useFiles'
 import { useMessages } from '@/hooks/notebooks/useMessages'
+import { useStudio } from '@/hooks/notebooks/useStudio'
 import type { Message, Source } from '@/types'
 
 function messagesToMarkdown(messages: Message[], notebookName: string): string {
@@ -95,7 +98,9 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
   const [clearing, setClearing] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [studioOpen, setStudioOpen] = useState(false)
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
+  const studio = useStudio(notebook_id)
 
   // Backend health dot (public endpoint, no auth). One probe on mount;
   // gray = unknown/checking, green = up, red = down.
@@ -130,7 +135,10 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
           )
           ?.focus()
       }
-      if (e.key === 'Escape') setSidebarOpen(false)
+      if (e.key === 'Escape') {
+        setSidebarOpen(false)
+        setStudioOpen(false)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -292,6 +300,16 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
                 <SettingsIcon sx={{ fontSize: 17 }} />
               </Link>
             )}
+            <button
+              type="button"
+              onClick={() => setStudioOpen((v) => !v)}
+              aria-label={studioOpen ? 'Hide studio panel' : 'Show studio panel'}
+              aria-expanded={studioOpen}
+              title="Studio — one-click quiz & convert"
+              className={`flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-paper hover:text-ink ${studioOpen ? 'bg-paper text-ink' : 'text-ink-soft/70'}`}
+            >
+              <TuneIcon sx={{ fontSize: 17 }} />
+            </button>
             <span className="[&_button]:text-ink-soft/70">
               <LogoutButton />
             </span>
@@ -321,6 +339,39 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
           onCancel={handleCancelRun}
         />
       </main>
+
+      {/* Studio panel: static column on lg+, slide-over below it */}
+      {studioOpen && (
+        <button
+          type="button"
+          aria-label="Close studio panel"
+          onClick={() => setStudioOpen(false)}
+          className="backdrop-enter fixed inset-0 z-30 bg-ink/40 lg:hidden"
+        />
+      )}
+      <div
+        className={
+          studioOpen
+            ? 'sidebar-enter fixed inset-y-0 right-0 z-40 w-[336px] max-w-[90vw] p-2 lg:static lg:z-auto lg:block lg:w-auto lg:max-w-none lg:p-0'
+            : 'hidden'
+        }
+      >
+        {studioOpen && (
+          <div className="h-full lg:h-full">
+            <RightStudio
+              files={files}
+              jobs={studio.jobs}
+              loading={studio.loading}
+              error={studio.error}
+              starting={studio.starting}
+              onStartQuiz={studio.startQuizJob}
+              onStartConvert={studio.startConvertJob}
+              onCancel={(jobId) => void studio.cancelJob(jobId)}
+              onReload={() => void studio.reload()}
+            />
+          </div>
+        )}
+      </div>
 
       <Dialog open={confirmClear} onClose={() => !clearing && setConfirmClear(false)} maxWidth="xs" fullWidth>
         <DialogTitle>Clear chat history?</DialogTitle>
