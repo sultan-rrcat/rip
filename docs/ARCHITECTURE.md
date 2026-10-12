@@ -34,6 +34,7 @@ Offline, single-codebase research assistant: document RAG + multi-agent orchestr
 │       /api/auth/login · /api/auth/logout · /api/auth/me       │
 │  Auth: cookie session (`rip_session`); all /api/* + /v1/*     │
 │  except /api/health, /health, /api/auth/* require login;      │
+│  /v1/admin/* additionally requires the `admin` role (403);    │
 │  notebooks/files/messages/runs/artifacts scoped by owner      │
 └────────────────────────────┬─────────────────────────────────┘
          ┌───────────────────┼───────────────────┐
@@ -93,7 +94,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 
 | Table | Key columns |
 |---|---|
-| `users` | `user_id`, `username` (unique), `password_hash` |
+| `users` | `user_id`, `username` (unique), `password_hash`, `role` (`admin`/`viewer`, default `viewer`; first user auto-admin at creation) |
 | `notebooks` | `notebook_id`, `notebook_name`, `owner_id` (FK → `users`, 404-on-foreign), `conversation_summary` (internal memory), `summary_message_count` |
 | `files` | `file_id`, `notebook_id`, `file_name`, `file_size`, `file_status` (`uploading/processing/ready/error`) |
 | `embeddings` | `file_id`, `chunk_text`, `embedding vector(1024)` + HNSW, `chunk_index` (overview stratification), `metadata`, `text_search tsvector` + GIN |

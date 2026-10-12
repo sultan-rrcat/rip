@@ -345,6 +345,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-052: Role-based access — admin vs viewer
+
+- **Status:** Accepted (2026-10-12)
+- **Context:** Every logged-in user could use the whole admin panel: `admin` + `prompt_admin` routers were mounted with login-only `get_current_user`, so any user could mutate runtime variables, prompts, and tool kill-switches. The `users` table had no role concept and `create_user.py` created undifferentiated users.
+- **Decision:** (1) `users.role TEXT NOT NULL DEFAULT 'viewer'` + `CHECK (role IN ('admin','viewer'))` in `schema.sql`, with a fail-soft `ensure_role_column()` at boot (same contract as `messages.ensure_artifacts_column` — compose init runs only on empty volumes) and an `UndefinedColumn` fallback in auth reads (viewer-by-default, never admin). (2) `UserResponse.role` flows through login + `/api/auth/me`; new `require_admin` dependency (403, not 404) guards both admin routers — viewers keep notebooks/files/messages/runs untouched. (3) `create_user.py` takes `--role` (default `viewer`) + `--set-role`; the first user in an empty table always becomes admin so bootstrap cannot lock itself out. (4) Frontend gates `/admin` on the role, hides the gear for viewers, and turns API 403s into home-redirects with a toast (never the login loop).
+- **Consequences:** Two roles, one gate: admin = everything, viewer = everything but the panel. Existing users land on `viewer` until promoted. Pinned by `test_roles.py` (no-DB gate tests + DB default/exposure/403 tests).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.
