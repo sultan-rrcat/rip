@@ -15,6 +15,7 @@ import {
   extensionOfFile,
 } from '@/services/files'
 import { ApiError } from '@/services/http'
+import { notifyToast } from '@/services/toast'
 
 const ALLOWED = new Set<string>(ALLOWED_EXTENSIONS as unknown as string[])
 
@@ -55,6 +56,7 @@ export function useFiles(notebook_id: string | undefined) {
           setFiles(Array.isArray(fetchedFiles) ? fetchedFiles : [])
       } catch (err) {
         console.error('Failed to load files:', err)
+        notifyToast('Could not load files. Check the backend connection.')
       }
     }
 
@@ -122,6 +124,7 @@ export function useFiles(notebook_id: string | undefined) {
       console.error('Failed to upload file:', err)
       const msg = friendlyUploadError(err, file.name)
       setUploadError(msg)
+      notifyToast(msg)
       setFiles((prev) =>
         prev.map((f) => (f.id === tempId ? { ...f, status: 'error', errorDetail: msg } : f)),
       )
@@ -134,6 +137,7 @@ export function useFiles(notebook_id: string | undefined) {
       console.error('Failed to process file:', err)
       const msg = friendlyUploadError(err, newFile.name)
       setUploadError(msg)
+      notifyToast(msg)
       setFiles((prev) =>
         prev.map((f) => (f.id === newFile.id ? { ...f, status: 'error', errorDetail: msg } : f)),
       )
@@ -168,6 +172,7 @@ export function useFiles(notebook_id: string | undefined) {
       console.error('Failed to re-process file:', err)
       const msg = friendlyUploadError(err, target.name)
       setUploadError(msg)
+      notifyToast(msg)
       setFiles((prev) =>
         prev.map((f) => (f.id === fileId ? { ...f, status: 'error', errorDetail: msg } : f)),
       )
@@ -185,6 +190,7 @@ export function useFiles(notebook_id: string | undefined) {
       console.error('Failed to re-process file:', err)
       const msg = friendlyUploadError(err, target.name)
       setUploadError(msg)
+      notifyToast(msg)
       setFiles((prev) =>
         prev.map((f) => (f.id === fileId ? { ...f, status: 'error', errorDetail: msg } : f)),
       )
@@ -201,6 +207,7 @@ export function useFiles(notebook_id: string | undefined) {
       setFiles((prev) => prev.filter((f) => f.id !== fileId))
     } catch (err) {
       console.error('Failed to delete file:', err)
+      notifyToast('Could not delete the file. Try again.')
     }
   }
 
@@ -226,11 +233,13 @@ export function useFiles(notebook_id: string | undefined) {
         } catch (err) {
           console.error('Failed to load PDF preview:', err)
           setPreviewError('Failed to load PDF preview.')
+          notifyToast('Could not load the PDF preview. Use Download instead.')
         }
       }
     } catch (err) {
       console.error('Failed to load preview:', err)
       setPreviewError('Failed to load preview.')
+      notifyToast('Could not load the preview. Use Download instead.')
     } finally {
       setPreviewLoading(false)
     }

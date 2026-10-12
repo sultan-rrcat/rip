@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getNotebooksAPI, renameNotebookAPI } from '@/services/notebooks'
+import { notifyToast } from '@/services/toast'
 
 export function useNotebook(notebook_id: string | undefined) {
   const [notebookName, setNotebookName] = useState('')
@@ -17,6 +18,7 @@ export function useNotebook(notebook_id: string | undefined) {
         }
       } catch (err) {
         console.error('Failed to load notebook name:', err)
+        notifyToast('Could not load the notebook name.')
       }
     }
 
@@ -34,6 +36,7 @@ export function useNotebook(notebook_id: string | undefined) {
       setNotebookName(newName)
     } catch (err) {
       console.error('Failed to rename notebook:', err)
+      notifyToast('Could not rename the notebook. Try again.')
     }
   }
 

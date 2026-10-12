@@ -57,4 +57,6 @@ export interface RunView {
   artifacts: Artifact[]
   running: boolean
   stepResults?: Record<string, StepResultView>
+  /** Local wall-clock start (Date.now()) for the elapsed timer. Never persisted. */
+  startedAt?: number | null
 }

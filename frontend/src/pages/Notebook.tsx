@@ -1,8 +1,10 @@
 import { useParams, Link } from 'react-router-dom'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import DownloadIcon from '@mui/icons-material/Download'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep'
+import MenuIcon from '@mui/icons-material/Menu'
+import SettingsIcon from '@mui/icons-material/Settings'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -12,6 +14,10 @@ import ChatArea from '@/components/notebook/ChatArea'
 import Footer from '@/components/notebook/Footer'
 import LeftSidebar from '@/components/notebook/LeftSidebar'
 import FilePreviewModal from '@/components/notebook/FilePreviewModal'
+import RunStatusBar from '@/components/notebook/RunStatusBar'
+import LogoutButton from '@/components/LogoutButton'
+import ToastHost from '@/components/ToastHost'
+import { API } from '@/config'
 import { useNotebook } from '@/hooks/notebooks/useNotebook'
 import { useFiles } from '@/hooks/notebooks/useFiles'
 import { useMessages } from '@/hooks/notebooks/useMessages'
@@ -78,6 +84,7 @@ export default function Notebook() {
     activeRun,
     pastRuns,
     isRunning,
+    cancelledIds,
     handleSendMessage,
     handleEditMessage,
     handleCancelRun,
@@ -88,6 +95,24 @@ export default function Notebook() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [backendUp, setBackendUp] = useState<boolean | null>(null)
+
+  // Backend health dot (public endpoint, no auth). One probe on mount;
+  // gray = unknown/checking, green = up, red = down.
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API}/api/health`, { credentials: 'include' })
+      .then((res) => {
+        if (!cancelled) setBackendUp(res.ok)
+      })
+      .catch(() => {
+        if (!cancelled) setBackendUp(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   function handleSourceClick(source: Source) {
     const match = files.find(
@@ -119,19 +144,41 @@ export default function Notebook() {
 
   return (
     <div className="flex h-screen min-h-0 gap-2 overflow-hidden bg-bench p-2">
-      <LeftSidebar
-        files={files}
-        uploadError={uploadError}
-        onDismissUploadError={dismissUploadError}
-        onUpload={handleUpload}
-        onDelete={handleDelete}
-        onRetry={handleRetry}
-        onReprocess={handleReprocess}
-        onDismissFileError={dismissFileError}
-        onPreview={openPreview}
-        notebookName={notebookName}
-        onRenameNotebook={renameNotebook}
-      />
+      {/* Mobile backdrop for the drawer */}
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close sources panel"
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-30 bg-ink/40 md:hidden"
+        />
+      )}
+      <div
+        className={
+          sidebarOpen
+            ? 'fixed inset-y-0 left-0 z-40 w-[300px] max-w-[85vw] p-2 md:static md:z-auto md:block md:w-auto md:max-w-none md:p-0'
+            : 'hidden md:block'
+        }
+      >
+        <div className="h-full md:h-full">
+          <LeftSidebar
+            files={files}
+            uploadError={uploadError}
+            onDismissUploadError={dismissUploadError}
+            onUpload={handleUpload}
+            onDelete={handleDelete}
+            onRetry={handleRetry}
+            onReprocess={handleReprocess}
+            onDismissFileError={dismissFileError}
+            onPreview={(f) => {
+              setSidebarOpen(false)
+              openPreview(f)
+            }}
+            notebookName={notebookName}
+            onRenameNotebook={renameNotebook}
+          />
+        </div>
+      </div>
       <FilePreviewModal
         file={previewFile}
         preview={preview}
@@ -140,15 +187,46 @@ export default function Notebook() {
         blobUrl={previewBlobUrl}
         onClose={closePreview}
       />
+      <ToastHost />
       <main className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
         <div className="flex shrink-0 items-center justify-between gap-2 px-1 pt-0.5">
-          <Link
-            to="/"
-            className="font-ledger text-[11px] font-semibold tracking-[0.18em] text-ink-soft/70 transition-colors hover:text-ink"
-          >
-            ← STACK
-          </Link>
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen((v) => !v)}
+              aria-label={sidebarOpen ? 'Hide sources panel' : 'Show sources panel'}
+              aria-expanded={sidebarOpen}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink md:hidden"
+            >
+              <MenuIcon sx={{ fontSize: 18 }} />
+            </button>
+            <Link
+              to="/"
+              className="font-ledger text-[11px] font-semibold tracking-[0.18em] text-ink-soft/70 transition-colors hover:text-ink"
+            >
+              ← STACK
+            </Link>
+          </div>
+          <div className="flex items-center gap-1">
+            <span
+              title={
+                backendUp === null
+                  ? 'Checking backend…'
+                  : backendUp
+                    ? 'Backend reachable'
+                    : 'Backend unreachable — check the server'
+              }
+              aria-label={
+                backendUp === null
+                  ? 'Backend status unknown'
+                  : backendUp
+                    ? 'Backend reachable'
+                    : 'Backend unreachable'
+              }
+              className={`inline-block h-2 w-2 rounded-full ${
+                backendUp === null ? 'bg-line' : backendUp ? 'bg-emerald-500' : 'bg-rust'
+              }`}
+            />
             <button
               type="button"
               onClick={handleExport}
@@ -182,18 +260,33 @@ export default function Notebook() {
             >
               <DeleteSweepIcon sx={{ fontSize: 17 }} />
             </button>
+            <Link
+              to="/admin"
+              title="Runtime config"
+              aria-label="Open admin runtime config"
+              className="hidden h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink sm:flex"
+            >
+              <SettingsIcon sx={{ fontSize: 17 }} />
+            </Link>
+            <span className="[&_button]:text-ink-soft/70">
+              <LogoutButton />
+            </span>
             <p className="font-ledger ml-2 hidden text-[10px] tracking-[0.2em] text-ink-soft/50 lg:block">
               OFFLINE · NOTHING LEAVES THIS MACHINE
             </p>
           </div>
         </div>
+        {isRunning && activeRun && <RunStatusBar run={activeRun} />}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ChatArea
             messages={messages}
             activeRun={activeRun}
             pastRuns={pastRuns}
             isRunning={isRunning}
+            cancelledIds={cancelledIds}
+            canRegenerate={canRegenerate}
             onEditMessage={handleEditMessage}
+            onRegenerate={() => void handleRegenerate()}
             onSourceClick={handleSourceClick}
             onSendMessage={handleSendMessage}
           />

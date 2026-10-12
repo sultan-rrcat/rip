@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { getMessagesAPI, createMessageAPI, updateMessageAPI, clearMessagesAPI } from '@/services/messages'
 import { createRun, subscribeToRunEvents, cancelRun } from '@/services/runs'
+import { notifyToast } from '@/services/toast'
 import type { Artifact, Message, Source } from '@/types'
 import type { RunEvent, RunView, PlanStep, StepResultView } from '@/types/runs'
 
@@ -50,6 +51,10 @@ export function useMessages(notebook_id: string | undefined) {
   // Steps panel + SHOW-only answer persist after run_completed (activeRun
   // is cleared) and across replay.
   const [pastRuns, setPastRuns] = useState<Record<string, RunView>>({})
+  // Assistant placeholders whose run was cancelled: partial tokens stay on
+  // screen unpersisted, badged STOPPED so the state is explicit. Cleared
+  // with the conversation (load/clear), never persisted to the backend.
+  const [cancelledIds, setCancelledIds] = useState<string[]>([])
   // Notebook owning the current subscription. Written in effects/handlers
   // only (never during render) so the SSE callbacks can't go stale.
   const nbRef = useRef<string | undefined>(undefined)
@@ -177,6 +182,7 @@ export function useMessages(notebook_id: string | undefined) {
     // Partial tokens stay on screen unpersisted (no run_completed → the
     // frontend never writes an assistant row for a cancelled run, Q22).
     if (messageId) {
+      setCancelledIds((prev) => (prev.includes(messageId) ? prev : [...prev, messageId]))
       setMessages((prev) =>
         prev.map((m) =>
           m.id === messageId ? { ...m, status: 'done' as const } : m,
@@ -409,6 +415,7 @@ export function useMessages(notebook_id: string | undefined) {
         artifacts: [],
         running: true,
         stepResults: {},
+        startedAt: Date.now(),
       })
       setIsRunning(true)
       unsubscribeRef.current?.()
@@ -436,12 +443,14 @@ export function useMessages(notebook_id: string | undefined) {
 
     async function load() {
       setPastRuns({})
+      setCancelledIds([])
       try {
         const msgs = await getMessagesAPI(id)
         if (cancelled) return
         setMessages(msgs.length > 0 ? msgs : DEFAULT_MESSAGES)
       } catch (err) {
         console.error('Failed to load messages:', err)
+        notifyToast('Could not load chat history. Check the backend connection.')
       }
       if (cancelled) return
       const pendingRun = localStorage.getItem(activeKey(id))
@@ -564,6 +573,7 @@ export function useMessages(notebook_id: string | undefined) {
       await cancelRun(runId)
     } catch (err) {
       console.error('Failed to cancel run:', err)
+      notifyToast('Could not stop the run. It may finish on its own.')
     }
     // The worker's `cancelled` event finalizes the UI; the subscription
     // stays open for it.
@@ -626,6 +636,7 @@ export function useMessages(notebook_id: string | undefined) {
     await clearMessagesAPI(notebook_id)
     detach()
     setPastRuns({})
+    setCancelledIds([])
     localStorage.removeItem(activeKey(notebook_id))
     localStorage.removeItem(persistedKey(notebook_id))
     setMessages(DEFAULT_MESSAGES)
@@ -697,6 +708,7 @@ export function useMessages(notebook_id: string | undefined) {
     activeRun,
     pastRuns,
     isRunning,
+    cancelledIds,
     handleSendMessage,
     handleEditMessage,
     handleCancelRun,

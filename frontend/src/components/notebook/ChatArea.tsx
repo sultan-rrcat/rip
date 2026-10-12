@@ -20,7 +20,10 @@ interface ChatAreaProps {
   activeRun?: RunView | null
   pastRuns?: Record<string, RunView>
   isRunning?: boolean
+  cancelledIds?: string[]
+  canRegenerate?: boolean
   onEditMessage?: (messageId: string, text: string) => Promise<void>
+  onRegenerate?: () => void
   onSourceClick?: (source: Source) => void
   onSendMessage?: (text: string) => void
 }
@@ -256,7 +259,7 @@ function CodeBlock({
   )
 }
 
-const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunning, onEditMessage, onSourceClick, onSendMessage }: ChatAreaProps) {
+const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunning, cancelledIds, canRegenerate, onEditMessage, onRegenerate, onSourceClick, onSendMessage }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only stick to the bottom while the user is already near it, so scrolling
@@ -343,6 +346,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunni
               artifacts={artifacts}
               stepResults={runView?.stepResults}
               onSourceClick={onSourceClick}
+              wasCancelled={cancelledIds?.includes(message.id) ?? false}
             />
           )
         }
@@ -358,7 +362,14 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunni
           )
         }
         if (message.role === 'error') {
-          return <ErrorMessage key={message.id} text={message.text} />
+          return (
+            <ErrorMessage
+              key={message.id}
+              text={message.text}
+              onRetry={onRegenerate}
+              canRetry={canRegenerate}
+            />
+          )
         }
       })}
       {messages.length <= 1 && onSendMessage && !isRunning && (
@@ -391,6 +402,7 @@ interface AssistantMessageProps {
   artifacts?: Artifact[]
   stepResults?: Record<string, {executor:string,status:string,output:string,delta:string,expected_output_type?:string,visibility?:'show'|'hide'}>
   onSourceClick?: (source: Source) => void
+  wasCancelled?: boolean
 }
 
 function AssistantMessage({
@@ -402,6 +414,7 @@ function AssistantMessage({
   artifacts = [],
   stepResults = {},
   onSourceClick,
+  wasCancelled = false,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<number | null>(null)
@@ -459,6 +472,12 @@ function AssistantMessage({
             >
               {stripSvgFromText(text)}
             </ReactMarkdown>
+          )}
+
+          {wasCancelled && (
+            <p className="font-ledger mt-3 border-t border-line pt-2 text-[10px] font-semibold tracking-[0.18em] text-brass-deep">
+              STOPPED — PARTIAL ANSWER, NOT SAVED
+            </p>
           )}
 
           {plan && plan.length > 0 && (
@@ -562,8 +581,10 @@ function AssistantMessage({
   )
 }
 
-interface TextMessageProps {
+interface ErrorMessageProps {
   text: string
+  onRetry?: () => void
+  canRetry?: boolean
 }
 
 interface UserMessageProps {
@@ -688,7 +709,7 @@ function UserMessage({ id, text, disabled, onSave }: UserMessageProps) {
   )
 }
 
-function ErrorMessage({ text }: TextMessageProps) {
+function ErrorMessage({ text, onRetry, canRetry }: ErrorMessageProps) {
   return (
     <div className="flex gap-4 items-start">
       <div className="w-8 h-8 rounded-full bg-rust/15 text-rust flex items-center justify-center shrink-0">
@@ -699,6 +720,17 @@ function ErrorMessage({ text }: TextMessageProps) {
         <div className="text-sm text-rust leading-relaxed max-w-2xl">
           {text}
         </div>
+        {onRetry && canRetry && (
+          <div>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="font-ledger mt-1 inline-flex items-center gap-1.5 rounded-md border border-rust/40 bg-card px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] text-rust transition-colors hover:bg-rust/10"
+            >
+              RETRY RUN
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
