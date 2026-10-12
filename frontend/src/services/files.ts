@@ -1,5 +1,6 @@
+import { API } from '@/config'
 import { request, jsonInit } from '@/services/http'
-import type { FileStatus, NotebookFile } from '@/types'
+import type { FileStatus, NotebookFile, FilePreview } from '@/types'
 
 export function getFilesAPI(notebookId: string): Promise<NotebookFile[]> {
   return request<NotebookFile[]>(`/api/notebooks/${notebookId}/files`)
@@ -50,4 +51,26 @@ export function processFileAPI(fileId: string): Promise<{ message: string }> {
   return request<{ message: string }>(`/api/files/${fileId}/process`, {
     method: 'POST',
   })
+}
+
+export function getFilePreviewAPI(fileId: string): Promise<FilePreview> {
+  return request<FilePreview>(`/api/files/${fileId}/preview`)
+}
+
+/** Direct download URL for anchor hrefs (cookie auth flows same-origin). */
+export function fileDownloadUrl(fileId: string): string {
+  return `${API}/api/files/${fileId}/download`
+}
+
+/** Fetch raw bytes (pdf blob preview) — services layer only. */
+export async function fetchFileBlob(fileId: string): Promise<Blob> {
+  const res = await fetch(`${API}/api/files/${fileId}/download`, {
+    credentials: 'include',
+  })
+  if (res.status === 401) {
+    window.location.href = '/login'
+    throw new Error('Unauthorized')
+  }
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`)
+  return await res.blob()
 }

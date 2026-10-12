@@ -19,6 +19,17 @@ export interface NotebookFile {
   status: FileStatus
 }
 
+export type FilePreviewKind = 'text' | 'pdf' | 'unsupported'
+
+export interface FilePreview {
+  id: string
+  name: string
+  size: number
+  kind: FilePreviewKind
+  truncated?: boolean
+  content?: string
+}
+
 export type MessageRole = 'user' | 'assistant' | 'error'
 
 export type MessageStatus = 'thinking' | 'streaming' | 'done'

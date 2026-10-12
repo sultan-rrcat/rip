@@ -15,6 +15,7 @@ interface LeftSidebarProps {
   files: NotebookFile[]
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void
   onDelete: (fileId: string) => void
+  onPreview: (file: NotebookFile) => void
   onRenameNotebook: (name: string) => void
   notebookName: string
 }
@@ -23,6 +24,7 @@ const LeftSidebar = memo(function LeftSidebar({
   files,
   onUpload,
   onDelete,
+  onPreview,
   onRenameNotebook,
   notebookName,
 }: LeftSidebarProps) {
@@ -129,7 +131,12 @@ const LeftSidebar = memo(function LeftSidebar({
             )}
             <div className="space-y-1.5">
               {files.map((file) => (
-                <FileItem key={file.id} file={file} onDelete={onDelete} />
+                <FileItem
+                  key={file.id}
+                  file={file}
+                  onDelete={onDelete}
+                  onPreview={onPreview}
+                />
               ))}
             </div>
           </nav>
@@ -194,18 +201,34 @@ function FileTypeIcon({ name }: { name: string }) {
 interface FileItemProps {
   file: NotebookFile
   onDelete: (fileId: string) => void
+  onPreview: (file: NotebookFile) => void
 }
 
-function FileItem({ file, onDelete }: FileItemProps) {
+function FileItem({ file, onDelete, onPreview }: FileItemProps) {
   const tone = {
     uploading: 'border-brass/50 bg-brass/10',
     processing: 'border-brass/50 bg-brass/10',
     ready: 'border-ledger/40 bg-ledger/[0.07]',
     error: 'border-rust/50 bg-rust/[0.07]',
   }[file.status]
+  const canPreview = file.status === 'ready' && !file.id.startsWith('temp-')
   return (
     <div className={`rounded-md border ${tone}`}>
-      <div className="group flex cursor-pointer items-center justify-between gap-2 px-2.5 py-2">
+      <div
+        className={`group flex items-center justify-between gap-2 px-2.5 py-2 ${canPreview ? 'cursor-pointer' : ''}`}
+        onClick={() => {
+          if (canPreview) onPreview(file)
+        }}
+        role={canPreview ? 'button' : undefined}
+        tabIndex={canPreview ? 0 : undefined}
+        title={canPreview ? `Preview ${file.name}` : file.name}
+        onKeyDown={(e) => {
+          if (canPreview && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            onPreview(file)
+          }
+        }}
+      >
         <div className="flex min-w-0 flex-1 items-center gap-2.5 overflow-hidden">
           <FileTypeIcon name={file.name} />
           <div className="min-w-0">

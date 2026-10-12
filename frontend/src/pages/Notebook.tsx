@@ -2,6 +2,7 @@ import { useParams, Link } from 'react-router-dom'
 import ChatArea from '@/components/notebook/ChatArea'
 import Footer from '@/components/notebook/Footer'
 import LeftSidebar from '@/components/notebook/LeftSidebar'
+import FilePreviewModal from '@/components/notebook/FilePreviewModal'
 import { useNotebook } from '@/hooks/notebooks/useNotebook'
 import { useFiles } from '@/hooks/notebooks/useFiles'
 import { useMessages } from '@/hooks/notebooks/useMessages'
@@ -9,7 +10,18 @@ import { useMessages } from '@/hooks/notebooks/useMessages'
 export default function Notebook() {
   const { notebook_id } = useParams()
   const { notebookName, renameNotebook } = useNotebook(notebook_id)
-  const { files, handleUpload, handleDelete } = useFiles(notebook_id)
+  const {
+    files,
+    handleUpload,
+    handleDelete,
+    previewFile,
+    preview,
+    previewLoading,
+    previewError,
+    previewBlobUrl,
+    openPreview,
+    closePreview,
+  } = useFiles(notebook_id)
   const { messages, activeRun, pastRuns, isRunning, handleSendMessage, handleEditMessage, handleCancelRun } =
     useMessages(notebook_id)
 
@@ -19,8 +31,17 @@ export default function Notebook() {
         files={files}
         onUpload={handleUpload}
         onDelete={handleDelete}
+        onPreview={openPreview}
         notebookName={notebookName}
         onRenameNotebook={renameNotebook}
+      />
+      <FilePreviewModal
+        file={previewFile}
+        preview={preview}
+        loading={previewLoading}
+        error={previewError}
+        blobUrl={previewBlobUrl}
+        onClose={closePreview}
       />
       <main className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
         <div className="flex shrink-0 items-center justify-between px-1 pt-0.5">

@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import re
 from typing import Any
@@ -13,6 +14,7 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -31,10 +33,38 @@ _UUID_RE = re.compile(
 
 _CHUNK_SIZE = 8192
 
+#: Max bytes returned inline by the text preview endpoint. Files larger
+#: than this are truncated (truncated=true) so a 50MB upload never
+#: lands in a JSON payload.
+_PREVIEW_MAX_BYTES = 200 * 1024
+
 
 def _validate_uuid(value: str, field: str) -> None:
     if not _UUID_RE.match(value or ""):
         raise HTTPException(status_code=400, detail=f"Invalid {field}")
+
+
+def _get_owned_file(file_id: str, user_id: str) -> tuple[str, str, str, int]:
+    """Return (file_id, notebook_id, file_name, file_size) or raise 404."""
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT f.file_id, f.notebook_id, f.file_name, f.file_size
+            FROM files f
+            JOIN notebooks n ON n.notebook_id = f.notebook_id
+            WHERE f.file_id = %s AND n.owner_id = %s
+            """,
+            (file_id, user_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+    return str(row[0]), str(row[1]), str(row[2] or ""), int(row[3] or 0)
+
+
+def _disk_path(notebook_id: str, file_id: str, file_name: str) -> str:
+    ext = os.path.splitext(file_name or "")[1].lower()
+    return os.path.join(settings.upload_dir, notebook_id, f"{file_id}{ext}")
 
 
 class FileCreate(BaseModel):
@@ -286,3 +316,76 @@ def process_file(
 
     background_tasks.add_task(run_rag_pipeline, file_id, rag)
     return {"message": "processing started"}
+
+
+@router.get("/api/files/{file_id}/preview")
+def preview_file(
+    file_id: str,
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
+) -> dict[str, Any]:
+    """Inline preview metadata for a user-uploaded File.
+
+    Text/code/markdown return JSON with truncated content inline.
+    PDFs return ``kind="pdf"`` (bytes via ``download`` as blob);
+    anything else returns ``kind="unsupported"`` (download-only).
+    Owner-scoped: foreign ids are 404, never 403.
+    """
+    _validate_uuid(file_id, "file_id")
+    _fid, notebook_id, file_name, file_size = _get_owned_file(
+        file_id, user.user_id
+    )
+    ext = os.path.splitext(file_name or "")[1].lower()
+    path = _disk_path(notebook_id, _fid, file_name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    text_exts = set(settings.code_extensions or []) | {".txt", ".md"}
+    if ext in text_exts:
+        try:
+            with open(path, "rb") as f:
+                raw = f.read(_PREVIEW_MAX_BYTES + 1)
+        except OSError:
+            logger.exception(f"Preview read failed for file: {file_id}")
+            raise HTTPException(
+                status_code=500, detail="Failed to read file"
+            ) from None
+        truncated = len(raw) > _PREVIEW_MAX_BYTES or file_size > _PREVIEW_MAX_BYTES
+        content = raw[:_PREVIEW_MAX_BYTES].decode("utf-8", errors="replace")
+        return {
+            "id": _fid,
+            "name": file_name,
+            "size": file_size,
+            "kind": "text",
+            "truncated": truncated,
+            "content": content,
+        }
+    if ext == ".pdf":
+        return {
+            "id": _fid,
+            "name": file_name,
+            "size": file_size,
+            "kind": "pdf",
+        }
+    return {
+        "id": _fid,
+        "name": file_name,
+        "size": file_size,
+        "kind": "unsupported",
+    }
+
+
+@router.get("/api/files/{file_id}/download")
+def download_file(
+    file_id: str,
+    user: UserResponse = Depends(get_current_user),  # noqa: B008 - FastAPI Depends-in-default is canonical
+) -> FileResponse:
+    """Download the original bytes of a user-uploaded File (attachment)."""
+    _validate_uuid(file_id, "file_id")
+    _fid, notebook_id, file_name, _size = _get_owned_file(
+        file_id, user.user_id
+    )
+    path = _disk_path(notebook_id, _fid, file_name)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    mime = mimetypes.guess_type(file_name or "")[0] or "application/octet-stream"
+    return FileResponse(path, filename=file_name or _fid, media_type=mime)

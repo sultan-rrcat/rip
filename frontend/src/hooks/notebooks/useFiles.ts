@@ -1,16 +1,23 @@
 import { useState, useEffect } from 'react'
 import type { ChangeEvent } from 'react'
 import { v4 as uuidv4 } from 'uuid'
-import type { NotebookFile } from '@/types'
+import type { NotebookFile, FilePreview } from '@/types'
 import {
   getFilesAPI,
   deleteFileAPI,
   uploadFileAPI,
   processFileAPI,
+  getFilePreviewAPI,
+  fetchFileBlob,
 } from '@/services/files'
 
 export function useFiles(notebook_id: string | undefined) {
   const [files, setFiles] = useState<NotebookFile[]>([])
+  const [previewFile, setPreviewFile] = useState<NotebookFile | null>(null)
+  const [preview, setPreview] = useState<FilePreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
 
   // Initial fetch — guard against undefined id (first render race)
   useEffect(() => {
@@ -101,5 +108,68 @@ export function useFiles(notebook_id: string | undefined) {
     }
   }
 
-  return { files, handleUpload, handleDelete }
+  async function openPreview(file: NotebookFile): Promise<void> {
+    if (file.status !== 'ready') return
+    if (file.id.startsWith('temp-')) return
+    // Revoke any previous blob URL before loading the next preview.
+    setPreviewBlobUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+    setPreviewFile(file)
+    setPreview(null)
+    setPreviewError(null)
+    setPreviewLoading(true)
+    try {
+      const data = await getFilePreviewAPI(file.id)
+      setPreview(data)
+      if (data.kind === 'pdf') {
+        try {
+          const blob = await fetchFileBlob(file.id)
+          setPreviewBlobUrl(URL.createObjectURL(blob))
+        } catch (err) {
+          console.error('Failed to load PDF preview:', err)
+          setPreviewError('Failed to load PDF preview.')
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load preview:', err)
+      setPreviewError('Failed to load preview.')
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  function closePreview(): void {
+    setPreviewFile(null)
+    setPreview(null)
+    setPreviewError(null)
+    setPreviewBlobUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+  }
+
+  // Revoke the blob URL on unmount so pdf object URLs never leak.
+  useEffect(() => {
+    return () => {
+      setPreviewBlobUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return null
+      })
+    }
+  }, [])
+
+  return {
+    files,
+    handleUpload,
+    handleDelete,
+    previewFile,
+    preview,
+    previewLoading,
+    previewError,
+    previewBlobUrl,
+    openPreview,
+    closePreview,
+  }
 }
