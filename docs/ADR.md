@@ -372,6 +372,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-055: quiz_json extractor receives conversation context
+
+- **Status:** Accepted (2026-10-12)
+- **Context:** Memory context is scoped to terminal prose agent steps; `quiz_json` sits in `_MACHINE_OUTPUT_TYPES` (never needs context even when terminal). But the quiz extractor is *never* terminal (`quiz.generate` always depends on it), and the Studio/chat quiz prompt promises "from chat history" — the terminal-only rule starved exactly the step that needed grounding.
+- **Decision:** `plan_graph` gains `_QUIZ_CONTEXT_TYPES = {"quiz_json"}`: agent steps with that output type receive memory `context` regardless of terminality. Context rides a separate system message (`ProviderAgent`: `Conversation context:` system turn, strict-JSON instruction stays the final user turn), so extraction strictness is unaffected. `numbers`/`chunks` stay excluded; tools never get context (unchanged).
+- **Consequences:** Quiz runs ground on recent chat + summary within the existing window budget. Pinned by `test_quiz_json_extractor_gets_context_despite_machine_type` next to the terminal-scoping pin it amends.
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

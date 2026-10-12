@@ -19,6 +19,9 @@ Semantics:
   - scoped short-term-memory `context`: terminal prose AGENT steps only
     (intermediates get task + upstream outputs; the Planner threads
     follow-up references into subtask messages). TOOL steps never get it.
+    Sole exception: `quiz_json` extractor steps — never terminal
+    (quiz.generate always depends on them) yet the quiz prompt promises
+    chat-history grounding, so they receive context too (ADR-055).
   - `notebook_id` injection into every TOOL step input (Q30): the run's
     notebook id comes from Run.notebook_id, never the LLM — the closure
     overwrites any planner-emitted value
@@ -80,6 +83,14 @@ _FENCED_CODE_SPLIT = re.compile(r"(```.*?```)", re.DOTALL)
 #: (a lone numbers/chunks step is shown via the aggregator's anti-blank
 #: fallback, but the step itself runs on task + upstream data alone).
 _MACHINE_OUTPUT_TYPES = frozenset({"chunks", "numbers", "quiz_json"})
+
+#: Extractor steps that write machine JSON yet still need conversation
+#: context: the quiz prompt promises "from chat history", and the
+#: quiz_json extractor is never terminal (quiz.generate depends on it),
+#: so the terminal-only rule would starve it (ADR-055). Context rides a
+#: separate system message — the strict-JSON instruction stays the final
+#: user turn, so extraction strictness is unaffected.
+_QUIZ_CONTEXT_TYPES = frozenset({"quiz_json"})
 
 # Athena default kept as a code constant (no new Settings key): attempts
 # beyond the first only help flaky steps; honest failure follows.
@@ -583,8 +594,10 @@ def _make_step_node(
             if (
                 context
                 and "context" not in resolved_input
-                and is_terminal
-                and eot not in _MACHINE_OUTPUT_TYPES
+                and (
+                    (is_terminal and eot not in _MACHINE_OUTPUT_TYPES)
+                    or eot in _QUIZ_CONTEXT_TYPES
+                )
             ):
                 resolved_input["context"] = context
         if step.expected_output_type and "expected_output_type" not in resolved_input:

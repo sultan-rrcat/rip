@@ -897,6 +897,36 @@ class TestPlanGraph:
         assert "context" not in agent.seen[0]  # intermediate: task + upstream only
         assert agent.seen[1].get("context") == "CTX"  # terminal prose: full context
 
+    def test_quiz_json_extractor_gets_context_despite_machine_type(self):
+        # ADR-055: the quiz extractor is never terminal (quiz.generate
+        # depends on it) yet the quiz prompt promises chat-history
+        # grounding — the terminal-only rule must not starve it. Numbers
+        # extractors stay excluded (strictness over grounding).
+        agent = FakeAgent(output='{"questions": []}')
+        agents, _ = _registries(agent, rag=FakeRAG())
+        tools = ToolRegistry()
+        tools.register(FakeTool())
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="fake.tool",
+                         input={"query": "x"},
+                         expected_output_type="chunks"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "extract {{1}}"},
+                         depends_on=["1"], expected_output_type="quiz_json"),
+                PlanStep(step_id="3", tool_id="fake.tool",
+                         input={"data": "{{2}}"},
+                         depends_on=["2"], expected_output_type="quiz"),
+            ],
+        )
+        result = run_plan_graph(
+            plan, agents, tool_registry=tools, trace_id="t",
+            context="CTX", fallback_message="FB",
+        )
+        assert result.step_results[1].status is StepStatus.SUCCESS
+        assert agent.seen[0].get("context") == "CTX"
+
     def test_tool_steps_get_no_context_or_fallback(self):
         tool = FakeTool()
         tools = ToolRegistry()
