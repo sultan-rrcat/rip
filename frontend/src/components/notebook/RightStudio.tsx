@@ -19,8 +19,9 @@ interface RightStudioProps {
   jobs: StudioJob[]
   loading: boolean
   error: string | null
-  starting: null | 'quiz' | 'convert'
-  onStartQuiz: (count: number, kind: StudioQuizKind) => Promise<StudioJob | null>
+  starting: null | 'convert'
+  chatBusy: boolean
+  onSendQuizPrompt: (prompt: string) => void
   onStartConvert: (
     fileId: string | '*',
     targetFormat: StudioConvertFormat,
@@ -34,6 +35,23 @@ const QUIZ_KINDS: { value: StudioQuizKind; label: string }[] = [
   { value: 'msq', label: 'MSQ' },
   { value: 'truefalse', label: 'T/F' },
 ]
+
+// Kind tokens the backend parses deterministically (router slots +
+// builders.parse_quiz_params): "N questions" for the count, MCQ / MSQ /
+// true-false for the kind, plus "quiz" + "Generate" for the rule pre-filter.
+const QUIZ_KIND_TOKENS: Record<StudioQuizKind, string> = {
+  mcq: 'MCQ',
+  msq: 'MSQ',
+  truefalse: 'true-false',
+}
+
+export function buildQuizPrompt(count: number, kind: StudioQuizKind): string {
+  const clamped = Math.min(50, Math.max(2, Math.floor(count)))
+  return (
+    `Generate a quiz with ${clamped} questions (${QUIZ_KIND_TOKENS[kind]}) ` +
+    `from this notebook's chat history and provided documents.`
+  )
+}
 
 const CONVERT_FORMATS: { value: StudioConvertFormat; label: string }[] = [
   { value: 'md', label: 'MD' },
@@ -86,7 +104,8 @@ const RightStudio = memo(function RightStudio({
   loading,
   error,
   starting,
-  onStartQuiz,
+  chatBusy,
+  onSendQuizPrompt,
   onStartConvert,
   onCancel,
   onReload,
@@ -149,7 +168,8 @@ const RightStudio = memo(function RightStudio({
               <h2 className="text-[13px] font-semibold text-ink">Quiz</h2>
             </div>
             <p className="mt-1 text-[11px] leading-snug text-ink-soft/80">
-              Interactive test from your documents — same engine as chat quizzes.
+              Sends your settings as a chat prompt — the interactive test
+              appears in the conversation.
             </p>
             <div className="mt-2 flex items-center gap-2">
               <label
@@ -190,11 +210,12 @@ const RightStudio = memo(function RightStudio({
             </div>
             <button
               type="button"
-              disabled={busy}
-              onClick={() => void onStartQuiz(clampCount(quizCount), quizKind)}
+              disabled={busy || chatBusy}
+              title={chatBusy ? 'Wait for the current run to finish' : 'Send quiz prompt to chat'}
+              onClick={() => onSendQuizPrompt(buildQuizPrompt(quizCount, quizKind))}
               className="mt-2 flex w-full items-center justify-center gap-2 rounded-md bg-ink py-2 text-sm font-semibold text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {starting === 'quiz' ? 'Starting…' : 'Generate quiz'}
+              Generate quiz
             </button>
           </section>
 

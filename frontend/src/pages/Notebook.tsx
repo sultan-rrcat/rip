@@ -255,7 +255,8 @@ export default function Notebook() {
               loading={studio.loading}
               error={studio.error}
               starting={studio.starting}
-              onStartQuiz={studio.startQuizJob}
+              chatBusy={isRunning}
+              onSendQuizPrompt={(prompt) => void handleSendMessage(prompt)}
               onStartConvert={studio.startConvertJob}
               onCancel={(jobId) => void studio.cancelJob(jobId)}
               onReload={() => void studio.reload()}

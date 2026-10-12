@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   cancelStudioJobAPI,
   createConvertJobAPI,
-  createQuizJobAPI,
   getStudioJobAPI,
   listStudioJobsAPI,
 } from '@/services/studio'
@@ -10,7 +9,6 @@ import { notifyToast } from '@/services/toast'
 import type {
   StudioConvertFormat,
   StudioJob,
-  StudioQuizKind,
 } from '@/types/studio'
 import { isTerminalStatus } from '@/types/studio'
 
@@ -33,7 +31,7 @@ export function useStudio(notebookId: string | undefined) {
   const [jobs, setJobs] = useState<StudioJob[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [starting, setStarting] = useState<null | 'quiz' | 'convert'>(null)
+  const [starting, setStarting] = useState<null | 'convert'>(null)
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const nbRef = useRef<string | undefined>(notebookId)
 
@@ -106,25 +104,6 @@ export function useStudio(notebookId: string | undefined) {
     return () => clearAllTimers()
   }, [notebookId, reload, clearAllTimers])
 
-  const startQuizJob = useCallback(
-    async (count: number, kind: StudioQuizKind): Promise<StudioJob | null> => {
-      if (!notebookId || starting) return null
-      setStarting('quiz')
-      try {
-        const job = await createQuizJobAPI(notebookId, count, kind)
-        setJobs((prev) => [job, ...prev])
-        pollJob(job.job_id)
-        return job
-      } catch (err) {
-        notifyToast(jobErrorMessage(err))
-        return null
-      } finally {
-        setStarting(null)
-      }
-    },
-    [notebookId, starting, pollJob],
-  )
-
   const startConvertJob = useCallback(
     async (
       fileId: string | '*',
@@ -169,7 +148,6 @@ export function useStudio(notebookId: string | undefined) {
     starting,
     isBusy: starting !== null,
     reload,
-    startQuizJob,
     startConvertJob,
     cancelJob,
   }
