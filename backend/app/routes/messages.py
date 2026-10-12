@@ -294,3 +294,34 @@ def update_message(id: str, message_id: str, data: MessageUpdate, user: UserResp
     except Exception:
         logger.exception(f"Error updating message {message_id} for notebook: {id}")
         raise HTTPException(status_code=500, detail="Failed to update message")
+
+
+@router.delete("/api/notebooks/{id}/messages")
+def clear_messages(id: str, user: UserResponse = Depends(get_current_user)):  # noqa: B008 - FastAPI Depends-in-default is canonical
+    """Clear the whole chat history of a notebook (fresh start, same notebook).
+
+    Owner-scoped (404-on-foreign). Deletes every row for the notebook;
+    runs/run_events are untouched (history stays inspectable via replay).
+    """
+    logger.info(f"Clearing messages for notebook: {id}")
+
+    try:
+        with pg_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM notebooks WHERE notebook_id = %s AND owner_id = %s",
+                (id, user.user_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Notebook not found")
+
+            cur.execute("DELETE FROM messages WHERE notebook_id = %s", (id,))
+            deleted = cur.rowcount
+
+        logger.info(f"Cleared {deleted} message(s) for notebook: {id}")
+        return {"message": "cleared", "deleted": deleted}
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(f"Error clearing messages for notebook: {id}")
+        raise HTTPException(status_code=500, detail="Failed to clear messages")

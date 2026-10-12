@@ -129,6 +129,17 @@ class TestFiles:
             os.path.join(settings.upload_dir, test_notebook, f"{file_id}.pdf")
         )
 
+    def test_upload_doc_is_allowed(self, client, test_notebook):
+        """Legacy `.doc` must pass the extension gate (then ingest honestly)."""
+        assert ".doc" in settings.allowed_extensions
+        response = client.post(
+            "/api/files/upload",
+            data={"notebook_id": test_notebook},
+            files={"file": ("legacy.doc", b"\xd0\xcf\x11\xe0 fake ole", "application/msword")},
+        )
+        assert response.status_code == 200
+        assert response.json()["name"] == "legacy.doc"
+
     def test_process_file_reaches_terminal_status(
         self, client, test_notebook
     ):
@@ -237,6 +248,31 @@ class TestMessages:
         response = client.put(
             f"/api/notebooks/00000000-0000-0000-0000-000000000000/messages/{asked['id']}",
             json={"text": "ghost edit"},
+        )
+        assert response.status_code == 404
+
+    def test_clear_messages_removes_all(self, client, test_notebook):
+        self._post_message(client, test_notebook, "user", "q1")
+        self._post_message(client, test_notebook, "assistant", "a1")
+        self._post_message(client, test_notebook, "user", "q2")
+
+        response = client.delete(f"/api/notebooks/{test_notebook}/messages")
+        assert response.status_code == 200
+        assert response.json()["deleted"] == 3
+
+        remaining = client.get(
+            f"/api/notebooks/{test_notebook}/messages"
+        ).json()
+        assert remaining == []
+
+    def test_clear_empty_notebook_ok(self, client, test_notebook):
+        response = client.delete(f"/api/notebooks/{test_notebook}/messages")
+        assert response.status_code == 200
+        assert response.json()["deleted"] == 0
+
+    def test_clear_missing_notebook_404(self, client):
+        response = client.delete(
+            "/api/notebooks/00000000-0000-0000-0000-000000000000/messages"
         )
         assert response.status_code == 404
 

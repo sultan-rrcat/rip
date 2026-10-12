@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     upload_dir: str = "./backend/uploads"
     max_upload_size_mb: int = 50
     allowed_extensions: list[str] = [
-        ".pdf", ".docx", ".txt", ".md", ".csv",
+        ".pdf", ".doc", ".docx", ".txt", ".md", ".csv",
         ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp",
         ".cs", ".go", ".rs", ".rb", ".php", ".swift", ".kt", ".scala", ".r",
         ".m", ".sh", ".ps1", ".sql", ".html", ".css", ".scss", ".less",
