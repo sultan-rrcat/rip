@@ -10,7 +10,7 @@ const DEFAULT_MESSAGES: Message[] = [
   {
     id: uuidv4(),
     role: 'assistant',
-    text: 'How can I help you?',
+    text: 'Hi, I\'m your offline research assistant. Add sources on the left, then I can:\n\n- **Answer** questions about your documents — with cited sources\n- **Summarize, compare, or quiz** you on the material\n- **Chart** numbers from your docs, and **generate reports** or convert files\n- **Code** — explain, review, generate, and test it, including CSV analysis\n\nEverything stays on this network. What are we researching today?',
     sources: [],
   },
 ]
