@@ -22,7 +22,6 @@ interface LeftSidebarProps {
   onUpload: (event: ChangeEvent<HTMLInputElement>) => void
   onDelete: (fileId: string) => void
   onRetry: (fileId: string) => void
-  onReprocess: (fileId: string) => void
   onDismissFileError: (fileId: string) => void
   onPreview: (file: NotebookFile) => void
   onRenameNotebook: (name: string) => void
@@ -36,7 +35,6 @@ const LeftSidebar = memo(function LeftSidebar({
   onUpload,
   onDelete,
   onRetry,
-  onReprocess,
   onDismissFileError,
   onPreview,
   onRenameNotebook,
@@ -166,7 +164,6 @@ const LeftSidebar = memo(function LeftSidebar({
                   file={file}
                   onDelete={onDelete}
                   onRetry={onRetry}
-                  onReprocess={onReprocess}
                   onDismissFileError={onDismissFileError}
                   onPreview={onPreview}
                 />
@@ -239,12 +236,11 @@ interface FileItemProps {
   file: NotebookFile
   onDelete: (fileId: string) => void
   onRetry: (fileId: string) => void
-  onReprocess: (fileId: string) => void
   onDismissFileError: (fileId: string) => void
   onPreview: (file: NotebookFile) => void
 }
 
-function FileItem({ file, onDelete, onRetry, onReprocess, onDismissFileError, onPreview }: FileItemProps) {
+function FileItem({ file, onDelete, onRetry, onDismissFileError, onPreview }: FileItemProps) {
   const [confirming, setConfirming] = useState(false)
   const tone = {
     uploading: 'border-brass/50 bg-brass/10',
@@ -297,19 +293,6 @@ function FileItem({ file, onDelete, onRetry, onReprocess, onDismissFileError, on
                   <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-line border-t-brass-deep"></span>
                   <span className="text-brass-deep">PROCESSING</span>
                   <span className="process-bar mt-1 block h-1 w-full rounded-full bg-brass/20" aria-hidden="true" />
-                  {!file.id.startsWith('temp-') && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onReprocess(file.id)
-                      }}
-                      title="Re-trigger processing (recovery for stuck files)"
-                      className="ml-1 underline hover:text-ink"
-                    >
-                      RE-RUN
-                    </button>
-                  )}
                 </>
               )}
 
