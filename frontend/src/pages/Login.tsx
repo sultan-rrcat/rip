@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import type { AuthUser } from '@/auth'
 
-export default function Login({ onLogin }: { onLogin: () => void }) {
+export default function Login({ onLogin }: { onLogin: (user: AuthUser) => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -26,7 +27,8 @@ export default function Login({ onLogin }: { onLogin: () => void }) {
         throw new Error(data.detail || 'Login failed')
       }
 
-      onLogin()
+      const data = await res.json().catch(() => ({}))
+      onLogin({ username: data.username ?? username, role: data.role ?? 'viewer' })
       navigate('/')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed')

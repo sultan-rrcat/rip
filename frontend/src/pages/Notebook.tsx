@@ -59,7 +59,7 @@ function downloadMarkdown(filename: string, content: string) {
   URL.revokeObjectURL(url)
 }
 
-export default function Notebook() {
+export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
   const { notebook_id } = useParams()
   const { notebookName, renameNotebook } = useNotebook(notebook_id)
   const {
@@ -260,14 +260,16 @@ export default function Notebook() {
             >
               <DeleteSweepIcon sx={{ fontSize: 17 }} />
             </button>
-            <Link
-              to="/admin"
-              title="Runtime config"
-              aria-label="Open admin runtime config"
-              className="hidden h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink sm:flex"
-            >
-              <SettingsIcon sx={{ fontSize: 17 }} />
-            </Link>
+            {isAdmin && (
+              <Link
+                to="/admin"
+                title="Runtime config"
+                aria-label="Open admin runtime config"
+                className="hidden h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink sm:flex"
+              >
+                <SettingsIcon sx={{ fontSize: 17 }} />
+              </Link>
+            )}
             <span className="[&_button]:text-ink-soft/70">
               <LogoutButton />
             </span>

@@ -22,7 +22,7 @@ function ledgerLine(nb: Notebook): string {
   return `${date} · ${short}`
 }
 
-export default function Home() {
+export default function Home({ isAdmin = false }: { isAdmin?: boolean }) {
   const [notebooks, setNotebooks] = useState<Notebook[]>([])
   const [query, setQuery] = useState('')
   const [failed, setFailed] = useState(false)
@@ -95,14 +95,16 @@ export default function Home() {
                 />
                 LOCAL ONLY
               </span>
-              <Link
-                to="/admin"
-                title="Runtime config"
-                aria-label="Open admin runtime config"
-                className="flex h-9 w-9 items-center justify-center rounded-full text-paper/80 transition-colors hover:bg-paper/10 hover:text-paper"
-              >
-                <SettingsIcon fontSize="small" />
-              </Link>
+              {isAdmin && (
+                <Link
+                  to="/admin"
+                  title="Runtime config"
+                  aria-label="Open admin runtime config"
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-paper/80 transition-colors hover:bg-paper/10 hover:text-paper"
+                >
+                  <SettingsIcon fontSize="small" />
+                </Link>
+              )}
               <span className="text-paper/80 [&_button]:text-paper">
                 <LogoutButton />
               </span>

@@ -1,4 +1,5 @@
 import { API } from '@/config'
+import { notifyToast } from '@/services/toast'
 
 const DEFAULT_TIMEOUT_MS = 30000
 
@@ -31,6 +32,14 @@ export async function request<T>(
     if (res.status === 401 && !path.startsWith('/api/auth/')) {
       window.location.href = '/login'
       throw new ApiError(401, 'Unauthorized')
+    }
+
+    // Role gate (ADR-052): a viewer reaching an admin endpoint is sent
+    // home with an explanation — never into the login loop.
+    if (res.status === 403 && !path.startsWith('/api/auth/')) {
+      notifyToast('Admin access required.')
+      window.location.href = '/'
+      throw new ApiError(403, 'Admin access required')
     }
 
     if (!res.ok) {
