@@ -442,7 +442,7 @@ function AssistantMessage({
       </div>
       {/* content */}
       <div className="flex-1 min-w-0 space-y-1">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex min-h-7 max-w-2xl items-center justify-between gap-2">
           <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">ASSISTANT</p>
           {canCopy && (
             <button
@@ -450,7 +450,7 @@ function AssistantMessage({
               onClick={handleCopyAnswer}
               title={copied ? 'Copied' : 'Copy answer'}
               aria-label={copied ? 'Copied to clipboard' : 'Copy answer to clipboard'}
-              className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-all hover:bg-paper hover:text-ink focus-visible:opacity-100 ${
+              className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-all hover:bg-paper hover:text-ink focus-visible:opacity-100 ${
                 copied ? 'text-ledger opacity-100' : 'text-ink-soft/50 opacity-0 group-hover/assistant:opacity-100'
               }`}
             >
