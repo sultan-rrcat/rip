@@ -230,13 +230,6 @@ export default function QuizArtifact({ artifact: a }: { artifact: Artifact }) {
         >
           {showAnswers ? 'Hide answers' : 'Show answers'}
         </button>
-        <a
-          className="inline-flex h-8 items-center rounded-md border border-line bg-card px-3 text-[13px] font-medium text-ledger hover:underline"
-          href={artifactSrc(a)}
-          download={a.filename}
-        >
-          {a.filename}
-        </a>
       </div>
     </div>
   )
