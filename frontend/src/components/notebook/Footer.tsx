@@ -9,6 +9,12 @@ import type {
 
 const CODE_PASTE_THRESHOLD = 200
 
+// Soft-cap for large pastes: warn past ~12k chars (≈3k tokens at the
+// repo-wide len//4 estimator). The server enforces a hard cap above this
+// (see backend max_message_chars), so the confirm fires first.
+const LARGE_PASTE_WARN_THRESHOLD = 12000
+const LARGE_PASTE_COUNTER_THRESHOLD = 2000
+
 interface FooterProps {
   onSendMessage: (text: string) => void
   isLoading?: boolean
@@ -24,7 +30,12 @@ const Footer = memo(function Footer({
 }: FooterProps) {
   const [inputText, setInputText] = useState('')
   const [isCode, setIsCode] = useState(false)
+  const [confirmingLarge, setConfirmingLarge] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const estimatedTokens = Math.ceil(inputText.length / 4)
+  const isOversize = inputText.length > LARGE_PASTE_WARN_THRESHOLD
+  const showCounter = inputText.length > LARGE_PASTE_COUNTER_THRESHOLD
 
   useEffect(() => {
     const el = textareaRef.current
@@ -34,13 +45,24 @@ const Footer = memo(function Footer({
     el.style.height = Math.min(el.scrollHeight, 200) + 'px'
   }, [inputText])
 
+  function doSend() {
+    onSendMessage(inputText)
+    setInputText('')
+    setIsCode(false)
+    setConfirmingLarge(false)
+  }
+
   function handleSend() {
     // Don't consume the draft while a run is in flight: the placeholder is
     // replaced by the Stop button, but Enter must not discard typed text.
     if (isLoading || !inputText.trim()) return
-    onSendMessage(inputText)
-    setInputText('')
-    setIsCode(false)
+    // Oversize pastes need one explicit confirmation: they consume a large
+    // share of the model context window and the server rejects past its cap.
+    if (isOversize && !confirmingLarge) {
+      setConfirmingLarge(true)
+      return
+    }
+    doSend()
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -61,11 +83,40 @@ const Footer = memo(function Footer({
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     setInputText(e.target.value)
     if (e.target.value === '') setIsCode(false)
+    if (e.target.value.length <= LARGE_PASTE_WARN_THRESHOLD) setConfirmingLarge(false)
   }
 
   return (
     <footer className="shrink-0 rounded-lg border border-line bg-card shadow-[0_1px_0_rgba(21,39,54,0.12)]">
       <div className="mx-auto w-full max-w-3xl px-4 py-3">
+        {confirmingLarge && (
+          <div
+            role="alert"
+            className="font-ledger mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-brass/50 bg-brass/10 px-3 py-2 text-[11px] tracking-wide text-brass-deep"
+          >
+            <span>
+              LARGE PASTE — {inputText.length.toLocaleString()} CHARS (~
+              {estimatedTokens.toLocaleString()} TOKENS). IT EATS CONTEXT; THE
+              SERVER REJECTS PAST ITS CAP.
+            </span>
+            <span className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmingLarge(false)}
+                className="rounded border border-brass/50 bg-card px-2 py-1 font-semibold hover:bg-paper"
+              >
+                KEEP EDITING
+              </button>
+              <button
+                type="button"
+                onClick={doSend}
+                className="rounded bg-ink px-2 py-1 font-semibold text-paper hover:bg-ink-soft"
+              >
+                SEND ANYWAY
+              </button>
+            </span>
+          </div>
+        )}
         <div className="composer rounded-md border border-line bg-paper/60 focus-within:border-ledger/60">
           <div className="relative px-3 py-2.5 ">
             <textarea
@@ -125,7 +176,14 @@ const Footer = memo(function Footer({
           </div>
         </div>
         <p className="font-ledger mt-2 text-center text-[10px] tracking-wide text-ink-soft/50">
-          SHIFT+ENTER FOR NEW LINE
+          {showCounter ? (
+            <span>
+              {inputText.length.toLocaleString()} CHARS · ~
+              {estimatedTokens.toLocaleString()} TOKENS · SHIFT+ENTER FOR NEW LINE
+            </span>
+          ) : (
+            'SHIFT+ENTER FOR NEW LINE'
+          )}
         </p>
       </div>
     </footer>
