@@ -26,17 +26,7 @@ interface ChatAreaProps {
   onEditMessage?: (messageId: string, text: string) => Promise<void>
   onRegenerate?: () => void
   onSourceClick?: (source: Source) => void
-  onSendMessage?: (text: string) => void
 }
-
-// Shown when the notebook has no real conversation yet (only the
-// default greeting). One click sends the prompt — no typing needed.
-const STARTER_PROMPTS = [
-  'Summarize my documents',
-  'What are the key findings across my sources?',
-  'Compare my documents',
-  'List the main topics covered',
-]
 
 const markdownComponents: Components = {
   // Headings: Tailwind preflight resets h1-h6 to inherit (same size/weight
@@ -260,7 +250,7 @@ function CodeBlock({
   )
 }
 
-const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunning, cancelledIds, canRegenerate, onEditMessage, onRegenerate, onSourceClick, onSendMessage }: ChatAreaProps) {
+const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunning, cancelledIds, canRegenerate, onEditMessage, onRegenerate, onSourceClick }: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Only stick to the bottom while the user is already near it, so scrolling
@@ -374,20 +364,6 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunni
           )
         }
       })}
-      {messages.length <= 1 && onSendMessage && !isRunning && (
-        <div className="flex flex-wrap gap-2 pt-2" aria-label="Suggested prompts">
-          {STARTER_PROMPTS.map((prompt) => (
-            <button
-              key={prompt}
-              type="button"
-              onClick={() => onSendMessage(prompt)}
-              className="rounded-full border border-line bg-card px-3 py-1.5 text-[12px] font-medium text-ink-soft transition-colors hover:border-ledger/60 hover:text-ink"
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
-      )}
       <div ref={bottomRef} />
     </div>
   )

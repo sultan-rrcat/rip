@@ -1,11 +1,9 @@
 import { useParams, Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import DownloadIcon from '@mui/icons-material/Download'
-import RefreshIcon from '@mui/icons-material/Refresh'
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep'
 import MenuIcon from '@mui/icons-material/Menu'
 import TuneIcon from '@mui/icons-material/Tune'
-import SettingsIcon from '@mui/icons-material/Settings'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -16,7 +14,6 @@ import Footer from '@/components/notebook/Footer'
 import LeftSidebar from '@/components/notebook/LeftSidebar'
 import RightStudio from '@/components/notebook/RightStudio'
 import FilePreviewModal from '@/components/notebook/FilePreviewModal'
-import LogoutButton from '@/components/LogoutButton'
 import ToastHost from '@/components/ToastHost'
 import { API } from '@/config'
 import { useNotebook } from '@/hooks/notebooks/useNotebook'
@@ -61,7 +58,7 @@ function downloadMarkdown(filename: string, content: string) {
   URL.revokeObjectURL(url)
 }
 
-export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
+export default function Notebook() {
   const { notebook_id } = useParams()
   const { notebookName, renameNotebook } = useNotebook(notebook_id)
   const {
@@ -271,19 +268,10 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
               disabled={!hasConversation}
               title="Export chat as Markdown"
               aria-label="Export chat as Markdown"
-              className="flex h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"
+              className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-semibold text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"
             >
               <DownloadIcon sx={{ fontSize: 17 }} />
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleRegenerate()}
-              disabled={!canRegenerate || isRunning}
-              title="Regenerate last answer"
-              aria-label="Regenerate last answer"
-              className="flex h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink disabled:cursor-not-allowed disabled:opacity-30"
-            >
-              <RefreshIcon sx={{ fontSize: 17 }} />
+              Export
             </button>
             <button
               type="button"
@@ -298,16 +286,6 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
             >
               <DeleteSweepIcon sx={{ fontSize: 17 }} />
             </button>
-            {isAdmin && (
-              <Link
-                to="/admin"
-                title="Runtime config"
-                aria-label="Open admin runtime config"
-                className="hidden h-8 w-8 items-center justify-center rounded-md text-ink-soft/70 transition-colors hover:bg-paper hover:text-ink sm:flex"
-              >
-                <SettingsIcon sx={{ fontSize: 17 }} />
-              </Link>
-            )}
             <button
               type="button"
               onClick={() => setStudioOpen((v) => !v)}
@@ -318,11 +296,8 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
             >
               <TuneIcon sx={{ fontSize: 17 }} />
             </button>
-            <span className="[&_button]:text-ink-soft/70">
-              <LogoutButton />
-            </span>
             <p className="font-ledger ml-2 hidden text-[10px] tracking-[0.2em] text-ink-soft/50 lg:block">
-              OFFLINE · NOTHING LEAVES THIS MACHINE
+              NOTHING LEAVES THIS NETWORK
             </p>
           </div>
         </div>
@@ -337,7 +312,6 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
             onEditMessage={handleEditMessage}
             onRegenerate={() => void handleRegenerate()}
             onSourceClick={handleSourceClick}
-            onSendMessage={handleSendMessage}
           />
         </div>
         <Footer

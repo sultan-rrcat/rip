@@ -58,7 +58,7 @@ export default function App() {
           element={
             isAuthenticated ? (
               <ErrorBoundary>
-                <Notebook isAdmin={isAdmin} />
+                <Notebook />
               </ErrorBoundary>
             ) : (
               <Navigate to="/login" replace />
