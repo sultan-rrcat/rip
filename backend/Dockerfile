@@ -25,6 +25,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV JAVA_HOME=/usr/lib/jvm/default-java
 RUN java -version
 
+# Docker CLI for code.sandbox (ADR-049/050): the tool shells out to
+# `docker create/cp/start/rm` against the mounted socket, so the CLI must
+# exist inside this image (socket alone is not enough). Client-only copy
+# from the official image: no daemon, no apt repo setup.
+COPY --from=docker:28-cli /usr/local/bin/docker /usr/local/bin/docker
+RUN docker --version
+
 # CPU-only torch first: default PyPI pulls ~2-3GB nvidia-* CUDA wheels even
 # though inference is BGE-M3 CPU + Ollama (host ml_env proves torch 2.14+cpu
 # needs no nvidia deps). CPU index avoids the hours-long pip layer.
