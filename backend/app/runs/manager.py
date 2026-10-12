@@ -409,6 +409,15 @@ class RunManager:
                 run_obs.update(output={"status": "failed", "error": str(e)[:500]})
                 return
 
+            # Late cancel may land after orchestration returned but before
+            # the terminal write. The stop button must win: completing over
+            # a cancelled row lies to subscribers (200-cancelled followed by
+            # run_completed) and overwrites the guarded cancel in the store.
+            if record.cancel_event.is_set():
+                self._finish_cancelled(record, "cancelled after completion")
+                run_obs.update(output={"status": "cancelled"})
+                return
+
             # Q32: one `sources` event per completed rag.query step, in plan
             # order, via extract_sources() over the step's retrieved chunks.
             # Deduplicate across steps — repeated rag.query calls returning
