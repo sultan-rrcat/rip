@@ -9,10 +9,25 @@ CREATE TABLE IF NOT EXISTS public.users
     user_id       uuid NOT NULL DEFAULT gen_random_uuid(),
     username      text COLLATE pg_catalog."default" NOT NULL,
     password_hash text COLLATE pg_catalog."default" NOT NULL,
+    role          text COLLATE pg_catalog."default" NOT NULL DEFAULT 'viewer',
     created_at    timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT users_pkey PRIMARY KEY (user_id),
-    CONSTRAINT users_username_key UNIQUE (username)
+    CONSTRAINT users_username_key UNIQUE (username),
+    CONSTRAINT users_role_check CHECK (role IN ('admin', 'viewer'))
 ) TABLESPACE pg_default;
+
+-- Pre-role volumes: fail-soft backfill (also applied at boot by
+-- auth.ensure_role_column, since compose init runs only on empty pgdata).
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS role text;
+UPDATE public.users SET role = 'viewer' WHERE role IS NULL;
+ALTER TABLE public.users ALTER COLUMN role SET DEFAULT 'viewer';
+ALTER TABLE public.users ALTER COLUMN role SET NOT NULL;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_role_check') THEN
+        ALTER TABLE public.users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'viewer'));
+    END IF;
+END $$;
 
 -- ─── notebooks ──────────────────────────────────────────────────────────────
 -- One notebook = one conversation = one chat history.

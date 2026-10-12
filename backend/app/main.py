@@ -58,6 +58,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("upload reaper failed, continuing", exc_info=True)
 
+    # Role migration (ADR-052): backfill users.role on pre-role volumes.
+    # Fail-soft — auth degrades to viewer-by-default when it cannot run.
+    try:
+        from app.routes.auth import ensure_role_column
+
+        ensure_role_column()
+    except Exception:
+        logger.warning("role migration failed, continuing", exc_info=True)
+
     logger.info("Initiating ML models...")
     from app.core.config import settings as _settings
 
@@ -175,8 +184,9 @@ app.include_router(messages.router, dependencies=[Depends(auth.get_current_user)
 
 # Run lifecycle + admin (/v1/*, bare JSON — no envelope).
 app.include_router(runs.router, dependencies=[Depends(auth.get_current_user)])
-app.include_router(admin.router, dependencies=[Depends(auth.get_current_user)])
-app.include_router(prompt_admin.router, dependencies=[Depends(auth.get_current_user)])
+# Admin panel is role-gated (ADR-052): viewers get 403, not a silent page.
+app.include_router(admin.router, dependencies=[Depends(auth.require_admin)])
+app.include_router(prompt_admin.router, dependencies=[Depends(auth.require_admin)])
 
 # Liveness probes: /api/health (RIP alias, kept) + /health (canonical).
 app.include_router(health.router)
