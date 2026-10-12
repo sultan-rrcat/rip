@@ -189,10 +189,20 @@ class RunManager:
         ValueError on empty message (defense in depth — routes 422 first);
         LookupError on unknown notebook (routes map to 404).
         RuntimeError if max active runs reached (routes map to 429).
+        ValueError when the message exceeds `max_message_chars` (routes map
+        to 413) — one paste must not silently consume the context window.
         """
         text = (message or "").strip()
         if not text:
             raise ValueError("message must not be empty")
+        from app.core.config import settings as _settings
+
+        if len(text) > int(_settings.max_message_chars):
+            raise ValueError(
+                f"message too large ({len(text)} chars, "
+                f"limit {_settings.max_message_chars}) — "
+                "upload it as a file or shorten it"
+            )
         notebook_id = str(notebook_id)
         if not self._notebook_exists(notebook_id):
             raise LookupError(f"Unknown notebook: {notebook_id}")

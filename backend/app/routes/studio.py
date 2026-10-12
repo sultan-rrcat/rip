@@ -177,6 +177,8 @@ def create_quiz_job(
         record = manager.create_run(id, message)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
     except RuntimeError as e:
         raise HTTPException(
             status_code=429, detail=str(e), headers={"Retry-After": "30"}
@@ -221,6 +223,8 @@ def create_convert_job(
         record = manager.create_run(id, message)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
     except RuntimeError as e:
         raise HTTPException(
             status_code=429, detail=str(e), headers={"Retry-After": "30"}

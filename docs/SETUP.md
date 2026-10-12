@@ -53,6 +53,7 @@ copy .env.example .env
 | `CHAT_MAX_TOKENS` | `1024` (chat builder cap — greetings/small-talk stay cheap) |
 | `MAX_UPLOAD_SIZE_MB` | `50` (must match nginx `client_max_body_size 50M`) |
 | `RAG_WHOLE_FILE_PCT` | `0.15` — share of the window one whole-file `rag.query` dump may fill before falling back to ranked retrieval (ADR-033). Per-shard, since up to 5 shards share one reduce prompt; `0` disables the shortcut |
+| `MAX_MESSAGE_CHARS` | `20000` — one user message may claim at most this many chars (~5k tokens); oversize fails honest with 413, composer warns past 12k |
 | `RAG_PDF_LOADER` | `docling` (default) or `opendataloader` — the selected PDF→Markdown loader runs first, the other is the fallback |
 | `CORS_ORIGINS` | `*` (plain str, not `["*"]`) |
 | `UPLOAD_DIR` | `./backend/uploads` host-local; `/app/uploads` in compose (overridden in `docker-compose.yml`, image `ENV` fallback matches) |

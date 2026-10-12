@@ -176,6 +176,12 @@ class Settings(BaseSettings):
     # estimator: len(text)//4 (no tiktoken); budget = int(ollama_context_window * summary_threshold_pct)
     ollama_context_window: int = 32768  # qwen2.5:14b native window; override per model
     memory_window_size: int = 10  # advisory verbatim window (WINDOW_SIZE); real constraint is budget
+    # Inbound message cap: one user message may claim at most this many chars
+    # (~len//4 tokens, ~5k at default — same order as one whole-file RAG
+    # shard budget, leaving room for memory + retrieval + system prompt).
+    # Oversized chat input fails honest with 413 instead of silently
+    # degrading the answer. The composer warns below this (12k chars).
+    max_message_chars: int = 20000
     summary_threshold_pct: float = 0.7
     summary_max_tokens: int = 512  # _SUMMARY_MAX_TOKENS; summary LLM call cap
     # Whole-file RAG shortcut: when every chunk of the scoped file(s) fits in
