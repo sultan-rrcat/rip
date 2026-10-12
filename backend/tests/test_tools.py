@@ -1,4 +1,4 @@
-"""Phase 3.1 — tools: registry/executor + all 5 tools.
+"""Phase 3.1 — tools: registry/executor + all 7 tools.
 
 Live where possible (plot = stdlib, doc = installed libs); fakes where
 live deps are unavailable (rag.query uses an injected fake — real
@@ -18,6 +18,7 @@ from app.tools.registry import ToolRegistry, get_default_tool_registry
 
 EXPECTED_IDS = [
     "code.read",
+    "code.sandbox",
     "doc.convert",
     "doc.generate",
     "notebook.inspect",
@@ -89,10 +90,10 @@ class SpyProvider:
 
 
 class TestRegistry:
-    def test_all_five_registered(self):
+    def test_all_registered(self):
         reg = get_default_tool_registry(rag=FakeRAG())
         assert sorted(t["tool_id"] for t in reg.manifest()) == EXPECTED_IDS
-        assert len(reg) == 6
+        assert len(reg) == 7
 
     def test_all_inherit_tool(self):
         reg = get_default_tool_registry(rag=FakeRAG())
