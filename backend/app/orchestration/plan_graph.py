@@ -140,6 +140,35 @@ def _outputs_from(results: dict[str, StepResult]) -> dict[str, str]:
     }
 
 
+#: `{{error:id}}` placeholder: resolves to the upstream step's failure text,
+#: or "" when the step did not fail. Kept as a SEPARATE regex from
+#: `_PLACEHOLDER` on purpose: the validator keeps its own copy of the
+#: output-placeholder pattern, so error refs neither earn grounding credit
+#: nor trip edge checks — the `{{1}}` beside them still carries the edge.
+_ERROR_PLACEHOLDER = re.compile(r"\{\{\s*error\s*:\s*([A-Za-z0-9_-]+)\s*\}\}")
+
+
+def _failures_from(results: dict[str, StepResult]) -> dict[str, str]:
+    """Failure text by step_id — the `{{error:id}}` resolution source.
+
+    Separate channel from `_outputs_from`: the fail-closed `(no chunks
+    retrieved)` marker keeps its contract (trace cfbaa9c3), while a step
+    that must REPORT the failure (code.sandbox → coding, trace 241f3fa1)
+    reads the error here. Absent unless the step actually failed.
+    """
+    failures: dict[str, str] = {}
+    for sid, r in results.items():
+        if r.status is StepStatus.SUCCESS:
+            continue
+        err = _trunc(r.error, 500) if r.error else None
+        failures[sid] = (
+            f"Step {sid} ({r.agent_id}) failed: {err}"
+            if err
+            else f"Step {sid} ({r.agent_id}) failed"
+        )
+    return failures
+
+
 def _try_numeric(s: str) -> int | float | str:
     """Try to parse a string as a number; return the original string on failure.
 
@@ -166,7 +195,11 @@ def _try_numeric(s: str) -> int | float | str:
 _EMPTY_CHUNKS_MARKER = "(no chunks retrieved)"
 
 
-def _resolve_value(value: object, outputs: dict[str, str]) -> object:
+def _resolve_value(
+    value: object,
+    outputs: dict[str, str],
+    failures: dict[str, str] | None = None,
+) -> object:
     if isinstance(value, str):
         # Resolve placeholders ONLY outside fenced code blocks: even-indexed
         # split parts are prose, odd-indexed parts are literal source text.
@@ -179,20 +212,29 @@ def _resolve_value(value: object, outputs: dict[str, str]) -> object:
             if m and len(parts) == 1:
                 resolved = outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER)
                 return _try_numeric(resolved)
+            em = _ERROR_PLACEHOLDER.fullmatch(chunk.strip())
+            if em and len(parts) == 1:
+                return (failures or {}).get(em.group(1), "")
+            resolved_chunk = _ERROR_PLACEHOLDER.sub(
+                lambda m: (failures or {}).get(m.group(1), ""),
+                chunk,
+            )
             parts[i] = _PLACEHOLDER.sub(
                 lambda m: outputs.get(m.group(1), _EMPTY_CHUNKS_MARKER),
-                chunk,
+                resolved_chunk,
             )
         return "".join(parts)
     if isinstance(value, dict):
-        return {k: _resolve_value(v, outputs) for k, v in value.items()}
+        return {k: _resolve_value(v, outputs, failures) for k, v in value.items()}
     if isinstance(value, list):
-        return [_resolve_value(v, outputs) for v in value]
+        return [_resolve_value(v, outputs, failures) for v in value]
     return value
 
 
-def _resolve_input(raw: dict, outputs: dict[str, str]) -> dict:
-    return {k: _resolve_value(v, outputs) for k, v in raw.items()}
+def _resolve_input(
+    raw: dict, outputs: dict[str, str], failures: dict[str, str] | None = None
+) -> dict:
+    return {k: _resolve_value(v, outputs, failures) for k, v in raw.items()}
 
 
 def _invoke_with_wall_clock(
@@ -520,8 +562,11 @@ def _make_step_node(
                     "placeholder — executing ungrounded",
                     step.step_id, sorted(step.depends_on),
                 )
+        state_results = state["step_results"]
         resolved_input = _resolve_input(
-            step.input, _outputs_from(state["step_results"])
+            step.input,
+            _outputs_from(state_results),
+            _failures_from(state_results),
         )
         is_tool = bool(step.tool_id)
         if is_tool:

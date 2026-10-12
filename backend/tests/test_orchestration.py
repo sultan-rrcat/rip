@@ -1528,6 +1528,80 @@ class TestFailClosedPlaceholders:
 # --- Fenced-code placeholder exemption (trace 987e6ceb) ---
 
 
+class TestErrorPlaceholders:
+    """`{{error:id}}` surfaces upstream failure text to the next step.
+
+    Trace 241f3fa1: code.sandbox timed out, step 2 (coding) received only
+    "(no chunks retrieved)" and concluded no file was attached — although
+    create_user.py was. The fail-closed `{{id}}` marker stays untouched;
+    `{{error:id}}` is a separate channel that is empty unless the step
+    actually failed.
+    """
+
+    def test_error_placeholder_resolves_failure_text(self) -> None:
+        from app.orchestration.plan_graph import _resolve_value
+
+        failures = {"1": "Step 1 (code.sandbox) failed: step timed out"}
+        assert _resolve_value("{{error:1}}", {}, failures) == \
+            "Step 1 (code.sandbox) failed: step timed out"
+
+    def test_error_placeholder_empty_without_failure(self) -> None:
+        from app.orchestration.plan_graph import _resolve_value
+
+        assert _resolve_value("{{error:1}}", {"1": "out"}) == ""
+        assert _resolve_value("{{error:9}}", {}, {}) == ""
+
+    def test_error_placeholder_beside_output_marker(self) -> None:
+        from app.orchestration.plan_graph import _resolve_value
+
+        out = _resolve_value(
+            "box:\n{{1}}{{error:1}}", {}, {"1": "Step 1 failed: boom"})
+        assert out == "box:\n(no chunks retrieved)Step 1 failed: boom"
+        assert "{{" not in out
+
+    def test_error_placeholder_literal_inside_fences(self) -> None:
+        from app.orchestration.plan_graph import _resolve_value
+
+        out = _resolve_value(
+            "```python\nx = '{{error:1}}'\n```", {},
+            {"1": "Step 1 failed: boom"})
+        assert "{{error:1}}" in out
+        assert "Step 1 failed" not in out
+
+    def test_dependent_sees_upstream_error_after_tool_failure(self) -> None:
+        class _FailTool(Tool):
+            tool_id = "fail.tool"
+            name = "Fail"
+            description = "always fails"
+
+            def execute(self, request: ToolRequest) -> ToolResponse:
+                return ToolResponse(tool_id=self.tool_id, ok=False,
+                                    output=None, error="sandbox exploded")
+
+        tools = ToolRegistry()
+        tools.register(_FailTool())
+        agent = FakeAgent(output="reported")
+        agents, _ = _registries(agent)
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="1", tool_id="fail.tool",
+                         input={"task": "run"}, expected_output_type="text"),
+                PlanStep(step_id="2", agent_id="fake",
+                         input={"message": "box:\n{{1}}{{error:1}}"},
+                         depends_on=["1"], expected_output_type="answer"),
+            ],
+        )
+        result = run_plan_graph(plan, agents, tool_registry=tools,
+                                trace_id="t", notebook_id="nb-1")
+        assert result.step_results[0].status is StepStatus.FAILURE
+        assert result.step_results[1].status is StepStatus.SUCCESS
+        seen = agent.seen[0]["message"]
+        assert "Step 1 (fail.tool) failed: sandbox exploded" in seen
+        assert "(no chunks retrieved)" in seen
+        assert "{{" not in seen
+
+
 class TestFencedCodePlaceholders:
     """`{{...}}` inside ``` fences is literal source text, never DAG wiring.
 

@@ -180,6 +180,15 @@ def test_csv_head_inlined_for_column_names(tmp_path, monkeypatch):
     _validator().validate(plan)
 
 
+def test_csv_report_carries_error_ref():
+    plan = build("analyze sales.csv", _route(Intent.CODE, "sales.csv"), CSV_SNAPSHOT)
+    assert plan is not None and len(plan.steps) == 2
+    message = str(plan.steps[1].input.get("message", ""))
+    assert "{{1}}" in message
+    assert "{{error:1}}" in message
+    _validator().validate(plan)
+
+
 # --- sandbox tool ---
 
 class _FakeCompleted:

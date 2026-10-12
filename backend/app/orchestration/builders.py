@@ -798,6 +798,38 @@ def _read_code_file(notebook_id: str, name: str, file_id: str) -> str | None:
         return None
 
 
+def _code_files_block(notebook_id: str | None, targets: list[tuple[str, str]]) -> str:
+    """Inline target sources as fenced sections (shared by build_code and
+    build_code_execute). Unreadable files get an honest note, never silence:
+    a gap the agent can misread as "no file attached" (trace 241f3fa1).
+    """
+    sections: list[str] = []
+    total = 0
+    for name, fid in targets:
+        content = _read_code_file(notebook_id or "", name, fid) if notebook_id else None
+        if content is None:
+            sections.append(
+                f"File {name}: (could not be read — describe it or re-upload it)"
+            )
+            continue
+        truncated = len(content) > _CODE_MAX_BYTES_PER_FILE
+        if truncated:
+            content = content[:_CODE_MAX_BYTES_PER_FILE]
+        if total + len(content) > _CODE_MAX_BYTES_TOTAL:
+            room = _CODE_MAX_BYTES_TOTAL - total
+            content = content[: max(room, 0)]
+            truncated = True
+        total += len(content)
+        marker = (
+            "\n…[truncated — file continues beyond what is shown]" if truncated else ""
+        )
+        lang = _EXT_TO_LANG.get(os.path.splitext(name)[1].lower(), "text")
+        sections.append(f"File {name}:\n```{lang}\n{content}\n```{marker}")
+        if total >= _CODE_MAX_BYTES_TOTAL:
+            break
+    return "\n\n".join(sections)
+
+
 def _coding_budget_for(request_text: str) -> int:
     """Output budget for a CODE step: generous only for generation."""
     from app.core.config import settings as _settings
@@ -832,7 +864,10 @@ def build_code_execute(
     via the (hidden) step output and run artifacts for review — originals
     are never overwritten. The coding step carries {{1}} so the validator's
     reasoning-grounding rule holds by construction; its message forbids
-    inventing execution results. notebook_id is unused here: the engine
+    inventing execution results. Target sources are inlined into the report
+    prompt (trace 241f3fa1: the sandbox was the only content carrier, so its
+    timeout left the reporter blind); upstream failure text arrives via
+    {{error:1}}. notebook_id feeds the source inline; the engine also
     injects the run's notebook id into the tool step at runtime.
     """
     targets = _resolve_code_targets(file_hint, notebook_context)
@@ -864,6 +899,13 @@ def build_code_execute(
         sandbox_input["file_names"] = [name for name, _ in targets]
     # Greenfield (no hint, no files): sandbox runs task-only; the tool
     # notes the empty staging honestly in its observation.
+    if targets:
+        source_section = (
+            "Attached source files (these ARE present — "
+            "never claim otherwise):\n" + _code_files_block(notebook_id, targets)
+        )
+    else:
+        source_section = "Attached source files: none."
     return Plan(
         plan_id=str(uuid.uuid4()),
         goal=request_text,
@@ -879,8 +921,8 @@ def build_code_execute(
                 agent_id="coding",
                 input={
                     "message": (
-                        f"Request: {request_text}\n\n"
-                        "Sandbox execution result:\n{{1}}\n\n"
+                        f"Request: {request_text}\n\n{source_section}\n\n"
+                        "Sandbox execution result:\n{{1}}{{error:1}}\n\n"
                         "Report only what the box returned: start your answer "
                         "directly with the execution output (stdout and exit "
                         "status), then the files changed (available under "
@@ -889,7 +931,12 @@ def build_code_execute(
                         "no shell listings, no future plans: the code already "
                         "ran in the sandbox. "
                         "Never invent execution results, and never claim the "
-                        "code ran if the result shows a failure."
+                        "code ran if the result shows a failure. "
+                        "If the sandbox result shows a failure: say what "
+                        "failed and quote the error first; use the attached "
+                        "source only to ground concrete next steps, and label "
+                        "anything you draft yourself UNTESTED — never present "
+                        "it as executed output."
                     ),
                     "max_tokens": _coding_budget_for(request_text),
                 },
@@ -1030,7 +1077,7 @@ def build_csv_analyze(
                 input={
                     "message": (
                         f"Request: {request_text}\n\n{head_block}\n\n"
-                        "Sandbox execution result:\n{{1}}\n\n"
+                        "Sandbox execution result:\n{{1}}{{error:1}}\n\n"
                         "Report only what the box returned: start your answer "
                         "directly with the analysis output (summary statistics, "
                         "findings, exit status), then the files changed "
@@ -1042,7 +1089,10 @@ def build_csv_analyze(
                         "no shell listings, no future plans: the analysis already "
                         "ran in the sandbox. "
                         "Never invent results, and never claim the analysis ran "
-                        "if the result shows a failure."
+                        "if the result shows a failure. "
+                        "If the sandbox result shows a failure: say what "
+                        "failed and quote the error first, then ground next "
+                        "steps in the CSV head above."
                     ),
                     "max_tokens": _coding_budget_for(request_text),
                 },
@@ -1130,27 +1180,7 @@ def build_code(
                 )
             ],
         )
-    sections: list[str] = []
-    total = 0
-    for name, fid in targets:
-        content = _read_code_file(notebook_id or "", name, fid) if notebook_id else None
-        if content is None:
-            sections.append(f"File {name}: (could not be read — describe it or re-upload it)")
-            continue
-        truncated = len(content) > _CODE_MAX_BYTES_PER_FILE
-        if truncated:
-            content = content[:_CODE_MAX_BYTES_PER_FILE]
-        if total + len(content) > _CODE_MAX_BYTES_TOTAL:
-            room = _CODE_MAX_BYTES_TOTAL - total
-            content = content[: max(room, 0)]
-            truncated = True
-        total += len(content)
-        marker = "\n…[truncated — file continues beyond what is shown]" if truncated else ""
-        lang = _EXT_TO_LANG.get(os.path.splitext(name)[1].lower(), "text")
-        sections.append(f"File {name}:\n```{lang}\n{content}\n```{marker}")
-        if total >= _CODE_MAX_BYTES_TOTAL:
-            break
-    files_block = "\n\n".join(sections)
+    files_block = _code_files_block(notebook_id, targets)
     return Plan(
         plan_id=str(uuid.uuid4()),
         goal=request_text,

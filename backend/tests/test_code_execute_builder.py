@@ -111,12 +111,53 @@ def test_greenfield_execute_runs_task_only() -> None:
     _validator().validate(plan)
 
 
-def test_build_code_execute_needs_no_disk() -> None:
-    # Plan-time never touches the upload dir: content flows at runtime via
-    # `docker cp`, so the builder only resolves names for the file scope.
+def _stage_code_file(tmp_path, notebook_id: str, file_id: str,
+                     name: str, content: str) -> str:
+    root = tmp_path / "uploads" / notebook_id
+    root.mkdir(parents=True, exist_ok=True)
+    ext = os.path.splitext(name)[1]
+    (root / f"{file_id}{ext}").write_text(content)
+    return str(tmp_path / "uploads")
+
+
+def test_build_code_execute_inlines_source_and_error_ref(tmp_path, monkeypatch) -> None:
+    # Trace 241f3fa1: step 2 never saw create_user.py — the sandbox was the
+    # only content carrier and it timed out. Source now rides the prompt,
+    # and the upstream failure arrives via {{error:1}}, not silence.
+    fid = "11111111-1111-1111-1111-111111111111"
+    upload = _stage_code_file(tmp_path, "nb-x", fid, "app.py",
+                              "def add(a, b):\n    return a + b\n")
+    monkeypatch.setattr(settings, "upload_dir", upload)
     plan = build_code_execute("run tests", "app", SNAPSHOT, "nb-x")
     assert plan is not None and len(plan.steps) == 2
-    assert plan.steps[0].input["file_names"] == ["app.py"]
+    message = str(plan.steps[1].input.get("message", ""))
+    assert "File app.py:" in message
+    assert "def add(a, b):" in message
+    assert "{{1}}" in message
+    assert "{{error:1}}" in message
+    assert "never claim otherwise" in message
+    _validator().validate(plan)
+
+
+def test_build_code_execute_marks_unreadable_source(tmp_path, monkeypatch) -> None:
+    # Disk read fails (or no notebook id): honest note, never a silent gap
+    # the agent can misread as "no file attached".
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
+    plan = build_code_execute("run tests", "app", SNAPSHOT, "nb-x")
+    assert plan is not None and len(plan.steps) == 2
+    message = str(plan.steps[1].input.get("message", ""))
+    assert "File app.py: (could not be read" in message
+    assert "{{error:1}}" in message
+    _validator().validate(plan)
+
+
+def test_greenfield_execute_reports_no_attached_files() -> None:
+    plan = build_code_execute("run pytest", "", None, None)
+    assert plan is not None and len(plan.steps) == 2
+    message = str(plan.steps[1].input.get("message", ""))
+    assert "Attached source files: none." in message
+    assert "{{error:1}}" in message
+    _validator().validate(plan)
 
 
 def test_aggregator_hides_sandbox_shows_report() -> None:
