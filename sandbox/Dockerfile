@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # RIP code-sandbox image (ADR-049): opencode CLI + python3, baked once
 # by the operator.
 #
@@ -23,16 +24,21 @@ ARG NO_PROXY
 # (see ADR-049 follow-up: wheelhouse).
 # The `python` symlink covers agents that try bare `python`.
 # (--break-system-packages: Debian 12 pip refuses system installs without it.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Host-wide wheel caching: the pip/apt cache mounts persist across builds
+# (BuildKit builder cache, outside the image layers), so rebuilds reuse
+# downloaded wheels instead of re-fetching from PyPI.
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
-    && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/local/bin/python \
-    && pip install --no-cache-dir --break-system-packages \
+    && pip install --break-system-packages \
         pytest numpy pandas \
     && python3 --version
 
-RUN npm i -g @opencode/cli@2.0.24 \
-    && npm cache clean --force \
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm i -g @opencode/cli@2.0.24 \
     && opencode --version
 
 WORKDIR /work

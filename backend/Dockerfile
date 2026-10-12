@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.11.9-slim
 
 # Build-time proxy only (ARG, not persisted): apt/pip read the env during
@@ -10,18 +11,22 @@ ARG NO_PROXY
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
     NO_PROXY=postgres,backend,host.docker.internal,127.0.0.1,localhost \
     no_proxy=postgres,backend,host.docker.internal,127.0.0.1,localhost
+
+# NOTE: no PIP_NO_CACHE_DIR here — pip caching is enabled deliberately and
+# backed by BuildKit cache mounts on every pip RUN below, so wheels persist
+# across builds host-wide without bloating the image layers.
 
 WORKDIR /app
 
 # Java runtime for OpenDataLoader/Tika PDF fallback (P0.1: in-container
 # ingest stalled in `processing` without a JRE; Docling primary + fallback
 # both need it). Minimal headless variant.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    default-jre-headless \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    default-jre-headless
 ENV JAVA_HOME=/usr/lib/jvm/default-java
 RUN java -version
 
@@ -35,7 +40,9 @@ RUN docker --version
 # CPU-only torch first: default PyPI pulls ~2-3GB nvidia-* CUDA wheels even
 # though inference is BGE-M3 CPU + Ollama (host ml_env proves torch 2.14+cpu
 # needs no nvidia deps). CPU index avoids the hours-long pip layer.
-RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Cache mount: the torch wheel persists host-wide across rebuilds.
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # Deps layer cached separately from code: pyproject changes rebuild deps,
 # backend code changes reuse the cached deps layer.
@@ -43,7 +50,8 @@ COPY pyproject.toml README.md ./
 # CPU index PRIMARY here (not extra): keeps the CPU torch from the layer
 # above. With --extra-index-url pip still sees PyPI CUDA wheels and can
 # reinstall torch as CUDA (~10GB image). Index order prefers CPU builds.
-RUN pip install --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple .
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple .
 
 COPY backend ./backend
 
