@@ -866,9 +866,13 @@ def build_code_execute(
                     "message": (
                         f"Request: {request_text}\n\n"
                         "Sandbox execution result:\n{{1}}\n\n"
-                        "Report only what the box returned: a concise summary "
-                        "of the stdout, the files changed (available under "
-                        "Artifacts for review), and concrete next steps. "
+                        "Report only what the box returned: start your answer "
+                        "directly with the execution output (stdout and exit "
+                        "status), then the files changed (available under "
+                        "Artifacts for review) and concrete next steps. "
+                        "Do not narrate your own process — no 'I will explore', "
+                        "no shell listings, no future plans: the code already "
+                        "ran in the sandbox. "
                         "Never invent execution results, and never claim the "
                         "code ran if the result shows a failure."
                     ),

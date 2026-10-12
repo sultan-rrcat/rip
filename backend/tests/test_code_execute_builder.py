@@ -168,3 +168,65 @@ def test_sandbox_step_budget_covers_tool_budget() -> None:
     rag = PlanStep(step_id="1", tool_id="rag.query",
                    input={"query": "q"}, expected_output_type="chunks")
     assert _step_timeout_ms(rag, 120000) == 120000
+
+
+def test_execute_report_forbids_process_narration() -> None:
+    plan = build("run the tests", _code_route("app.py"), SNAPSHOT)
+    assert plan is not None
+    message = str(plan.steps[1].input.get("message", ""))
+    assert "Do not narrate your own process" in message
+    assert "{{1}}" in message
+
+
+def _execute_result(sandbox_output: str, report_output: str | None) -> ExecutionResult:
+    return ExecutionResult(trace_id="t", step_results=[
+        StepResult(step_id="1", agent_id="code.sandbox",
+                   status=StepStatus.SUCCESS, output=sandbox_output),
+        StepResult(step_id="2", agent_id="coding",
+                   status=StepStatus.SUCCESS, output=report_output),
+    ])
+
+
+def test_aggregator_substitutes_degenerate_coding_report() -> None:
+    # Trace f6eaa575: the coding report ignored the box output and emitted
+    # an exploratory stub — the answer must fall back to the sandbox
+    # observation instead of rendering the stub verbatim.
+    plan = build("run the tests", _code_route("app.py"), SNAPSHOT)
+    assert plan is not None
+    result = _execute_result(
+        "sandbox model=m staged=1 changed=0\nRESULT: 42",
+        "I'll explore the working directory to find the script and run it.\n\n```bash\nls -la\n```",
+    )
+    agg = Aggregator().aggregate(plan, result)
+    assert agg.status == "success"
+    assert "RESULT: 42" in agg.summary
+    assert "ls -la" not in agg.summary
+    assert agg.shown == ["1"]
+    assert agg.hidden == ["2"]
+
+
+def test_aggregator_substitutes_blank_coding_report() -> None:
+    plan = build("run the tests", _code_route("app.py"), SNAPSHOT)
+    assert plan is not None
+    result = _execute_result(
+        "sandbox model=m staged=1 changed=0\nRESULT: 42", "   ",
+    )
+    agg = Aggregator().aggregate(plan, result)
+    assert agg.status == "success"
+    assert "RESULT: 42" in agg.summary
+    assert agg.shown == ["1"]
+
+
+def test_aggregator_keeps_report_that_quotes_ls_with_output() -> None:
+    # Evidence gate: a report mentioning `ls -la` alongside the output it
+    # produced is a real report, not exploration narration.
+    plan = build("run the tests", _code_route("app.py"), SNAPSHOT)
+    assert plan is not None
+    result = _execute_result(
+        "sandbox model=m staged=1 changed=0\nRESULT: 42",
+        "I ran `ls -la` first; the output showed app.py, then `pytest` printed ALL GREEN.",
+    )
+    agg = Aggregator().aggregate(plan, result)
+    assert agg.status == "success"
+    assert agg.summary.startswith("I ran `ls -la`")
+    assert agg.shown == ["2"]

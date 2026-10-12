@@ -56,6 +56,50 @@ def _summarizable(output: str | None) -> str:
     return text
 
 
+#: Exploration-narration markers: a coding *report* over a sandbox
+#: observation must describe completed execution, never narrate future
+#: exploration (trace f6eaa575: the report step ignored the box output and
+#: emitted "I'll explore the working directory … ls -la", which rendered
+#: verbatim as the answer).
+_DEGENERATE_REPORT_MARKERS = (
+    "i'll explore",
+    "i will explore",
+    "let me explore",
+    "let me look",
+    "working directory to find",
+    "ls -la",
+)
+
+#: Words proving a report actually references executed output (evidence
+#: gate against false positives, e.g. a legit report quoting an `ls`
+#: command alongside the output it produced).
+_EXECUTION_EVIDENCE_MARKERS = (
+    "sandbox",
+    "printed",
+    "output",
+    "exit",
+    "stdout",
+    "stderr",
+    "executed",
+    "changed",
+)
+
+#: Chat budget for a substituted sandbox observation (the tool already caps
+#: its own output; this keeps the bubble readable).
+_SANDBOX_SUBSTITUTE_MAX_CHARS = 4000
+
+
+def _is_degenerate_report(output: str | None) -> bool:
+    """True when a coding report narrates exploration instead of results."""
+    text = (output or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if not any(m in lowered for m in _DEGENERATE_REPORT_MARKERS):
+        return False
+    return not any(e in lowered for e in _EXECUTION_EVIDENCE_MARKERS)
+
+
 class AggregationResult(BaseModel):
     status: str  # "success" | "partial" | "failed"
     plan_incomplete: bool
@@ -208,6 +252,33 @@ class Aggregator:
                 seen_outputs.add(key)
                 deduped.append(r)
             shown = deduped
+        # Degenerate-report guard: the single shown terminal is a coding
+        # report over a successful hidden sandbox step, but the report
+        # narrates exploration instead of the box output (trace f6eaa575).
+        # Substitute the trimmed sandbox observation — showing what the box
+        # actually returned beats showing process narration. Narrowly scoped:
+        # needs a hidden code.sandbox success with output to substitute.
+        sandbox_src = next(
+            (r for r in ordered_successful
+             if _hidden(r.step_id) and (r.agent_id or "") == "code.sandbox"
+             and (r.output or "").strip()),
+            None,
+        )
+        if (
+            sandbox_src is not None
+            and len(shown) == 1
+            and (shown[0].agent_id or "") == "coding"
+            and _is_degenerate_report(shown[0].output)
+        ):
+            logger.warning(
+                "degenerate coding report plan=%s step=%s; "
+                "substituting sandbox observation",
+                plan.plan_id, shown[0].step_id,
+            )
+            text = (sandbox_src.output or "").strip()
+            if len(text) > _SANDBOX_SUBSTITUTE_MAX_CHARS:
+                text = text[:_SANDBOX_SUBSTITUTE_MAX_CHARS].rstrip() + "\n[truncated]"
+            shown = [sandbox_src.model_copy(update={"output": text})]
         if shown:
             if len(shown) == 1:
                 summary = _summarizable(shown[0].output)
