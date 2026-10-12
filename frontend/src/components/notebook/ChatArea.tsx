@@ -587,7 +587,17 @@ function UserMessage({ id, text, disabled, onSave }: UserMessageProps) {
   const [draft, setDraft] = useState(text)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
   const canEdit = Boolean(onSave) && !disabled
+  // Long pastes collapse to a preview: keeps the thread scannable while
+  // the full text stays one click away (and untouched for resend/edit).
+  const lineCount = text.split('\n').length
+  const isLong = lineCount > 40 || text.length > 2000
+  const preview = (() => {
+    if (!isLong || expanded) return text
+    const lines = text.split('\n').slice(0, 40).join('\n')
+    return lines.length < text.length ? lines.slice(0, 2000) : lines
+  })()
 
   function startEdit() {
     setDraft(text)
@@ -677,7 +687,22 @@ function UserMessage({ id, text, disabled, onSave }: UserMessageProps) {
       <div className="flex-1 space-y-1 text-right">
         <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">YOU</p>
         <div className="inline-block text-paper bg-ink px-5 py-2.5 rounded-lg rounded-tr-sm text-[13px] leading-relaxed shadow-sm max-w-2xl text-left">
-          {text}
+          <div className={isLong ? 'whitespace-pre-wrap break-words' : ''}>
+            {preview}
+            {isLong && !expanded && <span aria-hidden="true">…</span>}
+          </div>
+          {isLong && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="font-ledger mt-1.5 text-[10px] font-semibold tracking-[0.14em] text-paper/70 underline underline-offset-2 hover:text-paper"
+            >
+              {expanded
+                ? 'SHOW LESS'
+                : `SHOW MORE (${lineCount} LINES · ${text.length.toLocaleString()} CHARS)`}
+            </button>
+          )}
         </div>
         {canEdit && (
           <div>
