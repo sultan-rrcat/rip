@@ -48,11 +48,21 @@ function isConvertible(name: string): boolean {
   return ext === '.pdf' || ext === '.docx'
 }
 
-function statusTone(status: string): string {
-  if (status === 'completed') return 'bg-emerald-500'
-  if (status === 'failed') return 'bg-rust'
-  if (status === 'cancelled') return 'bg-line'
-  return 'bg-brass-deep'
+function statusTone(status: string, resultStatus: string): string {
+  if (status === 'failed' || status === 'cancelled') return 'bg-rust'
+  if (status !== 'completed') return 'bg-brass-deep'
+  if (resultStatus === 'partial') return 'bg-brass-deep'
+  if (resultStatus === 'failed') return 'bg-rust'
+  return 'bg-emerald-500'
+}
+
+// Row verdict: the run-row status, refined by the aggregator verdict so a
+// PARTIAL run (tool step failed honest, no artifacts) never reads COMPLETED.
+function verdictLabel(job: StudioJob): string {
+  if (job.status !== 'completed') return job.status.toUpperCase()
+  if (job.result_status === 'partial') return 'PARTIAL'
+  if (job.result_status === 'failed') return 'FAILED'
+  return 'COMPLETED'
 }
 
 function paramsSummary(job: StudioJob): string {
@@ -277,9 +287,9 @@ const RightStudio = memo(function RightStudio({
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-1.5">
                       <span
-                        title={`Status: ${job.status}`}
-                        aria-label={`Status: ${job.status}`}
-                        className={`inline-block h-2 w-2 shrink-0 rounded-full ${statusTone(job.status)}`}
+                        title={`Status: ${verdictLabel(job)}`}
+                        aria-label={`Status: ${verdictLabel(job)}`}
+                        className={`inline-block h-2 w-2 shrink-0 rounded-full ${statusTone(job.status, job.result_status)}`}
                       />
                       <p className="font-ledger truncate text-[10px] font-semibold tracking-wide text-ink-soft/70">
                         {job.kind.toUpperCase()} · {paramsSummary(job)}
@@ -297,7 +307,7 @@ const RightStudio = memo(function RightStudio({
                       </button>
                     ) : (
                       <span className="font-ledger shrink-0 text-[9px] tracking-wide text-ink-soft/50">
-                        {job.status.toUpperCase()}
+                        {verdictLabel(job)}
                       </span>
                     )}
                   </div>
@@ -306,6 +316,18 @@ const RightStudio = memo(function RightStudio({
                       <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-line border-t-brass-deep" />
                       Working — history refreshes automatically.
                     </p>
+                  )}
+                  {!running && job.artifacts.length === 0 && (
+                    <div className="mt-1.5 border-t border-line/60 pt-1.5">
+                      <p className="font-ledger text-[10px] font-semibold tracking-wide text-brass-deep">
+                        NO FILES PRODUCED — {verdictLabel(job)}
+                      </p>
+                      {job.summary && (
+                        <p className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-snug text-ink-soft">
+                          {job.summary}
+                        </p>
+                      )}
+                    </div>
                   )}
                   {job.artifacts.length > 0 && (
                     <ul className="mt-1.5 space-y-1.5 border-t border-line/60 pt-1.5">

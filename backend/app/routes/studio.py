@@ -132,6 +132,11 @@ class JobResponse(BaseModel):
     status: str
     created_at: str | None = None
     artifacts: list[dict[str, Any]] = []
+    # Aggregator verdict (success/partial/failed, "") + final run text.
+    # Lets the panel tell a real COMPLETED quiz from a PARTIAL run whose
+    # tool step failed honest with no artifacts.
+    result_status: str = ""
+    summary: str | None = None
 
 
 class CancelJobResponse(BaseModel):
@@ -158,6 +163,8 @@ def _to_response(job: job_store.StudioJob) -> JobResponse:
         status=job.status,
         created_at=job.created_at.isoformat() if job.created_at else None,
         artifacts=job.artifacts,
+        result_status=job.result_status,
+        summary=job.summary,
     )
 
 

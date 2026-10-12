@@ -237,6 +237,10 @@ class TestStudioQuiz:
         jobs = client.get(f"/api/notebooks/{notebook_id}/studio/jobs").json()
         assert len(jobs) == 1 and jobs[0]["job_id"] == body["job_id"]
         assert jobs[0]["status"] == "completed"
+        # Aggregator verdict + final text ride along so the panel can tell
+        # a real quiz from a PARTIAL run with no artifacts.
+        assert jobs[0]["result_status"] == "success"
+        assert jobs[0]["summary"] == "done"
 
     def test_quiz_validation_422(self, client, notebook_id):
         _apply_schema()

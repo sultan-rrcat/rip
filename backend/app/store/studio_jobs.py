@@ -34,6 +34,8 @@ class StudioJob:
         status: str = "pending",
         created_at: datetime | None = None,
         artifacts: list[dict] | None = None,
+        result_status: str = "",
+        summary: str | None = None,
     ):
         self.job_id = str(job_id)
         self.notebook_id = str(notebook_id)
@@ -43,6 +45,11 @@ class StudioJob:
         self.status = status
         self.created_at = created_at
         self.artifacts = artifacts if artifacts is not None else []
+        # Aggregator verdict (success/partial/failed) + final text from the
+        # run row: distinguishes a real COMPLETED quiz from a PARTIAL run
+        # whose quiz.generate step failed honest (no artifacts event).
+        self.result_status = result_status
+        self.summary = summary
 
 
 def create_job(notebook_id: str, kind: str, params: dict, run_id: str) -> StudioJob:
@@ -68,6 +75,18 @@ def create_job(notebook_id: str, kind: str, params: dict, run_id: str) -> Studio
         run_id=row["run_id"],
         status="running",
         created_at=row["created_at"],
+    )
+
+
+def _result_details(result: object) -> tuple[str, str | None]:
+    """Extract (result_status, summary) from a runs.result payload."""
+    if not isinstance(result, dict):
+        return "", None
+    status = result.get("status")
+    summary = result.get("summary")
+    return (
+        str(status) if isinstance(status, str) else "",
+        str(summary) if isinstance(summary, str) and summary.strip() else None,
     )
 
 
@@ -108,7 +127,7 @@ def get_job(job_id: str) -> StudioJob | None:
         cur.execute(
             """
                 SELECT j.job_id, j.notebook_id, j.kind, j.params, j.run_id,
-                       j.created_at, r.status
+                       j.created_at, r.status, r.result
                 FROM studio_jobs j
                 JOIN runs r ON r.id = j.run_id
                 WHERE j.job_id = %s
@@ -118,6 +137,7 @@ def get_job(job_id: str) -> StudioJob | None:
         row = cur.fetchone()
     if row is None:
         return None
+    result_status, summary = _result_details(row.get("result"))
     return StudioJob(
         job_id=row["job_id"],
         notebook_id=row["notebook_id"],
@@ -127,6 +147,8 @@ def get_job(job_id: str) -> StudioJob | None:
         status=row["status"],
         created_at=row["created_at"],
         artifacts=_artifacts_for_run(str(row["run_id"])),
+        result_status=result_status,
+        summary=summary,
     )
 
 
@@ -136,7 +158,7 @@ def list_jobs(notebook_id: str, limit: int = 50) -> list[StudioJob]:
         cur.execute(
             """
                 SELECT j.job_id, j.notebook_id, j.kind, j.params, j.run_id,
-                       j.created_at, r.status
+                       j.created_at, r.status, r.result
                 FROM studio_jobs j
                 JOIN runs r ON r.id = j.run_id
                 WHERE j.notebook_id = %s
@@ -148,6 +170,7 @@ def list_jobs(notebook_id: str, limit: int = 50) -> list[StudioJob]:
         rows = cur.fetchall()
     jobs: list[StudioJob] = []
     for row in rows:
+        result_status, summary = _result_details(row.get("result"))
         jobs.append(
             StudioJob(
                 job_id=row["job_id"],
@@ -158,6 +181,8 @@ def list_jobs(notebook_id: str, limit: int = 50) -> list[StudioJob]:
                 status=row["status"],
                 created_at=row["created_at"],
                 artifacts=_artifacts_for_run(str(row["run_id"])),
+                result_status=result_status,
+                summary=summary,
             )
         )
     return jobs
@@ -173,4 +198,6 @@ def job_to_dict(job: StudioJob) -> dict[str, Any]:
         "status": job.status,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "artifacts": job.artifacts,
+        "result_status": job.result_status,
+        "summary": job.summary,
     }

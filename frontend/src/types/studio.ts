@@ -19,6 +19,10 @@ export interface StudioJob {
   status: StudioJobStatus
   created_at: string | null
   artifacts: Artifact[]
+  /** Aggregator verdict (success/partial/failed, "" while running). */
+  result_status: string
+  /** Final run text — the answer, clarification, or failure lines. */
+  summary: string | null
 }
 
 export function isTerminalStatus(status: string): boolean {
