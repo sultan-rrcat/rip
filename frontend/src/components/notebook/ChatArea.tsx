@@ -347,6 +347,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunni
               stepResults={runView?.stepResults}
               onSourceClick={onSourceClick}
               wasCancelled={cancelledIds?.includes(message.id) ?? false}
+              isStreaming={message.status === 'streaming'}
             />
           )
         }
@@ -403,6 +404,7 @@ interface AssistantMessageProps {
   stepResults?: Record<string, {executor:string,status:string,output:string,delta:string,expected_output_type?:string,visibility?:'show'|'hide'}>
   onSourceClick?: (source: Source) => void
   wasCancelled?: boolean
+  isStreaming?: boolean
 }
 
 function AssistantMessage({
@@ -415,6 +417,7 @@ function AssistantMessage({
   stepResults = {},
   onSourceClick,
   wasCancelled = false,
+  isStreaming = false,
 }: AssistantMessageProps) {
   const [copied, setCopied] = useState(false)
   const copyTimer = useRef<number | null>(null)
@@ -434,10 +437,10 @@ function AssistantMessage({
   }
 
   const canCopy = !children && (text?.trim() ? true : false)
-  // Caret only once real tokens stream (children == null). While the
-  // AgentStatus spinner shows (children != null) the ring is the single
-  // indicator — no caret alongside it.
-  const streaming = !children && (text?.trim() ? true : false)
+  // Caret only while tokens are actively arriving. The thinking phase
+  // (children = AgentStatus) has the ring; finished messages (done) are
+  // static — neither shows a caret.
+  const streaming = !children && isStreaming
   return (
     <div className="group/assistant message-in flex gap-4 items-start">
       {/* avatar  */}

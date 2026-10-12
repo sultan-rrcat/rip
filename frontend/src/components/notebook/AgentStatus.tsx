@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 import type { RunView } from '@/types/runs'
 
 /** Human-readable verb per executor. Prefix match covers future tools. */
@@ -16,13 +16,25 @@ function labelForExecutor(executor: string): string {
   return `Running ${executor}`
 }
 
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000)
+  const m = Math.floor(s / 60)
+  return m > 0 ? `${m}m ${s % 60}s` : `${s}s`
+}
+
 /**
  * Single in-flight indicator: one brass ring spinner + a live label derived
  * from the run's chain-of-thought (plan + step states). Replaces the old
- * bouncing-dots placeholder; the top RunStatusBar keeps elapsed/progress
- * with a static dot so only this ring moves.
+ * bouncing-dots placeholder and the top progress bar.
  */
 const AgentStatus = memo(function AgentStatus({ run }: { run: RunView | null }) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+
   const steps = run?.plan ?? []
   const results = run?.stepResults ?? {}
   let label = 'Planning the inquiry'
@@ -45,6 +57,10 @@ const AgentStatus = memo(function AgentStatus({ run }: { run: RunView | null }) 
     }
   }
 
+  const elapsed =
+    run?.startedAt != null ? formatElapsed(Math.max(0, now - run.startedAt)) : null
+  const subline = [stepSuffix, elapsed].filter(Boolean).join(' · ')
+
   return (
     <div role="status" aria-live="polite" className="flex items-center gap-3 py-1">
       <span
@@ -56,9 +72,9 @@ const AgentStatus = memo(function AgentStatus({ run }: { run: RunView | null }) 
         <p key={label} className="agent-label truncate text-[13px] font-medium text-ink-soft">
           {label}…
         </p>
-        {stepSuffix && (
+        {subline && (
           <p className="font-ledger mt-0.5 text-[10px] tracking-[0.14em] text-ink-soft/55">
-            {stepSuffix}
+            {subline}
           </p>
         )}
       </div>

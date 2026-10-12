@@ -14,7 +14,6 @@ import ChatArea from '@/components/notebook/ChatArea'
 import Footer from '@/components/notebook/Footer'
 import LeftSidebar from '@/components/notebook/LeftSidebar'
 import FilePreviewModal from '@/components/notebook/FilePreviewModal'
-import RunStatusBar from '@/components/notebook/RunStatusBar'
 import LogoutButton from '@/components/LogoutButton'
 import ToastHost from '@/components/ToastHost'
 import { API } from '@/config'
@@ -301,7 +300,6 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
             </p>
           </div>
         </div>
-        {isRunning && activeRun && <RunStatusBar run={activeRun} />}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ChatArea
             messages={messages}
