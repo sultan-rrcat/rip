@@ -239,6 +239,7 @@ async def upload(
     file_path = os.path.join(notebook_path, f"{file_id}{ext}")
 
     is_code = ext in set(settings.code_extensions or [])
+    is_data = ext in set(settings.data_extensions or [])
 
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     file_size = 0
@@ -271,9 +272,9 @@ async def upload(
                 VALUES (%s, %s, %s, %s, %s)
                 RETURNING file_id, file_name, file_size, file_status
             """,
-                # Code files skip vector ingest: stored on disk + ready,
-                # read as text on demand (never embedded).
-                (file_id, notebook_id, file.filename, file_size, "ready" if is_code else "processing"),
+                # Code/data files skip vector ingest: stored on disk + ready,
+                # read on demand (code inlined, CSV staged to sandbox).
+                (file_id, notebook_id, file.filename, file_size, "ready" if (is_code or is_data) else "processing"),
             )
             result = cur.fetchone()
     except Exception:
@@ -313,6 +314,8 @@ def process_file(
         ext = os.path.splitext(row[0] or "")[1].lower()
         if ext in set(settings.code_extensions or []):
             return {"message": "ready (code file, not ingested)"}
+        if ext in set(settings.data_extensions or []):
+            return {"message": "ready (data file, not ingested)"}
 
     background_tasks.add_task(run_rag_pipeline, file_id, rag)
     return {"message": "processing started"}
@@ -339,7 +342,7 @@ def preview_file(
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    text_exts = set(settings.code_extensions or []) | {".txt", ".md"}
+    text_exts = set(settings.code_extensions or []) | {".txt", ".md", ".csv"}
     if ext in text_exts:
         try:
             with open(path, "rb") as f:

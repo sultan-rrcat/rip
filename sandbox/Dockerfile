@@ -18,8 +18,9 @@ ARG NO_PROXY
 # Python runtime for code-execution asks: node:22-slim ships no interpreter,
 # so `.py` tasks failed honest (`python3` missing). Debian bookworm python3
 # + pip/venv + a small baked base (pytest for "run tests" asks, numpy for
-# numeric scripts) — the box has no PyPI network at runtime, so anything the
-# agent may need must be baked here (see ADR-049 follow-up: wheelhouse).
+# numeric scripts, pandas for CSV analysis asks) — the box has no PyPI
+# network at runtime, so anything the agent may need must be baked here
+# (see ADR-049 follow-up: wheelhouse).
 # The `python` symlink covers agents that try bare `python`.
 # (--break-system-packages: Debian 12 pip refuses system installs without it.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -27,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/python3 /usr/local/bin/python \
     && pip install --no-cache-dir --break-system-packages \
-        pytest numpy \
+        pytest numpy pandas \
     && python3 --version
 
 RUN npm i -g @opencode/cli@2.0.24 \

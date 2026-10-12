@@ -13,9 +13,10 @@ import re
 
 #: Snapshot lines look like "report.pdf [ready] id=abc123" (see
 #: runs/manager._load_file_snapshot). Code files are marked
-#: "script.py [ready:code] id=..." — stored on disk, never embedded.
+#: "script.py [ready:code] id=..." and data files (CSV)
+#: "sales.csv [ready:data] id=..." — stored on disk, never embedded.
 _SNAPSHOT_FILE = re.compile(
-    r"(.+?)\s*\[(ready(?::code)?|processing|uploading|error)\]\s*id=(\S+)"
+    r"(.+?)\s*\[(ready(?::code|:data)?|processing|uploading|error)\]\s*id=(\S+)"
 )
 
 
@@ -64,6 +65,15 @@ def _ready_code(notebook_context: str | None) -> list[tuple[str, str]]:
     ]
 
 
+def _ready_data(notebook_context: str | None) -> list[tuple[str, str]]:
+    """Return (name, file_id) for ready DATA files ([ready:data], e.g. CSV)."""
+    return [
+        (name, fid)
+        for name, status, fid in _snapshot_files(notebook_context)
+        if status == "ready:data" and fid
+    ]
+
+
 def get_corpus_state(notebook_context: str | None) -> str:
     """Tri-state the notebook file snapshot for empty-corpus guards.
 
@@ -71,8 +81,8 @@ def get_corpus_state(notebook_context: str | None) -> str:
     - "unknown": snapshot is None (DB failure) — caller should still try
       rag.query; the database is ground truth, not the snapshot.
     - "ready": at least one ready DOCUMENT file — document-grounded
-      retrieval path. Code-only notebooks ([ready:code]) are NOT ready:
-      they hold no embeddings.
+      retrieval path. Code-only ([ready:code]) and data-only
+      ([ready:data]) notebooks are NOT ready: they hold no embeddings.
     - "processing": files exist but none is ready yet (uploading /
       processing / error) — nothing retrievable right now.
     - "empty": known to hold zero files — retrieval would provably return
@@ -83,10 +93,11 @@ def get_corpus_state(notebook_context: str | None) -> str:
     files = _snapshot_files(notebook_context)
     if not files:
         return "empty"
-    # Code files ([ready:code]) hold no embeddings: a code-only notebook
-    # has nothing retrievable, so report "empty" (not "processing" — there
-    # is nothing to wait for). A processing doc alongside code still waits.
-    docs = [f for f in files if f[1] != "ready:code"]
+    # Code/data files ([ready:code]/[ready:data]) hold no embeddings: a
+    # code- or data-only notebook has nothing retrievable, so report
+    # "empty" (not "processing" — there is nothing to wait for). A
+    # processing doc alongside code/data still waits.
+    docs = [f for f in files if f[1] not in ("ready:code", "ready:data")]
     if not docs:
         return "empty"
     if any(status == "ready" and fid for _, status, fid in docs):

@@ -336,6 +336,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-051: CSV data files — disk-only, pandas in the sandbox
+
+- **Status:** Accepted (2026-10-12)
+- **Context:** CSV uploads were rejected (`415`, not in `allowed_extensions`), and no pipeline existed for tabular analysis: the RAG loaders are PDF-only, header-split chunking destroys row structure, and numeric rows carry no retrieval signal for BGE cosine. Chunking a CSV into `embeddings` would pay embed/rerank cost for evidence the model cannot aggregate from prose.
+- **Decision:** (1) `.csv` joins `allowed_extensions` plus a new `data_extensions` list (separate from `code_extensions` so code inlining never grabs a 10MB CSV). Upload/process/preview treat data like code: stored on disk, `ready` immediately, ingest skipped (`ready:data` snapshot mark, never embedded). (2) `code.sandbox` gains an optional `data_files` scope: staged read-only into `/work` (≤10MB each, in `originals` so the unchanged CSV never counts as changed, never auto-applied), only on explicit scope — unrelated CSVs never ride along on code runs. (3) New `build_csv_analyze` DAG (`code.sandbox` with `data_files` + `coding` report wired by `{{1}}`): named-CSV hints and data-only notebooks route here even without run/test verbs; only a header + 20-row sample rides the report prompt (column names only — numbers must come from the box). Vague `summarize`/QA asks over data-only notebooks fall through to the same DAG instead of an upload-documents clarification. (4) Sandbox image bakes `pandas` (operator rebuilds once; no runtime PyPI in the box). No new tools, no schema change; frontend accepts `.csv` with a table icon.
+- **Consequences:** CSV analysis resolves in a fixed 2-step DAG with real computed numbers; vectors stay for documents, disk+pandas for data. Caps: 2 CSVs per run, 10MB stage each, 8KB head in the prompt. Pinned by `test_csv_data.py`. Operator rebuilds the image (`docker build -t rip-sandbox sandbox/`).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

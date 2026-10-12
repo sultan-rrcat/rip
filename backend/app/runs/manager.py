@@ -582,16 +582,22 @@ class RunManager:
         from app.core.config import settings as _settings
 
         code_exts = set(_settings.code_extensions or [])
+        data_exts = set(_settings.data_extensions or [])
         parts = []
         for r in rows:
             fid, name, status = str(r[0]), r[1] or "?", r[2] or "?"
             # Code files bypass vector ingest: mark ready:code so builders
             # route them to the coding agent instead of rag.query.
             # Language-agnostic: any file with a code_extensions match.
+            # Data files (CSV) likewise bypass ingest: mark ready:data so
+            # builders stage them to the sandbox for pandas compute.
             import os as _os
 
-            if status == "ready" and _os.path.splitext(name or "")[1].lower() in code_exts:
+            _ext = _os.path.splitext(name or "")[1].lower()
+            if status == "ready" and _ext in code_exts:
                 status = "ready:code"
+            elif status == "ready" and _ext in data_exts:
+                status = "ready:data"
             parts.append(f"{name} [{status}] id={fid}")
         return f"{len(parts)} file(s): " + "; ".join(parts)
 

@@ -64,6 +64,11 @@ _EMBED_MARKERS = ("bge", "embed")
 _SBX_ARTIFACT_MAX_FILES = 8
 _SBX_ARTIFACT_MAX_BYTES = 100 * 1024
 
+#: Data-file (CSV) staging cap: pandas reads the full file in the box, so
+#: an unbounded CSV could exhaust the container. Over-cap files are skipped
+#: with an honest note (the agent analyzes the head instead).
+_SBX_DATA_STAGE_MAX_BYTES = 10 * 1024 * 1024
+
 #: Ephemeral runner debris never kept as review artifacts: the sandbox agent
 #: typically runs pytest/linters inside /work, which scatters bytecode and
 #: cache files next to the real deliverable (e.g. test_cal.py + __pycache__/
@@ -246,6 +251,28 @@ def _notebook_code_files(notebook_id: str) -> list[tuple[str, str]]:
     return out
 
 
+def _notebook_data_files(notebook_id: str) -> list[tuple[str, str]]:
+    """All data files (CSV) of the notebook as (file_id, file_name)."""
+    from app.core.config import settings
+    from app.core.db import pg_connection
+
+    data_exts = set(settings.data_extensions or [])
+    with pg_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT file_id, file_name FROM files "
+            "WHERE notebook_id = %s ORDER BY created_at ASC",
+            (str(notebook_id),),
+        )
+        rows = cur.fetchall()
+    out: list[tuple[str, str]] = []
+    for file_id, file_name in rows:
+        name = str(file_name or "")
+        ext = os.path.splitext(name)[1].lower()
+        if ext and ext in data_exts:
+            out.append((str(file_id), name))
+    return out
+
+
 def _parse_container_id(output: str) -> str:
     """Best-effort container id out of `docker create` stdout."""
     match = _CONTAINER_ID_RE.search(output or "")
@@ -294,12 +321,15 @@ class CodeSandboxTool(Tool):
     description = (
         "Execute a coding task inside an ephemeral local Docker container "
         "running the opencode CLI against host Ollama (ADR-049). The "
-        "notebook's code files are staged into the box; stdout plus the "
+        "notebook's code files are staged into the box (plus read-only CSV "
+        "data files for pandas analysis); stdout plus the "
         "changed-file list come back as the observation. Use for run/test/ "
-        "execute asks (run the code, run tests, fix failures by running) — "
+        "execute asks (run the code, run tests, fix failures by running) and "
+        "CSV analysis asks — "
         "NOT for read/explain/review (code.read + coding agent, no container). "
         "Input: notebook_id (injected, never invented), task (full ask), "
-        "optional file_names scope, optional model override. NEVER invent "
+        "optional file_names scope, optional data_files scope (CSV names), "
+        "optional model override. NEVER invent "
         "execution results: report only what the box returned."
     )
     input_schema: ClassVar[dict] = {
@@ -308,6 +338,7 @@ class CodeSandboxTool(Tool):
             "notebook_id": {"type": "string"},
             "task": {"type": "string"},
             "file_names": {"type": "array", "items": {"type": "string"}},
+            "data_files": {"type": "array", "items": {"type": "string"}},
             "model": {"type": "string"},
             "timeout_ms": {"type": "integer"},
         },
@@ -344,6 +375,8 @@ class CodeSandboxTool(Tool):
 
         scope = request.input.get("file_names") or []
         scope = [s for s in scope if isinstance(s, str) and s.strip()]
+        data_scope = request.input.get("data_files") or []
+        data_scope = [s for s in data_scope if isinstance(s, str) and s.strip()]
         try:
             files = _notebook_code_files(notebook_id)
         except Exception as e:  # noqa: BLE001 - DB failure is honest, not fatal
@@ -359,6 +392,20 @@ class CodeSandboxTool(Tool):
             staged = list(files)
         if not staged:
             notes.append("no code files staged — running greenfield (task only)")
+        # Data files (CSV) stage only on explicit scope: unlike code, an
+        # unrelated CSV must not ride along on every code run.
+        staged_data: list[tuple[str, str]] = []
+        if data_scope:
+            try:
+                data_files = _notebook_data_files(notebook_id)
+            except Exception as e:  # noqa: BLE001 - DB failure is honest, not fatal
+                return self._fail(f"could not list notebook data files: {e}")
+            staged_data, data_notes = _match_scope(data_scope, data_files)
+            notes.extend(data_notes)
+            if not staged_data:
+                names = ", ".join(n for _, n in data_files) or "none"
+                return self._fail(
+                    f"scope matched no data files (notebook data files: {names})")
 
         base_url = _sandbox_base_url()
         # Probe Ollama from THIS process (host view): the box-view URL
@@ -404,11 +451,39 @@ class CodeSandboxTool(Tool):
                     f.write(blob)
                 originals[safe_name] = blob
                 staged_names.append(safe_name)
+            staged_data_names: list[str] = []
+            for file_id, name in staged_data:
+                src = os.path.join(str(settings.upload_dir), notebook_id, f"{file_id}.csv")
+                try:
+                    with open(src, "rb") as f:
+                        blob = f.read()
+                except OSError:
+                    notes.append(f"staged-missing: '{name}' not on disk, skipped")
+                    continue
+                if len(blob) > _SBX_DATA_STAGE_MAX_BYTES:
+                    notes.append(
+                        f"staged-skipped: '{name}' exceeds "
+                        f"{_SBX_DATA_STAGE_MAX_BYTES // (1024 * 1024)}MB, "
+                        "not staged for analysis")
+                    continue
+                safe_name = os.path.basename(name) or f"file-{file_id[:8]}"
+                if safe_name in originals:
+                    notes.append(f"staged-skipped: '{name}' collides with a staged file")
+                    continue
+                with open(os.path.join(stage, safe_name), "wb") as f:
+                    f.write(blob)
+                # In originals so the unchanged CSV never counts as changed;
+                # review artifacts only carry box-created files.
+                originals[safe_name] = blob
+                staged_data_names.append(safe_name)
+            if staged_data_names:
+                notes.append(f"data staged: {', '.join(sorted(staged_data_names))}")
             with open(os.path.join(stage, "opencode.json"), "w", encoding="utf-8") as f:
                 f.write(_opencode_config(model, base_url))
 
-            logger.info("sandbox start notebook=%s files=%d model=%s timeout_ms=%d",
-                        notebook_id, len(staged_names), model, timeout_ms)
+            logger.info("sandbox start notebook=%s files=%d data=%d model=%s timeout_ms=%d",
+                        notebook_id, len(staged_names), len(staged_data_names),
+                        model, timeout_ms)
             try:
                 created = _run_container(
                     ["docker", "create",
@@ -523,9 +598,11 @@ class CodeSandboxTool(Tool):
             return ToolResponse(
                 tool_id=self.tool_id, ok=True,
                 output=f"{head}sandbox model={model} staged={len(staged_names)} "
+                       f"data={len(staged_data_names)} "
                        f"changed={len(changed)}\n{output}".strip(),
                 data={"changed_files": sorted(changed),
                       "staged_files": sorted(staged_names),
+                      "staged_data_files": sorted(staged_data_names),
                       "model": model,
                       "sandbox_files": sandbox_files},
             )

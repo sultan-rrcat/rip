@@ -4,6 +4,7 @@ import FolderOpenIcon from '@mui/icons-material/FolderOpen'
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf'
 import DescriptionIcon from '@mui/icons-material/Description'
 import TextSnippetIcon from '@mui/icons-material/TextSnippet'
+import TableChartIcon from '@mui/icons-material/TableChart'
 import CodeIcon from '@mui/icons-material/Code'
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
 import DeleteIcon from '@mui/icons-material/Delete'
@@ -100,7 +101,7 @@ const LeftSidebar = memo(function LeftSidebar({
             <input
               id="file-upload"
               type="file"
-              accept=".pdf,.doc,.docx,.md,.txt,.py"
+              accept=".pdf,.doc,.docx,.md,.txt,.py,.csv"
               multiple
               className="hidden"
               onChange={onUpload}
@@ -125,7 +126,7 @@ const LeftSidebar = memo(function LeftSidebar({
                 <FolderOpenIcon />
                 <p className="mt-2 text-xs">No files uploaded yet</p>
                 <p className="font-ledger mt-1 text-[10px] tracking-wide">
-                  PDF · DOC · MD · TXT · PY
+                  PDF · DOC · MD · TXT · PY · CSV
                 </p>
               </div>
             )}
@@ -188,6 +189,10 @@ function FileTypeIcon({ name }: { name: string }) {
   if (ext === 'txt')
     return (
       <TextSnippetIcon fontSize="small" className={`${cls} text-ink-soft/70`} aria-hidden="true" />
+    )
+  if (ext === 'csv')
+    return (
+      <TableChartIcon fontSize="small" className={`${cls} text-ledger`} aria-hidden="true" />
     )
   if (CODE_EXTENSIONS.has(ext))
     return (

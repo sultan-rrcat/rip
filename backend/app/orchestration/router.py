@@ -64,7 +64,7 @@ _CONVERT_RE = re.compile(r"\b(convert|export|save\s+as)\b", re.IGNORECASE)
 _QUOTED_RE = re.compile(r"""["']([^"']+\.\w+)["']""")
 _FILENAME_RE = re.compile(r"\b([\w][\w\-.]*\.(?:pdf|docx|md))\b", re.IGNORECASE)
 _CODE_FILENAME_RE = re.compile(
-    r"\b([\w][\w\-.]*\.(?:py|js|ts|tsx|jsx|html|css|java|go|rs|cpp|c|h))\b",
+    r"\b([\w][\w\-.]*\.(?:py|js|ts|tsx|jsx|html|css|java|go|rs|cpp|c|h|csv))\b",
     re.IGNORECASE,
 )
 _CHAT_RE = re.compile(
@@ -106,7 +106,7 @@ def _extract_file_hint(request_text: str, intent: Intent) -> str:
 
     Convert intents: "*" when the request says all/every/each documents,
     else a quoted filename or bare `name.ext`, else "".
-    Code intent: a bare code filename when named, else "" (greenfield).
+    Code intent: a bare code/data filename when named, else "" (greenfield).
     All other intents: "".
     """
     text = request_text or ""
@@ -185,19 +185,21 @@ def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
     None when the snapshot is missing (DB failure — database is ground
     truth, so the router classifies blind as before). Names are included
     truncated: they disambiguate convert_one ("that PDF") from convert_all
-    and, critically, expose code extensions (.py/.js/...) so a
+    and, critically, expose code/data extensions (.py/.js/.../.csv) so a
     "read all the files" ask over code files routes to CODE, not
     summarize — without pasting chunk text into the routing call.
 
     Code-only notebooks report "empty" from get_corpus_state (no
     embeddings to retrieve), but must NOT render as "no documents
-    uploaded": the files exist, they are just code.
+    uploaded": the files exist, they are just code. Same for data-only
+    (CSV) notebooks: the files exist, they are just data.
     """
     if notebook_context is None:
         return None
     try:
         from app.orchestration.corpus import (
             _ready_code,
+            _ready_data,
             _ready_files,
             _snapshot_files,
             get_corpus_state,
@@ -207,6 +209,7 @@ def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
     try:
         state = get_corpus_state(notebook_context)
         code = _ready_code(notebook_context)
+        data = _ready_data(notebook_context)
     except Exception:  # noqa: BLE001 - malformed snapshot classifies blind
         return None
     code_names = ", ".join(n for n, _ in code[:5])[:200]
@@ -216,8 +219,16 @@ def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
         if code
         else ""
     )
+    data_names = ", ".join(n for n, _ in data[:5])[:200]
+    data_suffix = (
+        f" Plus {len(data)} ready data file(s) (CSV, analyze with pandas in the sandbox)."
+        + (f" Data names: {data_names}." if data_names else "")
+        if data
+        else ""
+    )
+    suffix = code_suffix + data_suffix
     if state == "empty":
-        if code:
+        if code and not data:
             return (
                 f"Notebook file state: CODE-ONLY — no searchable documents, "
                 f"but {len(code)} ready code file(s) present."
@@ -225,12 +236,29 @@ def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
                 + " A request to read/review/explain/debug/identify issues "
                 "in THOSE files is a CODE task, not summarize."
             )
+        if data and not code:
+            return (
+                f"Notebook file state: DATA-ONLY — no searchable documents, "
+                f"but {len(data)} ready data file(s) present."
+                + (f" Names: {data_names}." if data_names else "")
+                + " A request to analyze/summarize/plot those CSV files "
+                "is a CODE task (pandas in the sandbox), not summarize."
+            )
+        if code and data:
+            return (
+                "Notebook file state: CODE+DATA-ONLY — no searchable documents, "
+                f"but {len(code)} ready code file(s)"
+                + (f" ({code_names})" if code_names else "")
+                + f" and {len(data)} ready data file(s)"
+                + (f" ({data_names})" if data_names else "")
+                + " present. Requests over THOSE files are CODE tasks, not summarize."
+            )
         return "Notebook file state: EMPTY — no documents uploaded yet."
     if state == "processing":
         return (
             "Notebook file state: PROCESSING — files exist but none is "
             "ready yet (still uploading/processing/errored)."
-            + code_suffix
+            + suffix
         )
     if state == "ready":
         try:
@@ -244,7 +272,7 @@ def _corpus_hint_for_router(notebook_context: str | None) -> str | None:
             f"Notebook file state: READY — {len(ready)} ready "
             f"document(s){extra}."
             + (f" Names: {names}." if names else "")
-            + code_suffix
+            + suffix
         )
     return None
 
@@ -261,11 +289,13 @@ ROUTER_PROMPT_TEMPLATE = (
     "Decide by DELIVERABLE — what the user wants back:\n"
     "1. code: deliverable is SOURCE CODE or program text. Requires an "
     "explicit software signal: a programming language, code file (e.g. "
-    ".py/.js/.ts), traceback/error, function/class/test/refactor, or "
+    ".py/.js/.ts), data file (e.g. .csv for analysis with pandas), "
+    "traceback/error, function/class/test/refactor, or "
     "greenfield build (script/app/page/site/component). The notebook "
     "file list itself counts as the signal: when it names ready code "
     "files and the request asks to read/review/explain/debug those "
-    "files, that IS code. Review/explain/"
+    "files, that IS code; when it names ready data (CSV) files and the "
+    "request asks to analyze/summarize/plot them, that IS code too. Review/explain/"
     "summarize/critique of DOCUMENT content (plan/report/checklist/"
     "architecture/findings, snippet on page N) is NOT code — it is "
     "summarize/qa_single. Chart/plot/table/compare words do NOT override "

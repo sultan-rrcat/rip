@@ -22,6 +22,7 @@ import uuid
 from app.core.config import settings
 from app.orchestration.corpus import (
     _ready_code,
+    _ready_data,
     _ready_files,
     _snapshot_files,
     get_corpus_state,
@@ -63,6 +64,20 @@ _UUID_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _SAFE_NOTEBOOK_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+#: DATA (CSV) builder bounds: data files are staged read-only into the
+#: sandbox for pandas compute (never embedded, never inlined whole — only
+#: a header + sample rides the report prompt). Caps keep the prompt inside
+#: the Ollama window and the staging bounded.
+_DATA_MAX_FILES = 2
+_DATA_MAX_HEAD_ROWS = 20
+_DATA_MAX_HEAD_BYTES = 8 * 1024
+_DATA_HINT_RE = re.compile(r"\.csv\b", re.IGNORECASE)
+_DATA_SIGNAL_RE = re.compile(
+    r"\b(csv|data|dataset|table|column|row|average|mean|median|correlation|"
+    r"trend|distribution|group\s*by|plot|chart|graph)\b",
+    re.IGNORECASE,
+)
 
 #: Map file extensions to Markdown code-fence language identifiers.
 _EXT_TO_LANG: dict[str, str] = {
@@ -885,6 +900,159 @@ def build_code_execute(
     )
 
 
+def _resolve_data_targets(
+    file_hint: str, notebook_context: str | None
+) -> list[tuple[str, str]]:
+    """Resolve a file hint to [(name, file_id)] DATA (CSV) targets.
+
+    Named hint → substring match (case-insensitive) over ready data files;
+    empty hint → all ready data files (capped). Never invents an id.
+    """
+    ready = _ready_data(notebook_context)
+    if not ready:
+        return []
+    hint = (file_hint or "").strip()
+    if hint and hint != "*":
+        matched = [(n, f) for n, f in ready if hint.lower() in n.lower()]
+        return matched[:_DATA_MAX_FILES]
+    return ready[:_DATA_MAX_FILES]
+
+
+def _is_csv_hint(file_hint: str) -> bool:
+    """True when the router file_hint names a CSV file."""
+    return bool(_DATA_HINT_RE.search(file_hint or ""))
+
+
+def _read_csv_head(notebook_id: str, name: str, file_id: str) -> str | None:
+    """Read a CSV head (header + sample rows); None when unreadable/untrusted."""
+    if not _UUID_RE.match(file_id or ""):
+        return None
+    if not _SAFE_NOTEBOOK_RE.match(notebook_id or ""):
+        return None
+    ext = os.path.splitext(name or "")[1].lower()
+    if ext != ".csv":
+        return None
+    from app.core.config import settings as _settings
+
+    if ext not in set(_settings.data_extensions or []):
+        return None
+    path = os.path.join(_settings.upload_dir, notebook_id, f"{file_id}{ext}")
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = []
+            total = 0
+            # Header + sample: enough for the model to name columns correctly
+            # without inlining the whole file (context safety).
+            for _ in range(_DATA_MAX_HEAD_ROWS + 1):
+                line = f.readline()
+                if not line:
+                    break
+                lines.append(line.rstrip("\n"))
+                total += len(line)
+                if total > _DATA_MAX_HEAD_BYTES:
+                    break
+            return "\n".join(lines) if lines else None
+    except OSError:
+        return None
+
+
+def build_csv_analyze(
+    request_text: str,
+    file_hint: str = "",
+    notebook_context: str | None = None,
+    notebook_id: str | None = None,
+) -> Plan:
+    """Two-step CSV DAG: code.sandbox (pandas) runs, coding reports.
+
+    Mirrors build_code_execute: the CSV rides `data_files` (staged read-only,
+    never diffed as changed), the coding step carries {{1}} so the
+    validator's reasoning-grounding rule holds by construction, and only a
+    header + sample rides the report prompt — the full file is read by
+    pandas inside the box, never inlined. notebook_id is unused here: the
+    engine injects the run's notebook id into the tool step at runtime.
+    """
+    targets = _resolve_data_targets(file_hint, notebook_context)
+    if not targets:
+        if (file_hint or "").strip():
+            detail = (
+                f"No uploaded data file matches '{file_hint.strip()}'. Ask the user "
+                "to check the file name or upload the CSV, or clarify how "
+                "to proceed without it"
+            )
+        else:
+            detail = (
+                "There is no ready CSV data file in this notebook. Ask the user "
+                "to upload a CSV file or clarify how to proceed without one"
+            )
+        return Plan(
+            plan_id=str(uuid.uuid4()),
+            goal=request_text,
+            steps=[
+                PlanStep(
+                    step_id="1",
+                    agent_id="coding",
+                    input={"message": f"{detail}. Request: {request_text}"},
+                    expected_output_type="clarification",
+                )
+            ],
+        )
+    sandbox_input: dict = {
+        "task": request_text,
+        "timeout_ms": _sandbox_budget_ms(),
+        "data_files": [name for name, _ in targets],
+    }
+    code_targets = _resolve_code_targets(file_hint, notebook_context)
+    if code_targets:
+        sandbox_input["file_names"] = [name for name, _ in code_targets]
+    head_sections: list[str] = []
+    for name, fid in targets:
+        head = _read_csv_head(notebook_id or "", name, fid) if notebook_id else None
+        if head is None:
+            head_sections.append(
+                f"CSV {name}: (could not be read — describe it or re-upload it)"
+            )
+        else:
+            head_sections.append(f"CSV {name} head (header + sample rows):\n```csv\n{head}\n```")
+    head_block = "\n\n".join(head_sections)
+    return Plan(
+        plan_id=str(uuid.uuid4()),
+        goal=request_text,
+        steps=[
+            PlanStep(
+                step_id="1",
+                tool_id="code.sandbox",
+                input=sandbox_input,
+                expected_output_type="text",
+            ),
+            PlanStep(
+                step_id="2",
+                agent_id="coding",
+                input={
+                    "message": (
+                        f"Request: {request_text}\n\n{head_block}\n\n"
+                        "Sandbox execution result:\n{{1}}\n\n"
+                        "Report only what the box returned: start your answer "
+                        "directly with the analysis output (summary statistics, "
+                        "findings, exit status), then the files changed "
+                        "(available under Artifacts for review) and concrete "
+                        "next steps. The CSV head above is for column names "
+                        "only — every number must come from the sandbox "
+                        "result, never from the head sample. "
+                        "Do not narrate your own process — no 'I will explore', "
+                        "no shell listings, no future plans: the analysis already "
+                        "ran in the sandbox. "
+                        "Never invent results, and never claim the analysis ran "
+                        "if the result shows a failure."
+                    ),
+                    "max_tokens": _coding_budget_for(request_text),
+                },
+                depends_on=["1"],
+                expected_output_type="answer",
+            ),
+        ],
+    )
+
+
 def build_code(
     request_text: str,
     file_hint: str = "",
@@ -1042,6 +1210,12 @@ def build(
     if route.intent is Intent.QA_SINGLE:
         state = get_corpus_state(notebook_context)
         if state == "empty":
+            # Data-only notebook (CSV, no embeddings): analyze with pandas
+            # instead of answering from parametric knowledge.
+            if _ready_data(notebook_context):
+                return build_csv_analyze(
+                    request_text, route.file_hint, notebook_context, notebook_id
+                )
             return build_qa_no_docs(request_text)
         if state == "processing":
             return build_no_docs_clarification(
@@ -1051,6 +1225,10 @@ def build(
     if route.intent is Intent.COMPARE_MULTI:
         state = get_corpus_state(notebook_context)
         if state in ("empty", "processing"):
+            if state == "empty" and _ready_data(notebook_context):
+                return build_csv_analyze(
+                    request_text, route.file_hint, notebook_context, notebook_id
+                )
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing"),
                 intent=route.intent,
@@ -1062,6 +1240,10 @@ def build(
     if route.intent is Intent.SUMMARIZE:
         state = get_corpus_state(notebook_context)
         if state in ("empty", "processing"):
+            if state == "empty" and _ready_data(notebook_context):
+                return build_csv_analyze(
+                    request_text, route.file_hint, notebook_context, notebook_id
+                )
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing"),
                 intent=route.intent,
@@ -1106,6 +1288,19 @@ def build(
             return None
         return build_convert_one(file_id, route.target_format, request_text)
     if route.intent is Intent.CODE:
+        # CSV data asks always need compute (pandas in the sandbox) — even
+        # without run/test verbs ("summarize sales.csv" is an analysis, not
+        # a code review). Named-CSV hints and data-only notebooks route here;
+        # everything else keeps the execute/generate split below.
+        if _is_csv_hint(route.file_hint) or (
+            not (route.file_hint or "").strip()
+            and _ready_data(notebook_context)
+            and not _resolve_code_targets(route.file_hint, notebook_context)
+            and _DATA_SIGNAL_RE.search(request_text or "")
+        ):
+            return build_csv_analyze(
+                request_text, route.file_hint, notebook_context, notebook_id
+            )
         if _is_execute_request(request_text):
             return build_code_execute(request_text, route.file_hint, notebook_context, notebook_id)
         return build_code(request_text, route.file_hint, notebook_context, notebook_id)
