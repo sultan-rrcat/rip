@@ -22,7 +22,7 @@ from app.api import admin, deps, health, prompt_admin, runs
 from app.core.logging import setup_logging
 from app.observability.langfuse import flush as langfuse_flush
 from app.observability.langfuse import init_langfuse
-from app.routes import auth, files, messages, notebooks
+from app.routes import auth, files, messages, notebooks, studio
 
 logger = setup_logging()
 init_langfuse()
@@ -177,6 +177,7 @@ app = FastAPI(lifespan=lifespan)
 
 # RIP document/notebook API (existing, kept).
 app.include_router(notebooks.router, dependencies=[Depends(auth.get_current_user)])
+app.include_router(studio.router, dependencies=[Depends(auth.get_current_user)])
 app.include_router(files.router, dependencies=[Depends(auth.get_current_user)])
 app.include_router(messages.router, dependencies=[Depends(auth.get_current_user)])
 # NOTE (Phase 4.3): app/routes/llm.py deleted — the old prompt endpoints are

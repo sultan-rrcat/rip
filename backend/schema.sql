@@ -236,3 +236,37 @@ CREATE TABLE IF NOT EXISTS public.tool_config
     updated_by           text,
     updated_at           timestamptz NOT NULL DEFAULT NOW()
 ) TABLESPACE pg_default;
+
+-- ─── studio_jobs ─────────────────────────────────────────────────────────────
+-- NotebookLM-style Studio panel jobs (Convert + Quiz MVP). Each job is a
+-- thin wrapper over one deterministic `runs` row: the route builds a
+-- synthetic rule-routed message (e.g. `Convert "a.pdf" to docx`), the
+-- existing RunManager worker executes it through Router → Builder →
+-- Validator → Engine, and artifacts travel via the standard SSE
+-- `artifacts` event + disk URLs. The frontend never writes `messages`
+-- for studio jobs; history comes from this table joined to `runs`.
+-- Status is derived live from `runs.status` (no duplicated state machine).
+
+CREATE TABLE IF NOT EXISTS public.studio_jobs
+(
+    job_id      uuid NOT NULL DEFAULT gen_random_uuid(),
+    notebook_id uuid NOT NULL,
+    kind        text COLLATE pg_catalog."default" NOT NULL,
+    params      jsonb NOT NULL DEFAULT '{}',
+    run_id      uuid NOT NULL,
+    created_at  timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT studio_jobs_pkey PRIMARY KEY (job_id),
+    CONSTRAINT studio_jobs_notebook_id_fkey FOREIGN KEY (notebook_id)
+        REFERENCES public.notebooks (notebook_id)
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT studio_jobs_run_id_fkey FOREIGN KEY (run_id)
+        REFERENCES public.runs (id)
+        ON UPDATE NO ACTION
+        ON DELETE CASCADE,
+    CONSTRAINT studio_jobs_kind_check
+        CHECK (kind::text = ANY (ARRAY['quiz','convert']::text[]))
+) TABLESPACE pg_default;
+
+CREATE INDEX IF NOT EXISTS idx_studio_jobs_notebook
+    ON public.studio_jobs (notebook_id, created_at DESC);
