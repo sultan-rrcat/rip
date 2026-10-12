@@ -255,30 +255,37 @@ export function useMessages(notebook_id: string | undefined) {
         case 'delta': {
           const text = eventText(event.content)
           if (!text) break
-          // Stream every delta into the main bubble (matches the
-          // concatenated summary); mirror into the Steps panel when the
-          // step is known. Never drop: deltas arriving before `plan` or
-          // without a step_id still belong to the answer.
-          textRef.current += text
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === messageId
-                ? { ...m, text: textRef.current, status: 'streaming' as const }
-                : m,
-            ),
-          )
           const stepId = event.step_id
-          if (stepId) {
-            const step = stepResultsRef.current[stepId]
-            if (step) {
-              const updated = { ...step, delta: step.delta + text }
-              stepResultsRef.current[stepId] = updated
-              setActiveRun((r) =>
-                r && r.runId === runId
-                  ? { ...r, stepResults: { ...stepResultsRef.current } }
-                  : r,
-              )
-            }
+          const step = stepId ? stepResultsRef.current[stepId] : undefined
+          // Hidden intermediates (quiz_json/numbers/chunks extraction) never
+          // touch the main bubble — raw machine JSON must not flash in chat.
+          // They mirror into the Steps panel only; the summary event is
+          // still authoritative for the bubble. Unknown steps (no plan yet,
+          // no step_id) still stream: dropping them would stall the bubble.
+          // Visibility arrives via step_started (plan replays omit it), so
+          // machine output types hide even before that event lands.
+          const eot = step?.expected_output_type
+          const hidden =
+            step?.visibility === 'hide' ||
+            (eot != null && ['chunks', 'numbers', 'quiz_json'].includes(eot))
+          if (!hidden) {
+            textRef.current += text
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === messageId
+                  ? { ...m, text: textRef.current, status: 'streaming' as const }
+                  : m,
+              ),
+            )
+          }
+          if (stepId && step) {
+            const updated = { ...step, delta: step.delta + text }
+            stepResultsRef.current[stepId] = updated
+            setActiveRun((r) =>
+              r && r.runId === runId
+                ? { ...r, stepResults: { ...stepResultsRef.current } }
+                : r,
+            )
           }
           break
         }
