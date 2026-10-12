@@ -363,6 +363,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-054: Studio panel — one-click Convert + Quiz jobs over the run worker
+
+- **Status:** Accepted (2026-10-12)
+- **Context:** Every tool was reachable only via chat: the router had to infer intent from prose, so a "convert this file" ask paid a router LLM call and could misroute (e.g. new-content "write an email in pdf" vs verbatim convert). NotebookLM-style one-click tools need deterministic dispatch with persistent history outside chat.
+- **Decision:** (1) New `studio_jobs` table (`job_id, notebook_id, kind CHECK(quiz|convert), params, run_id FK→runs, created_at`; status derived live from `runs.status`, artifacts merged from persisted `artifacts` SSE events — no duplicated state machine). (2) New `routes/studio.py` (`POST .../studio/quiz {count 2..50, kind}`, `POST .../studio/convert {file_id|"*", target_format}`, `GET .../studio/jobs`, `GET .../jobs/{id}`, `POST .../jobs/{id}/cancel` → delegates to `RunManager.cancel_run`): each POST builds a synthetic rule-routed message (`Convert "f.pdf" to docx` → CONVERT_ONE, `Convert all documents to pdf` → CONVERT_ALL, `Generate N <kind> quiz questions ...` → QUIZ) and creates a normal run through the existing worker — validation, artifacts, SSE replay, cancel, Langfuse traces, and memory scoping are identical to chat; the frontend never writes `messages` for studio jobs. (3) Frontend `RightStudio` (static column on `lg+`, slide-over below) + `services/studio.ts` + `types/studio.ts` + `hooks/useStudio.ts` (server-truth history, polling refresh of non-terminal jobs — no SSE subscription needed since `artifacts` events persist). Quiz/Convert config + history reuse `QuizArtifact`/`ArtifactItem`.
+- **Consequences:** One-click tools cost zero orchestrator changes and no new event types; ambiguous converts still fall through to ReAct fail-honest. Scoring stays client-side/ephemeral (ADR-053); flashcards/mind-map/audio stay deferred (flashcards is quiz-shaped and is the approved stretch).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

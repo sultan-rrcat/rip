@@ -16,6 +16,10 @@ _Avoid_: Conversation, project, workspace
 An async task persisted to Postgres. Created when a user sends a message; survives page refresh; events streamed via SSE; only the stop button terminates it. Valid states: `pending`, `running`, `completed`, `failed`, `cancelled`.
 _Avoid_: Orchestration unit, task, job, request
 
+**Studio job**:
+A one-click tool run from the right Studio panel (quiz, convert). A thin row in `studio_jobs` linking `job_id → run_id`: the run executes through the normal Router → Builder → Engine pipeline via a synthetic rule-routed message, and status/artifacts are derived live from `runs`/`run_events`. Never writes `messages`.
+_Avoid_: Run (bare — studio jobs wrap runs), task
+
 **SSE event**:
 A single message in the Server-Sent Events stream for a run. Types (emit order): `run_started`, `plan`, `step_started`, `delta` (live-only, fractional seq), `step_completed`, `sources`, `artifacts`, `summary`, `run_completed`, `error`, `cancelled`. Structural events persisted to `run_events` for replay; `delta` is live-only (Q35).
 _Avoid_: EventEnvelope, frame

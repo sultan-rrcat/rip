@@ -9,7 +9,7 @@ Offline, single-codebase research assistant: document RAG + multi-agent orchestr
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                  Frontend (React 19 + Vite)                   │
-│  Notebook Gallery ← Notebook Workspace (Chat + Knowledge)     │
+│  Notebook Gallery ← Notebook Workspace (Chat + Knowledge + Studio)│
 │  Streaming: POST /v1/runs + GET /v1/runs/{id}/events (SSE)   │
 └────────────────────────────┬─────────────────────────────────┘
                              │
@@ -57,6 +57,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `core/classutils.py`, `constants.py` | Abstract checks, confidence constants |
 | `rag/pipeline.py`, `vector_rag.py` | Ingest (Docling → header chunks → BGE-M3 embeddings → store); hybrid retrieve (vector + FTS, RRF, CrossEncoder rerank) |
 | `routes/notebooks.py`, `files.py`, `messages.py` | `/api/*` notebook CRUD, uploads, message rows (all owner-scoped, 404-on-foreign) |
+| `routes/studio.py`, `store/studio_jobs.py` | Studio panel jobs (quiz/convert): synthetic rule-routed messages → normal runs; history joins live `runs` status + persisted `artifacts` events |
 | `routes/auth.py` | `/api/auth/login|logout|me` cookie sessions (`rip_session`, 5/min + 15-min lockout), no auth dependency |
 | `services/file_processor.py`, `chat.py` | Background ingest job; context formatting + source extraction |
 | `providers/base.py`, `ollama.py`, `streaming.py` | `ModelProvider` contract, Ollama OpenAI-compat client, `<think>` filtering |
@@ -82,6 +83,7 @@ Redis is optional (queue/cache only). Runs are Postgres-backed, so Redis is neve
 | `orchestration/aggregator.py` | Deterministic type-aware answer assembly (no LLM): terminal text shown, intermediates hidden |
 | `orchestration/memory.py` | Context-window summary + recent window |
 | `store/runs.py` | Postgres CRUD for `runs` + gap-free `run_events` seq |
+| `store/studio_jobs.py` | Studio job rows (job_id → run_id; status/artifacts derived live) |
 | `runs/manager.py` | Thread-per-run worker: memory load/persist, `sources`/`artifacts` events, terminal states |
 | `artifacts.py` | Tool outputs → disk + download URLs |
 | `bff/envelope.py` | SSE event vocabulary |

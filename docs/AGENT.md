@@ -19,6 +19,7 @@ core/config.py       Pydantic Settings (port 8000, OLLAMA_*)
 core/db.py, dependencies.py, logging.py
 rag/pipeline.py, vector_rag.py
 routes/notebooks.py, files.py, messages.py, auth.py
+routes/studio.py + store/studio_jobs.py (Studio quiz/convert jobs over runs)
 services/chat.py, file_processor.py
 providers/base.py, ollama.py, streaming.py, tracing.py
 agents/base.py, registry.py, provider_agent.py (shared base),
@@ -41,6 +42,8 @@ api/runs.py, admin.py (health stub), health.py
 observability/langfuse.py
 frontend/src/
   services/*, types/*, hooks/notebooks/*, pages/, components/
+  studio: services/studio.ts, types/studio.ts, hooks/notebooks/useStudio.ts,
+    components/notebook/RightStudio.tsx
 ```
 
 ## 3. Coding & style
