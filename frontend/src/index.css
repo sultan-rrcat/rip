@@ -19,6 +19,12 @@
     --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
     --font-sans: "Inter", system-ui, sans-serif;
     --font-ledger: "IBM Plex Mono", ui-monospace, "Cascadia Mono", monospace;
+
+    --ease-drawer: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-snap: cubic-bezier(0.3, 0.9, 0.3, 1);
+    --dur-1: 120ms;
+    --dur-2: 220ms;
+    --dur-3: 450ms;
 }
 
 @layer utilities {
@@ -90,15 +96,257 @@
     width: 3.5rem;
 }
 
+.drawer-row:active .brass-pull {
+    transform: scaleX(0.92);
+}
+
 .brass-pull {
-    transition: width 0.18s ease, background 0.18s ease;
+    transition: width 0.18s ease, background 0.18s ease, transform 0.12s ease;
+}
+
+/* Gate entrance: login + home headers rise once. */
+@keyframes gate-in {
+    from {
+        opacity: 0;
+        transform: translateY(14px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.gate-enter {
+    animation: gate-in 0.5s var(--ease-drawer) both;
+}
+
+/* Chat message entrances: assistant rises, user slides from the right. */
+@keyframes message-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes user-in {
+    from {
+        opacity: 0;
+        transform: translateX(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.message-in {
+    animation: message-in 0.22s var(--ease-drawer) both;
+}
+
+.message-in-user {
+    animation: user-in 0.18s var(--ease-drawer) both;
+}
+
+/* Streaming caret on the in-flight assistant bubble. */
+@keyframes caret-blink {
+    0%, 45% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+.stream-caret::after {
+    content: '▍';
+    margin-left: 2px;
+    color: var(--color-brass-deep);
+    animation: caret-blink 1s steps(1) infinite;
+}
+
+/* Skeleton shimmer sweep (home loading, preview loading). */
+@keyframes shimmer {
+    from { background-position: -200% 0; }
+    to { background-position: 200% 0; }
+}
+
+.shimmer {
+    background-image: linear-gradient(
+        100deg,
+        transparent 30%,
+        rgba(251, 252, 253, 0.9) 50%,
+        transparent 70%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+}
+
+/* File processing shimmer bar in the sidebar. */
+@keyframes bar-slide {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(250%); }
+}
+
+.process-bar {
+    position: relative;
+    overflow: hidden;
+}
+
+.process-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 40%;
+    background: linear-gradient(90deg, transparent, var(--color-brass), transparent);
+    opacity: 0.5;
+    animation: bar-slide 1.2s var(--ease-snap) infinite;
+}
+
+/* Run progress shimmer on the live status bar. */
+.run-sheen {
+    position: relative;
+    overflow: hidden;
+}
+
+.run-sheen::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.45) 50%, transparent 80%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+    pointer-events: none;
+}
+
+/* Toast slide-up. */
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.toast-enter {
+    animation: toast-in 0.22s var(--ease-drawer) both;
+}
+
+/* Mobile sidebar slide + backdrop fade. */
+@keyframes sidebar-in {
+    from {
+        opacity: 0;
+        transform: translateX(-14px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.sidebar-enter {
+    animation: sidebar-in 0.22s var(--ease-drawer) both;
+}
+
+@keyframes backdrop-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.backdrop-enter {
+    animation: backdrop-in 0.15s ease-out both;
+}
+
+/* Login error shake — retriggered by key change on the alert. */
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    50% { transform: translateX(4px); }
+    75% { transform: translateX(-2px); }
+}
+
+.shake {
+    animation: shake 0.3s ease-out;
+}
+
+/* Pressable icon buttons: subtle press-down. */
+.pressable {
+    transition: transform var(--dur-1) ease, background-color var(--dur-1) ease, color var(--dur-1) ease;
+}
+
+.pressable:active {
+    transform: scale(0.92);
+}
+
+/* Composer focus lift. */
+.composer {
+    transition: border-color var(--dur-1) ease, box-shadow var(--dur-2) ease;
+}
+
+.composer:focus-within {
+    border-color: color-mix(in srgb, var(--color-ledger) 60%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ledger) 14%, transparent);
+}
+
+/* Button spinner for login submit. */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.agent-spin {
+    animation: spin 0.8s linear infinite;
+}
+
+/* Agent status label: soft fade each time the step changes. */
+@keyframes label-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.agent-label {
+    animation: label-in 0.15s ease-out both;
+}
+
+.btn-spinner {
+    display: inline-block;
+    height: 14px;
+    width: 14px;
+    border-radius: 9999px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .drawer-enter {
+    .drawer-enter,
+    .gate-enter,
+    .message-in,
+    .message-in-user,
+    .toast-enter,
+    .sidebar-enter,
+    .backdrop-enter,
+    .shake {
+        animation: none;
+    }
+    .shimmer,
+    .process-bar::after,
+    .run-sheen::after,
+    .stream-caret::after,
+    .agent-spin,
+    .agent-label,
+    .btn-spinner {
         animation: none;
     }
     .drawer-row:hover {
         transform: none;
+    }
+    .pressable:active {
+        transform: none;
+    }
+    *, *::before, *::after {
+        scroll-behavior: auto !important;
     }
 }

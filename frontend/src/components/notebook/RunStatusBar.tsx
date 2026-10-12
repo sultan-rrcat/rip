@@ -28,10 +28,11 @@ const RunStatusBar = memo(function RunStatusBar({ run }: { run: RunView }) {
     <div
       role="status"
       aria-live="polite"
-      className="font-ledger flex shrink-0 items-center gap-3 rounded-lg border border-brass/50 bg-brass/10 px-3 py-1.5 text-[10px] font-semibold tracking-[0.14em] text-brass-deep"
+      className="font-ledger run-sheen flex shrink-0 items-center gap-3 rounded-lg border border-brass/50 bg-brass/10 px-3 py-1.5 text-[10px] font-semibold tracking-[0.14em] text-brass-deep"
     >
       <span className="inline-flex items-center gap-1.5">
-        <span className="h-2 w-2 animate-pulse rounded-full bg-brass-deep" aria-hidden="true" />
+        {/* static dot: the bubble's ring is the single looping animation */}
+        <span className="h-2 w-2 rounded-full bg-brass-deep" aria-hidden="true" />
         RUNNING{run.goal ? ` · ${run.goal.toUpperCase().slice(0, 40)}` : ''}
       </span>
       <span aria-hidden="true" className="text-brass-deep/40">·</span>

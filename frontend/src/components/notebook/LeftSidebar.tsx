@@ -288,6 +288,7 @@ function FileItem({ file, onDelete, onRetry, onReprocess, onDismissFileError, on
                 <>
                   <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-line border-t-brass-deep"></span>
                   <span className="text-brass-deep">UPLOADING</span>
+                  <span className="process-bar mt-1 block h-1 w-full rounded-full bg-brass/20" aria-hidden="true" />
                 </>
               )}
 
@@ -295,6 +296,7 @@ function FileItem({ file, onDelete, onRetry, onReprocess, onDismissFileError, on
                 <>
                   <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-line border-t-brass-deep"></span>
                   <span className="text-brass-deep">PROCESSING</span>
+                  <span className="process-bar mt-1 block h-1 w-full rounded-full bg-brass/20" aria-hidden="true" />
                   {!file.id.startsWith('temp-') && (
                     <button
                       type="button"

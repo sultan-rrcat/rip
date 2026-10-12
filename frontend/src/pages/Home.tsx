@@ -78,11 +78,23 @@ export default function Home({ isAdmin = false }: { isAdmin?: boolean }) {
       .finally(() => setLoading(false))
   }
 
+  // Keyboard: Cmd/Ctrl+K focuses drawer search.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        document.getElementById('drawer-search')?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   return (
     <div className="h-screen overflow-y-auto bg-bench">
       <div className="mx-auto w-full max-w-3xl px-4 pb-10 pt-6 sm:px-6 sm:pt-10">
         {/* cabinet header: the thesis is the offline stack itself */}
-        <header className="rounded-xl bg-ink px-6 py-7 text-paper shadow-[0_18px_50px_-24px_rgba(21,39,54,0.7)] sm:px-8">
+        <header className="gate-enter rounded-xl bg-ink px-6 py-7 text-paper shadow-[0_18px_50px_-24px_rgba(21,39,54,0.7)] sm:px-8">
           <div className="flex items-start justify-between gap-4">
             <p className="font-ledger text-[11px] font-semibold tracking-[0.22em] text-paper/70">
               RIP · RESEARCH INTELLIGENCE PLATFORM
@@ -124,7 +136,7 @@ export default function Home({ isAdmin = false }: { isAdmin?: boolean }) {
               id="drawer-search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search drawers"
+              placeholder="Search drawers  (⌘K)"
               className="font-ledger h-10 w-full flex-1 rounded-md border border-paper/20 bg-ink-soft px-3 text-[13px] text-paper placeholder:text-paper/40 focus:border-paper/60 focus:outline-none sm:max-w-xs"
             />
             <p className="font-ledger text-[11px] tracking-[0.14em] text-paper/60">
@@ -145,9 +157,9 @@ export default function Home({ isAdmin = false }: { isAdmin?: boolean }) {
                 className="rounded-lg border border-line/70 bg-card/60 px-5 py-6"
                 aria-hidden="true"
               >
-                <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-line/60" />
-                <div className="h-4 w-2/5 rounded bg-line/50" />
-                <div className="mt-2 h-3 w-1/4 rounded bg-line/40" />
+                <div className="shimmer mx-auto mb-3 h-1.5 w-12 rounded-full bg-line/60" />
+                <div className="shimmer h-4 w-2/5 rounded bg-line/50" />
+                <div className="shimmer mt-2 h-3 w-1/4 rounded bg-line/40" />
               </div>
             ))}
           {!loading &&

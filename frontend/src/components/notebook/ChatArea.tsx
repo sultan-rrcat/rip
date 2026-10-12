@@ -13,7 +13,7 @@ import type { Message, Source } from '@/types'
 import type { Artifact, PlanStep, RunView } from '@/types/runs'
 import ArtifactItem from '@/components/notebook/ChartArtifact'
 import { stripSvgFromText } from '@/components/notebook/artifact'
-import TypingDots from '@/components/notebook/TypingDots'
+import AgentStatus from '@/components/notebook/AgentStatus'
 
 interface ChatAreaProps {
   messages: Message[]
@@ -332,7 +332,7 @@ const ChatArea = memo(function ChatArea({ messages, activeRun, pastRuns, isRunni
                 artifacts={artifacts}
                 stepResults={runView?.stepResults}
               >
-                <TypingDots />
+                <AgentStatus run={runView} />
               </AssistantMessage>
             )
           }
@@ -434,8 +434,12 @@ function AssistantMessage({
   }
 
   const canCopy = !children && (text?.trim() ? true : false)
+  // Caret only once real tokens stream (children == null). While the
+  // AgentStatus spinner shows (children != null) the ring is the single
+  // indicator — no caret alongside it.
+  const streaming = !children && (text?.trim() ? true : false)
   return (
-    <div className="group/assistant flex gap-4 items-start">
+    <div className="group/assistant message-in flex gap-4 items-start">
       {/* avatar  */}
       <div className="w-8 h-8 rounded-full bg-ink text-paper flex items-center justify-center shrink-0">
         <SmartToyIcon fontSize="small" />
@@ -462,7 +466,7 @@ function AssistantMessage({
             </button>
           )}
         </div>
-        <div className="text-sm text-ink/90 leading-relaxed max-w-2xl border border-line p-4 rounded-lg rounded-tl-sm bg-card shadow-[0_1px_0_rgba(21,39,54,0.1)]">
+        <div className={`text-sm text-ink/90 leading-relaxed max-w-2xl border border-line p-4 rounded-lg rounded-tl-sm bg-card shadow-[0_1px_0_rgba(21,39,54,0.1)] ${streaming ? 'stream-caret' : ''}`}>
           {children ? (
             children
           ) : (
@@ -635,7 +639,7 @@ function UserMessage({ id, text, disabled, onSave }: UserMessageProps) {
 
   if (editing) {
     return (
-      <div className="flex gap-4 items-start justify-end">
+      <div className="message-in-user flex gap-4 items-start justify-end">
         <div className="flex-1 space-y-2 text-right">
           <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">EDIT MESSAGE</p>
           <textarea
@@ -685,7 +689,7 @@ function UserMessage({ id, text, disabled, onSave }: UserMessageProps) {
   }
 
   return (
-    <div className="group/usermsg flex gap-4 items-start justify-end">
+    <div className="group/usermsg message-in-user flex gap-4 items-start justify-end">
       <div className="flex-1 space-y-1 text-right">
         <p className="font-ledger text-[10px] font-semibold tracking-[0.18em] text-ink-soft/60">YOU</p>
         <div className="inline-block text-paper bg-ink px-5 py-2.5 rounded-lg rounded-tr-sm text-[13px] leading-relaxed shadow-sm max-w-2xl text-left">
@@ -711,7 +715,7 @@ function UserMessage({ id, text, disabled, onSave }: UserMessageProps) {
 
 function ErrorMessage({ text, onRetry, canRetry }: ErrorMessageProps) {
   return (
-    <div className="flex gap-4 items-start">
+    <div className="message-in flex gap-4 items-start">
       <div className="w-8 h-8 rounded-full bg-rust/15 text-rust flex items-center justify-center shrink-0">
         <SmartToyIcon fontSize="small" />
       </div>

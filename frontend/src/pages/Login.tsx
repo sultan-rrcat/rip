@@ -41,7 +41,7 @@ export default function Login({ onLogin }: { onLogin: (user: AuthUser) => void }
     <div className="h-screen overflow-y-auto bg-bench">
       <div className="mx-auto flex min-h-full w-full max-w-md flex-col justify-center px-4 py-10">
         {/* gate header */}
-        <header className="rounded-t-xl bg-ink px-6 pb-6 pt-6 text-paper">
+        <header className="gate-enter rounded-t-xl bg-ink px-6 pb-6 pt-6 text-paper">
           <div className="flex items-center justify-between gap-3">
             <p className="font-ledger text-[10px] font-semibold tracking-[0.22em] text-paper/70">
               RIP · RESEARCH INTELLIGENCE PLATFORM
@@ -73,8 +73,9 @@ export default function Login({ onLogin }: { onLogin: (user: AuthUser) => void }
 
           {error && (
             <div
+              key={error}
               role="alert"
-              className="mb-4 rounded-md border border-rust/50 bg-rust/[0.07] px-3 py-2.5 text-[13px] leading-snug text-rust"
+              className="shake mb-4 rounded-md border border-rust/50 bg-rust/[0.07] px-3 py-2.5 text-[13px] leading-snug text-rust"
             >
               <span className="font-ledger mb-0.5 block text-[10px] font-semibold tracking-[0.18em]">
                 COULD NOT SIGN IN
@@ -127,7 +128,14 @@ export default function Login({ onLogin }: { onLogin: (user: AuthUser) => void }
               disabled={loading || !username || !password}
               className="font-display mt-1 h-10 w-full rounded-md bg-ink text-[15px] font-semibold text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {loading ? 'Opening…' : 'Sign in'}
+              {loading ? (
+                <span className="inline-flex items-center gap-2">
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Opening…
+                </span>
+              ) : (
+                'Sign in'
+              )}
             </button>
           </div>
         </form>

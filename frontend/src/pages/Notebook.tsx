@@ -114,6 +114,29 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
     }
   }, [])
 
+  // Keyboard: `/` focuses the composer, `Esc` closes the sources drawer.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      const typing =
+        target != null &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      if (e.key === '/' && !typing) {
+        e.preventDefault()
+        document
+          .querySelector<HTMLTextAreaElement>(
+            'textarea[aria-label="Ask about your sources"]',
+          )
+          ?.focus()
+      }
+      if (e.key === 'Escape') setSidebarOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   function handleSourceClick(source: Source) {
     const match = files.find(
       (f) => f.name === source.source || f.name.toLowerCase() === source.source.toLowerCase(),
@@ -150,13 +173,13 @@ export default function Notebook({ isAdmin = false }: { isAdmin?: boolean }) {
           type="button"
           aria-label="Close sources panel"
           onClick={() => setSidebarOpen(false)}
-          className="fixed inset-0 z-30 bg-ink/40 md:hidden"
+          className="backdrop-enter fixed inset-0 z-30 bg-ink/40 md:hidden"
         />
       )}
       <div
         className={
           sidebarOpen
-            ? 'fixed inset-y-0 left-0 z-40 w-[300px] max-w-[85vw] p-2 md:static md:z-auto md:block md:w-auto md:max-w-none md:p-0'
+            ? 'sidebar-enter fixed inset-y-0 left-0 z-40 w-[300px] max-w-[85vw] p-2 md:static md:z-auto md:block md:w-auto md:max-w-none md:p-0'
             : 'hidden md:block'
         }
       >

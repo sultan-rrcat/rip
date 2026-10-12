@@ -113,7 +113,14 @@ export default function FilePreviewModal({
         </Button>
       </DialogTitle>
       <DialogContent dividers sx={{ minHeight: 240 }}>
-        {loading && <p className="text-sm text-ink-soft">Loading preview…</p>}
+        {loading && (
+          <div className="space-y-2" aria-hidden="true">
+            <div className="shimmer h-4 w-2/5 rounded bg-line/50" />
+            <div className="shimmer h-3 w-3/5 rounded bg-line/40" />
+            <div className="shimmer h-3 w-1/2 rounded bg-line/40" />
+            <p className="pt-1 text-sm text-ink-soft">Loading preview…</p>
+          </div>
+        )}
         {!loading && error && <p className="text-sm text-rust">{error}</p>}
         {!loading && !error && preview?.kind === 'text' && (
           <div className="space-y-2">

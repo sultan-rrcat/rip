@@ -40,7 +40,7 @@ const ToastHost = memo(function ToastHost() {
         <div
           key={t.id}
           role="status"
-          className="pointer-events-auto flex items-start gap-2 rounded-lg border border-line bg-ink px-3 py-2.5 text-[13px] leading-snug text-paper shadow-lg"
+          className="toast-enter pointer-events-auto flex items-start gap-2 rounded-lg border border-line bg-ink px-3 py-2.5 text-[13px] leading-snug text-paper shadow-lg"
         >
           <span className="min-w-0 flex-1">{t.message}</span>
           <button

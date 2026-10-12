@@ -66,7 +66,7 @@ const Footer = memo(function Footer({
   return (
     <footer className="shrink-0 rounded-lg border border-line bg-card shadow-[0_1px_0_rgba(21,39,54,0.12)]">
       <div className="mx-auto w-full max-w-3xl px-4 py-3">
-        <div className="rounded-md border border-line bg-paper/60 focus-within:border-ledger/60">
+        <div className="composer rounded-md border border-line bg-paper/60 focus-within:border-ledger/60">
           <div className="relative px-3 py-2.5 ">
             <textarea
               ref={textareaRef}
@@ -106,7 +106,7 @@ const Footer = memo(function Footer({
                   onClick={onCancel}
                   title="Stop run"
                   aria-label="Stop run"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rust text-white transition-colors hover:bg-rust/85"
+                  className="pressable flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-rust text-white transition-colors hover:bg-rust/85"
                 >
                   <StopIcon sx={{ fontSize: 16 }} />
                 </button>
@@ -116,7 +116,7 @@ const Footer = memo(function Footer({
                   disabled={isLoading || !inputText.trim()}
                   title="Send message"
                   aria-label="Send message"
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-paper text-ink transition-all hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                  className="pressable flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-paper text-ink transition-all hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <SendIcon sx={{ fontSize: 16 }} />
                 </button>
