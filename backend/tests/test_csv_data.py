@@ -122,6 +122,9 @@ def test_named_csv_builds_sandbox_dag():
     first, second = plan.steps
     assert first.tool_id == "code.sandbox"
     assert first.input["data_files"] == ["sales.csv"]
+    # Trace 7cf93519: scope params never reach the box prompt — the task
+    # text must name the staged CSV or the agent asks for uploads.
+    assert "sales.csv" in first.input["task"] and "/work" in first.input["task"]
     assert "file_names" not in first.input
     assert second.agent_id == "coding"
     assert second.depends_on == ["1"]

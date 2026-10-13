@@ -861,6 +861,40 @@ def _sandbox_budget_ms() -> int:
     return min(int(settings.sandbox_timeout_ms), 480000)
 
 
+def _staged_files_notice(
+    code_targets: list[tuple[str, str]] | None = None,
+    data_targets: list[tuple[str, str]] | None = None,
+) -> str:
+    """Sandbox task suffix naming the staged files (trace 7cf93519).
+
+    The box agent only receives the task text plus a /work directory —
+    scope params (`file_names`/`data_files`) never reach its prompt. A
+    request like "using the attached CSV" without a filename left the
+    agent answering "I don't see an attached CSV" while the file sat
+    staged. Naming the files plus the read-here instruction closes that
+    gap; empty when nothing is staged (greenfield).
+    """
+    bits: list[str] = []
+    if code_targets:
+        names = ", ".join(n for n, _ in code_targets)
+        bits.append(
+            f"Code files staged in the sandbox working directory "
+            f"(/work): {names}. They are already on disk — read and run "
+            "them in place; write any new or changed files into /work."
+        )
+    if data_targets:
+        names = ", ".join(n for n, _ in data_targets)
+        bits.append(
+            f"Data files staged in the sandbox working directory "
+            f"(/work): {names}. They are already on disk — read them "
+            "directly with pandas (never ask for uploads); write all "
+            "outputs (charts, result files) into /work."
+        )
+    if not bits:
+        return ""
+    return "\n\n" + "\n".join(bits)
+
+
 def build_code_execute(
     request_text: str,
     file_hint: str = "",
@@ -901,7 +935,7 @@ def build_code_execute(
             ],
         )
     sandbox_input: dict = {
-        "task": request_text,
+        "task": request_text + _staged_files_notice(code_targets=targets or None),
         "timeout_ms": _sandbox_budget_ms(),
     }
     if targets:
@@ -1054,12 +1088,15 @@ def build_csv_analyze(
                 )
             ],
         )
+    code_targets = _resolve_code_targets(file_hint, notebook_context)
     sandbox_input: dict = {
-        "task": request_text,
+        "task": request_text + _staged_files_notice(
+            code_targets=code_targets or None,
+            data_targets=targets or None,
+        ),
         "timeout_ms": _sandbox_budget_ms(),
         "data_files": [name for name, _ in targets],
     }
-    code_targets = _resolve_code_targets(file_hint, notebook_context)
     if code_targets:
         sandbox_input["file_names"] = [name for name, _ in code_targets]
     head_sections: list[str] = []

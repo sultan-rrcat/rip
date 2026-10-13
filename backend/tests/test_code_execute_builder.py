@@ -71,7 +71,10 @@ def test_execute_verbs_build_sandbox_dag(ask) -> None:
     assert plan is not None and len(plan.steps) == 2
     first, second = plan.steps
     assert first.tool_id == "code.sandbox"
-    assert first.input["task"] == ask
+    # Trace 7cf93519: the box agent never sees scope params — the task
+    # text must name the staged files or it answers "I don't see" them.
+    assert first.input["task"].startswith(ask)
+    assert "app.py" in first.input["task"] and "/work" in first.input["task"]
     assert first.input["file_names"] == ["app.py"]
     assert first.input["timeout_ms"] == min(settings.sandbox_timeout_ms, 480000)
     assert second.agent_id == "coding"
@@ -108,6 +111,7 @@ def test_greenfield_execute_runs_task_only() -> None:
     assert plan is not None and len(plan.steps) == 2
     assert plan.steps[0].tool_id == "code.sandbox"
     assert "file_names" not in plan.steps[0].input
+    assert "/work" not in plan.steps[0].input["task"]
     _validator().validate(plan)
 
 
