@@ -42,7 +42,9 @@ export default function ConfigField({
     String(draft) !== String(entry.value) &&
     !(typeof draft === 'boolean' && typeof entry.value === 'boolean' && draft === entry.value)
 
-  const isModelPicker = entry.key === 'ollama_default_model' && entry.editable && !entry.secret
+  const isModelPicker = (entry.key === 'ollama_default_model' || entry.key === 'sandbox_model') &&
+    entry.editable &&
+    !entry.secret
   const hostedIds = (modelOptions ?? []).map((m) => m.id)
   const draftStr = String(draft)
   const pickerOptions = draftStr && !hostedIds.includes(draftStr) ? [draftStr, ...hostedIds] : hostedIds
