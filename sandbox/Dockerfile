@@ -34,7 +34,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python3 python3-pip python3-venv \
     && ln -s /usr/bin/python3 /usr/local/bin/python \
     && pip install --break-system-packages \
-        pytest numpy pandas \
+        pytest numpy pandas matplotlib \
     && python3 --version
 
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
