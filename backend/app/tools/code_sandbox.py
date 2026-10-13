@@ -102,8 +102,13 @@ _EMBED_MARKERS = ("bge", "embed")
 
 #: Review-artifact caps for changed files (ADR-050, observation-only: the
 #: chat shows the report, the bytes travel via run artifacts).
+#: 512KB per file: matplotlib PNGs routinely land 100-300KB — the old
+#: 100KB cap dropped exactly the chart this path exists to produce
+#: (trace 4aa89643 follow-up: real PNG, changed=1, bytes discarded).
+#: Worst case 8 x 512KB rides one run_events payload row; artifacts
+#: themselves live on disk behind download URLs.
 _SBX_ARTIFACT_MAX_FILES = 8
-_SBX_ARTIFACT_MAX_BYTES = 100 * 1024
+_SBX_ARTIFACT_MAX_BYTES = 512 * 1024
 
 #: Data-file (CSV) staging cap: pandas reads the full file in the box, so
 #: an unbounded CSV could exhaust the container. Over-cap files are skipped

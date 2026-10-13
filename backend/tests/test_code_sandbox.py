@@ -267,7 +267,7 @@ def test_oversize_change_observed_but_not_kept(monkeypatch, tmp_path):
     monkeypatch.setattr(sbx, "_notebook_code_files",
                         lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
-    big = "y\n" * (sbx._SBX_ARTIFACT_MAX_BYTES // 2 + 10)
+    big = "y\n" * (sbx._SBX_ARTIFACT_MAX_BYTES + 10)
     _make_daemon(monkeypatch, out_files={"big.py": big})
     resp = sbx.CodeSandboxTool().execute(_tool_request())
     assert resp.ok is True
