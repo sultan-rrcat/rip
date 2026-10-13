@@ -388,6 +388,15 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 
 ---
 
+## ADR-057: plot_standalone removed; CSV-chart routing + ReAct/aggregation hardening (trace `ce0d4f88`)
+
+- **Status:** Accepted (2026-10-13)
+- **Context:** "Plot total monthly revenue as a line chart" over a data-only CSV notebook routed to `plot_standalone` (whose builder only handles literal numbers in the message, so it returned None → "no deterministic builder" → ReAct). ReAct then (a) re-read the CSV it already had instead of aggregating, (b) put the CSV name in `code.read`'s `file_id` (unknown-file_id failure ×3), (c) scoped the CSV under sandbox `file_names` (code-only scope → "matched no code files"), looped on identical re-reads until the idle guard fired, and (d) surfaced `Step r2/r3 failed` lines plus a token-truncated script instead of a chart.
+- **Decision:** (1) Delete the `PLOT_STANDALONE` intent (enum, description, builder, number parsers, rule prefilter, prompt items); stale values fail closed to `UNKNOWN` per the ADR-039 pattern. Literal-numbers chart asks now go to ReAct, which plots them via its chart rule. (2) Router: new rule prefilter (chart verb + CSV token → `CODE`, no LLM call) plus an explicit prompt precedence (chart + CSV/data file → `code`, over any chart wording; literal-numbers charts with no files → `unknown`). (3) ReAct prompt: CSV recipe (`code.sandbox` + `data_files` scope, never `file_names` for CSVs), message/observation literals for `plot.chart`, and a no-re-read rule (re-proposing identical succeeded/failed actions ends the run); the repeat-success preflight hint now points at the existing observation. (4) Tools stay fail-honest but name the fix: `code.read` non-UUID `file_id` suggests `file_name`; sandbox code-scope miss suggests `data_files`. (5) Aggregator: a ReAct run collapsed to its final synthesis no longer appends `Step rN failed` lines to the persisted summary (status stays `partial`; failures remain in the Steps panel + trace). (6) `r-final` synthesis passes `coding_max_tokens` for code answers so scripts + usage notes are cut by content, never the cap.
+- **Consequences:** Literal-numbers charts cost ReAct turns instead of a zero-LLM builder hit (accepted — removes the misrouting trap). Prompt-template edits reach fresh DBs via seeds; existing deployments pick them up via Admin → reset `router.system_prompt` / `react.system_prompt` to seeds (seed rows are never overwritten, per `ensure_seeds`).
+
+---
+
 ## Historical (superseded, one line each)
 
 - **ADR-002** (hybrid vector + graph RAG): superseded by ADR-007.

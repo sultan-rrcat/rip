@@ -387,7 +387,9 @@ class CodeSandboxTool(Tool):
             if not staged:
                 names = ", ".join(n for _, n in files) or "none"
                 return self._fail(
-                    f"scope matched no code files (notebook files: {names})")
+                    f"scope matched no code files (notebook files: {names}) — "
+                    "for CSV analysis pass the CSV name as data_files, not "
+                    "file_names")
         else:
             staged = list(files)
         if not staged:

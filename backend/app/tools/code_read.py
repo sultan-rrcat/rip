@@ -231,11 +231,16 @@ class CodeReadTool(Tool):
         try:
             if file_id:
                 if not _UUID_RE.match(file_id):
+                    # Fail fast without a DB round-trip, but name the fix:
+                    # the planner sometimes puts the file NAME in file_id
+                    # (trace ce0d4f88) — file_name is the alias for that.
                     return ToolResponse(
                         tool_id=self.tool_id,
                         ok=False,
                         output=None,
-                        error=f"unknown file_id: {file_id}",
+                        error=f"unknown file_id: {file_id} — not a snapshot id; "
+                        "pass a literal file_id from notebook.inspect, or the "
+                        "file name as file_name",
                     )
                 fid, name = _resolve_by_id(notebook_id, file_id)
             elif file_name_hint:

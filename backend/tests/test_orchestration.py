@@ -739,6 +739,39 @@ class TestAggregator:
         assert "the summary" in agg.summary
         assert "Step 2 (plot.chart) failed: bad values" in agg.summary
 
+    def test_react_partial_final_hides_failure_lines(self):
+        # Trace ce0d4f88 shape: r1 read ok (hidden), r2 read failed, r-final
+        # synthesis ok. The final answer already incorporates the usable
+        # observations and the failures stay inspectable in the Steps
+        # panel — "Step rN failed" lines must not leak step ids into the
+        # persisted answer. Status stays partial.
+        plan = Plan(
+            plan_id="p", goal="g",
+            steps=[
+                PlanStep(step_id="r1", tool_id="code.read", input={},
+                         expected_output_type="text"),
+                PlanStep(step_id="r2", tool_id="code.read", input={},
+                         expected_output_type="text"),
+                PlanStep(step_id="r-final", agent_id="reasoning", input={},
+                         expected_output_type="answer"),
+            ],
+        )
+        agg = Aggregator().aggregate(
+            plan,
+            ExecutionResult(
+                trace_id="t",
+                step_results=[
+                    _ok("r1", "csv head", executor="code.read"),
+                    _fail("r2", "unknown file_id: sales_sample.csv",
+                          executor="code.read"),
+                    _ok("r-final", "the report"),
+                ],
+            ),
+        )
+        assert agg.status == "partial"
+        assert agg.summary == "the report"
+        assert agg.shown == ["r-final"]
+
 
 # --- Memory (Q28) ---
 

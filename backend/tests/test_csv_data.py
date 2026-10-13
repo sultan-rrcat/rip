@@ -137,6 +137,21 @@ def test_data_only_without_hint_builds_sandbox_dag():
     _validator().validate(plan)
 
 
+def test_plot_wording_over_data_builds_csv_dag():
+    # Trace ce0d4f88: "plot ... monthly revenue ... line chart" over a
+    # data-only notebook is a CODE analysis (pandas in the sandbox), not
+    # a literal chart — even with no filename in the request.
+    plan = build(
+        "Using the attached CSV, plot total monthly revenue as a line chart",
+        _route(Intent.CODE, ""),
+        CSV_SNAPSHOT,
+    )
+    assert plan is not None and len(plan.steps) == 2
+    assert plan.steps[0].tool_id == "code.sandbox"
+    assert plan.steps[0].input["data_files"] == ["sales.csv"]
+    _validator().validate(plan)
+
+
 def test_greenfield_code_without_data_signal_stays_code_path():
     plan = build("write a quicksort in python", _route(Intent.CODE, ""), CSV_SNAPSHOT)
     assert plan is not None and len(plan.steps) == 1

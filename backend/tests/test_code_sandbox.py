@@ -153,6 +153,9 @@ def test_scope_miss_fails_with_file_list(monkeypatch):
         _tool_request(file_names=["missing.py"]))
     assert resp.ok is False
     assert "a.py" in (resp.error or "")
+    # Trace ce0d4f88: the planner scoped a CSV under file_names — the
+    # error must point at the data_files scope for CSV analysis.
+    assert "data_files" in (resp.error or "")
 
 
 def test_timeout_is_honest_and_tears_down(monkeypatch, tmp_path):

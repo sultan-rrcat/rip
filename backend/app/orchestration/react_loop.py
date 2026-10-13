@@ -588,8 +588,9 @@ REACT_PROMPT_TEMPLATE = (
     'doc.generate {"title": "...", "sections": [{"heading": ..., "body": ...}], "target_format": "md|docx|pdf"}, '
     "notebook.inspect {}, "
     'code.read {"file_id": "..."} or {"file_name": "..."}, '
-    'code.sandbox {"notebook_id": "...", "task": "<full ask>", "file_names": ["..."]} '
-    "(executes code in an isolated container and returns stdout plus changed files).\n"
+    'code.sandbox {"task": "<full ask>", "file_names": ["..."] and/or "data_files": ["....csv"]} '
+    "(code files stage read-write for run/test/execute; CSV data files stage read-only for pandas analysis; "
+    "executes code in an isolated container and returns stdout plus changed files).\n"
     '- wire dataflow with depends_on + {{id}} placeholders: downstream input must contain {{1}} for depends_on ["1"]. '
     "A step with depends_on but no placeholder, or a placeholder with no edge, is INVALID.\n"
     "Decide in order, stop at the first match:\n"
@@ -600,10 +601,14 @@ REACT_PROMPT_TEMPLATE = (
     'step 2 doc.generate {"title", "sections": [{"heading","body": full draft verbatim}], "target_format": pdf/docx/md from the request} '
     'with depends_on ["1"] — do NOT emit the draft alone and wait; the DAG must contain both steps. '
     "Draft with placeholders FIRST — never ask clarifying questions INSTEAD of drafting; put follow-ups in the final answer.\n"
-    "3. CODE tasks (write/test/explain/review/debug code): notebook.inspect once, then code.read each needed file, "
+    "3. CODE tasks (write/test/explain/review/debug code, or analyze a CSV/data file): "
+    "notebook.inspect once, then code.read each needed file, "
     "then ONE coding step with file content inlined verbatim in {\"message\": \"...\"}. "
     "For run/test/execute asks (run the code, run tests, fix failures by running): "
     "use code.sandbox with the full ask and file scope instead — report only what the box returned, never invent execution results. "
+    "For CSV/data analysis asks: use code.sandbox with the full ask and data_files scope (CSV names from the snapshot — "
+    "never file_names for CSVs); the box runs pandas over the staged CSV and returns stdout, then report numbers ONLY from its output. "
+    "After a successful code.read, use its observation for the next step (aggregate, plot, or answer) — never re-read the same file. "
     "Never coding without file content in an observation (empty notebook with no files: write directly with coding, no code.read).\n"
     "4. Retrieval when documents exist: rag.query first "
     "(overview for summarize/compare/quiz/overall-content, specific default otherwise). "
@@ -612,10 +617,13 @@ REACT_PROMPT_TEMPLATE = (
     "5. Quiz/test/exam asks: write questions with a reasoning step emitting strict "
     '{"questions": [...]} JSON (expected_output_type quiz_json), then ONE quiz.generate '
     'step with {"data": {{id}}} (expected_output_type quiz) — never prose-only questions.\n'
-    "6. Charts: bar/line MUST use plot.chart with literal numbers from observations (or a prior reasoning step) plus a short title naming metric and comparison. "
+    "6. Charts: bar/line MUST use plot.chart with literal numbers from the message or observations (or a prior reasoning step) plus a short title naming metric and comparison. "
     "When the notebook has no documents and no observation holds numbers, recall approximate figures with a reasoning step first (state they are approximate), then plot.chart. "
+    "When an observation already holds the numbers (e.g. a code.read CSV dump), aggregate them with a reasoning step emitting strict "
+    '{"labels": [...], "values": [...]} JSON (expected_output_type numbers), then ONE plot.chart step with {"data": {{id}}} — never re-read the file. '
     "Each plot.chart covers a DIFFERENT metric; grouped comparisons use series:[{label, values}] with shared labels, never nested values arrays.\n"
-    "7. Final: is_final=true carries the polished user-facing Markdown answer (direct answer first, then detail; never expose thought/executor/step numbers). Empty answer is invalid.\n"
+    "7. Final: is_final=true carries the polished user-facing Markdown answer (direct answer first, then detail; never expose thought/executor/step numbers). Empty answer is invalid. "
+    "Re-proposing an action with the exact inputs of an already-succeeded OR already-failed action ends the run — always move forward (use an observation, fix the input, or answer).\n"
     "doc.generate sections must carry the COMPLETE user-visible answer (full text verbatim, never a stub) — the file renders ONLY sections.\n"
     "Notebook documents:\n{notebook_context}"
 )
@@ -1001,6 +1009,9 @@ class ReactLoop:
                         if sig in seen_actions:
                             preflight_hint = (
                                 f"{ex} with these exact inputs already succeeded; "
+                                "use its observation for the next step "
+                                "(aggregate, plot, or answer from what you "
+                                "have) — never re-read the same file, "
                                 "propose a different DAG"
                             )
                             preflight_exec = ex

@@ -93,7 +93,9 @@ _CHART_WORD_RE = re.compile(
     r"\b(plot|chart|graph|bar\s+chart|line\s+chart|visualiz\w*|draw)\b",
     re.IGNORECASE,
 )
-_LABEL_VALUE_RE = re.compile(r"[A-Za-z][\w ]*\s*:\s*\d+(?:\.\d+)?")
+#: CSV token for the chart-over-CSV prefilter: an explicit .csv filename
+#: (or the bare word) next to a chart verb is a pandas analysis ask.
+_CSV_TOKEN_RE = re.compile(r"\.csv\b|\bcsv\b", re.IGNORECASE)
 
 #: Seed prose for the admin-editable router.code_hint fragment (see
 #: app/core/promptstore.py). The live value is read per route via
@@ -217,11 +219,12 @@ def _rule_pre_filter(request_text: str) -> Intent | None:
     if _CODE_EXPLICIT_RE.search(text):
         return Intent.CODE
 
-    # 4. Standalone chart: chart verb + ≥2 literal label:number pairs.
-    if _CHART_WORD_RE.search(text):
-        pairs = _LABEL_VALUE_RE.findall(text)
-        if len(pairs) >= 2:
-            return Intent.PLOT_STANDALONE
+    # 4. Chart over a CSV file: pandas analysis (CODE), never a
+    # literal plot. Catches "plot sales.csv ..." / "chart the CSV ..."
+    # deterministically; vaguer CSV-chart asks ("plot the attached CSV")
+    # stay on the LLM path, where the code-over-chart tie-break applies.
+    if _CHART_WORD_RE.search(text) and _CSV_TOKEN_RE.search(text):
+        return Intent.CODE
 
     return None
 
@@ -334,21 +337,23 @@ ROUTER_PROMPT_TEMPLATE = (
     "not by you.\n"
     "Intents:\n{intents_block}\n"
     "Decide by DELIVERABLE — what the user wants back:\n"
-    "1. code: deliverable is SOURCE CODE or program text. Requires an "
-    "explicit software signal: a programming language, code file (e.g. "
-    ".py/.js/.ts), data file (e.g. .csv for analysis with pandas), "
-    "traceback/error, function/class/test/refactor, or "
-    "greenfield build (script/app/page/site/component). The notebook "
-    "file list itself counts as the signal: when it names ready code "
-    "files and the request asks to run/test/execute/fix or "
-    "read/review/explain/debug those "
-    "files, that IS code; when it names ready data (CSV) files and the "
-    "request asks to analyze/summarize/plot them, that IS code too. Review/explain/"
-    "summarize/critique of DOCUMENT content (plan/report/checklist/"
-    "architecture/findings, snippet on page N) is NOT code — it is "
-    "summarize/qa_single. Chart/plot/table/compare words do NOT override "
-    "this when code is requested. Pictures/photos/illustrations with no "
-    "code requested are unknown.\n"
+    "1. code: deliverable is SOURCE CODE, program text, or COMPUTED "
+    "ANALYSIS (pandas over a CSV). Requires an explicit software signal: "
+    "a programming language, code file (e.g. .py/.js/.ts), data file "
+    "(e.g. .csv for analysis with pandas), traceback/error, "
+    "function/class/test/refactor, greenfield build "
+    "(script/app/page/site/component), or a plot/chart/draw ask over a "
+    "CSV/data file named in the message or present in the notebook "
+    "(attached/uploaded CSV, 'the data', 'the spreadsheet'). The "
+    "notebook file list itself counts as the signal: when it names "
+    "ready code files and the request asks to run/test/execute/fix or "
+    "read/review/explain/debug those files, that IS code; when it names "
+    "ready data (CSV) files and the request asks to "
+    "analyze/summarize/plot/chart them, that IS code too. "
+    "Review/explain/summarize/critique of DOCUMENT content "
+    "(plan/report/checklist/architecture/findings, snippet on page N) "
+    "is NOT code — it is summarize/qa_single. Pictures/photos/"
+    "illustrations with no code requested are unknown.\n"
     "2. convert_all: deliverable is a reformatted ORIGINAL uploaded file set "
     "and the request says all/every/each documents via convert/export/"
     "save-as. Write/create/generate/draft NEW content (email/letter/"
@@ -357,29 +362,32 @@ ROUTER_PROMPT_TEMPLATE = (
     "3. convert_one: same, but one named ORIGINAL file. Requires a "
     "convert/export/save-as verb AND a source file; without both, use "
     "unknown.\n"
-    "4. plot_standalone: deliverable is a chart AND every label and number "
-    "needed is IN the message (for example 'A: 10, B: 20').\n"
-    "5. summarize_plot: deliverable is a chart AND the numbers must come "
-    "FROM documents (plot/draw/chart/graph/show-as-graph over document "
-    "data, with or without compare words).\n"
-    "6. compare_multi: text comparing/contrasting/ranking 2+ docs/topics, "
+    "4. summarize_plot: deliverable is a chart AND the numbers must come "
+    "FROM searchable documents (plot/draw/chart/graph/show-as-graph over "
+    "document data, with or without compare words). Never for CSV/data "
+    "files — those are code (rule 1).\n"
+    "5. compare_multi: text comparing/contrasting/ranking 2+ docs/topics, "
     "no chart.\n"
-    "7. summarize: text summary/abstract/overview/review/critique of docs "
+    "6. summarize: text summary/abstract/overview/review/critique of docs "
     "(e.g. 'review the plan in the doc'), no chart, no "
     "questions.\n"
-    "8. quiz: questions/quiz/MCQs/MSQs/test/exam/flashcards from docs or general knowledge.\n"
-    "9. qa_single: one factual question answered from docs.\n"
-    "10. chat: pure greeting/thanks/small-talk/farewell ONLY, no document "
+    "7. quiz: questions/quiz/MCQs/MSQs/test/exam/flashcards from docs or general knowledge.\n"
+    "8. qa_single: one factual question answered from docs.\n"
+    "9. chat: pure greeting/thanks/small-talk/farewell ONLY, no document "
     "question, no task. A greeting plus any task routes to the task, "
     "never chat (e.g. 'hello, summarize this doc' is summarize).\n"
-    "11. unknown: anything else or ambiguous.\n"
+    "10. unknown: anything else or ambiguous — including a chart ask "
+    "whose numbers are all literals in the message with no files "
+    "involved (ReAct plots those from the message text).\n"
     "Tie-breaks (only when two patterns genuinely overlap): prefer the "
     "more specific deliverable — code over chart over compare/quiz over "
-    "qa_single/summarize over chat. A chart verb plus document data "
-    "is summarize_plot even when the request also says compare; a chart "
-    "verb plus literal numbers in the message is plot_standalone; "
-    "review/explain of document prose is summarize/qa_single, never code; "
-    "run/test/execute/review/explain of notebook code files is code, never summarize.\n"
+    "qa_single/summarize over chat. A chart verb plus a CSV/data file "
+    "(named in the message or present in the notebook) is code, even "
+    "when the request also says compare or names a chart type; a chart "
+    "verb over searchable document data is summarize_plot even when the "
+    "request also says compare; review/explain of document prose is "
+    "summarize/qa_single, never code; run/test/execute/review/explain "
+    "of notebook code files is code, never summarize.\n"
     "Follow-ups: a formatting-only fragment (table/bullets) inherits the "
     "prior intent unless it adds a new chart/convert/code/quiz verb. "
     "Always classify the COMBINED intent.\n"

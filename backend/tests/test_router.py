@@ -228,16 +228,49 @@ def test_rule_prefilter_convert_all_names_star() -> None:
     assert result.target_format == "pdf"
 
 
-def test_rule_prefilter_plot_standalone_needs_numbers() -> None:
-    provider = FakeRouterProvider({"intent": "should-not-be-used"})
-    result = Router(provider).route("plot bar chart with Alpha: 10, Beta: 20")
-    assert provider.calls == 0
-    assert result.intent is Intent.PLOT_STANDALONE
+def test_rule_prefilter_chart_over_csv_is_code() -> None:
+    # Trace ce0d4f88: "plot ... CSV ... line chart" misrouted to the
+    # literal-numbers chart path. A chart verb next to a CSV token is a
+    # pandas analysis ask — deterministic CODE, no LLM call spent.
+    from app.orchestration.router import _rule_pre_filter
 
+    provider = FakeRouterProvider({"intent": "should-not-be-used"})
+    result = Router(provider).route("plot sales.csv monthly revenue as a line chart")
+    assert provider.calls == 0
+    assert result.routed_by == "rule"
+    assert result.intent is Intent.CODE
+    assert result.file_hint == "sales.csv"
+
+    assert _rule_pre_filter("chart the attached CSV data please") is Intent.CODE
+    # Literal-numbers chart with no CSV stays on the LLM path (ReAct
+    # plots those from the message text via its chart rule).
+    assert _rule_pre_filter("plot bar chart with Alpha: 10, Beta: 20") is None
+
+
+def test_rule_prefilter_doc_chart_stays_llm() -> None:
     llm_only = FakeRouterProvider({"intent": "summarize_plot"})
     routed = Router(llm_only).route("plot the class distribution from the docs")
     assert llm_only.calls == 1
     assert routed.intent is Intent.SUMMARIZE_PLOT
+
+
+def test_router_prompt_routes_csv_chart_to_code() -> None:
+    # The deliverable-based prompt must carry the CSV-chart → code
+    # precedence explicitly: the trace's LLM ignored the corpus hint
+    # ("plot those CSV files is a CODE task") and picked the chart label.
+    # (No "csv" token here, so the rule prefilter stays out and the LLM
+    # path runs — the exact trace text is pinned by the prefilter test.)
+    provider = FakeRouterProvider({"intent": "code"})
+    Router(provider).route(
+        "Plot total monthly revenue as a line chart from the attached data",
+        notebook_context=(
+            "1 file(s): sales_sample.csv [ready:data] "
+            "id=4c8d0a1a-049e-4b5d-9401-c9af40a15042"
+        ),
+    )
+    system = provider.messages[0]["content"]
+    assert "A chart verb plus a CSV/data file" in system
+    assert "is code, even" in system
 
 
 def test_rule_prefilter_code_marker_without_llm() -> None:

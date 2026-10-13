@@ -819,6 +819,9 @@ class TestCodeRead:
             reg, "code.read", {"notebook_id": "nb-1", "file_id": "not-a-uuid"}
         )
         assert not resp.ok and "unknown file_id" in (resp.error or "")
+        # Trace ce0d4f88: the planner put the file NAME in file_id — the
+        # error must name the fix (literal id, or the name as file_name).
+        assert "file_name" in (resp.error or "")
 
     def test_invalid_notebook_id_rejected_without_db(self):
         reg = get_default_tool_registry(rag=FakeRAG())

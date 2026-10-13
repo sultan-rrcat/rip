@@ -321,41 +321,6 @@ def test_summarize_plot_processing_yields_wait() -> None:
     assert plan.steps[0].expected_output_type == "clarification"
 
 
-def test_plot_standalone_parses_pairs() -> None:
-    route = RouterResult(
-        intent=Intent.PLOT_STANDALONE, confidence=0.9, routed_by="llm",
-    )
-    plan = build("plot Alpha: 10, Beta: 20.5", route)
-    assert plan is not None
-    assert len(plan.steps) == 1
-    step = plan.steps[0]
-    assert step.tool_id == "plot.chart"
-    assert step.input["labels"] == ["Alpha", "Beta"]
-    assert step.input["values"] == [10.0, 20.5]
-    assert not step.depends_on
-    _validator().validate(plan)
-
-
-def test_plot_standalone_bare_numbers_get_ordinal_labels() -> None:
-    route = RouterResult(
-        intent=Intent.PLOT_STANDALONE, confidence=0.9, routed_by="llm",
-    )
-    plan = build("plot 10, 20, 30 as a line chart", route)
-    assert plan is not None
-    assert plan.steps[0].input["labels"] == ["Point 1", "Point 2", "Point 3"]
-    assert plan.steps[0].input["values"] == [10.0, 20.0, 30.0]
-    assert plan.steps[0].input["chart_type"] == "line"
-    _validator().validate(plan)
-
-
-def test_plot_standalone_unparseable_goes_to_react() -> None:
-    route = RouterResult(
-        intent=Intent.PLOT_STANDALONE, confidence=0.9, routed_by="llm",
-    )
-    assert build("plot the thing over there", route) is None
-    assert build("plot 42", route) is None  # single number: not a chart
-
-
 def test_deterministic_intents_all_dispatched() -> None:
     from app.orchestration.intents import DETERMINISTIC_INTENTS
 
@@ -363,7 +328,7 @@ def test_deterministic_intents_all_dispatched() -> None:
     assert Intent.UNKNOWN not in DETERMINISTIC_INTENTS
     assert {
         Intent.CHAT, Intent.QA_SINGLE, Intent.COMPARE_MULTI,
-        Intent.SUMMARIZE, Intent.PLOT_STANDALONE,
+        Intent.SUMMARIZE,
         Intent.CONVERT_ONE, Intent.CONVERT_ALL, Intent.QUIZ, Intent.CODE,
     } <= DETERMINISTIC_INTENTS
 

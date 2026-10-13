@@ -17,7 +17,6 @@ class Intent(str, Enum):
     COMPARE_MULTI = "compare_multi"
     SUMMARIZE = "summarize"
     SUMMARIZE_PLOT = "summarize_plot"
-    PLOT_STANDALONE = "plot_standalone"
     CONVERT_ONE = "convert_one"
     CONVERT_ALL = "convert_all"
     QUIZ = "quiz"
@@ -37,7 +36,6 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
     Intent.COMPARE_MULTI: "compare, contrast, or rank two or more documents/topics (no chart requested)",
     Intent.SUMMARIZE: "summary/abstract/overview/review/critique of documents without chart",
     Intent.SUMMARIZE_PLOT: "summarize/compare AND draw/plot/chart the numbers — any plot/draw/chart/show-as-graph ask belongs here, even when the request also says compare",
-    Intent.PLOT_STANDALONE: "draw a chart from numbers given in the message",
     Intent.CONVERT_ONE: "re-render one ORIGINAL uploaded file to md/docx/pdf via convert/export/save-as (requires a named source file; write/create/generate/draft new content such as an email/letter/report in pdf is NOT convert)",
     Intent.CONVERT_ALL: "re-render all ORIGINAL uploaded files to md/docx/pdf via convert/export/save-as (requires all/every/each; new content is NOT convert)",
     Intent.QUIZ: "generate questions, quiz, MCQs/MSQs, test or exam from documents or general knowledge",
@@ -48,17 +46,18 @@ INTENT_DESCRIPTIONS: dict[Intent, str] = {
 #: Intents served by deterministic code-built DAGs (no DAG-LLM needed).
 #: SUMMARIZE is included: per-file overview shards (mode=overview) fan
 #: into one reduce step — wiring set by construction like compare_multi.
-#: PLOT_STANDALONE is included: labels+values both come from the message
-#: text, so nothing is invented (standalone literals stay legal).
 #: SUMMARIZE_PLOT is included since ADR-041: chart labels are
 #: content-derived, so the builder funnels overview shards → ONE numbers
 #: reasoning step that emits a strict {"labels", "values"} JSON object →
 #: plot.chart's 'data' field. Pairing is by construction (one JSON
 #: object), replacing the ReAct path; unparseable output fails honestly
-#: in the tool. REPORT/CONVERT_AMBIGUOUS were removed: report asks route via
+#: in the tool. PLOT_STANDALONE was removed (ADR-057): literal-numbers
+#: chart asks go to L3 ReAct, which plots them via rule 6.
+#: REPORT/CONVERT_AMBIGUOUS were removed: report asks route via
 #: SUMMARIZE/QA_SINGLE (doc.generate stays ReAct-reachable) and ambiguous
 #: converts fall to UNKNOWN → ReAct, which asks the counter-question. Stale
-#: "report"/"convert_ambiguous" router values fail closed to UNKNOWN.
+#: "plot_standalone"/"report"/"convert_ambiguous" router values fail closed
+#: to UNKNOWN.
 DETERMINISTIC_INTENTS = frozenset(
     {
         Intent.CHAT,
@@ -66,7 +65,6 @@ DETERMINISTIC_INTENTS = frozenset(
         Intent.COMPARE_MULTI,
         Intent.SUMMARIZE,
         Intent.SUMMARIZE_PLOT,
-        Intent.PLOT_STANDALONE,
         Intent.CONVERT_ONE,
         Intent.CONVERT_ALL,
         Intent.QUIZ,

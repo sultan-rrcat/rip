@@ -272,7 +272,20 @@ class ReActEngine:
                             PlanStep(
                                 step_id="r-final",
                                 agent_id=synth_id,
-                                input={"message": synth_message},
+                                input={
+                                    "message": synth_message,
+                                    # Code answers (scripts + usage notes) run
+                                    # long: reuse the coding generation
+                                    # headroom so output is cut by content,
+                                    # never by the token cap (trace ce0d4f88
+                                    # truncated mid-"Usage"). Prose keeps the
+                                    # shared default.
+                                    **(
+                                        {"max_tokens": settings.coding_max_tokens}
+                                        if wants_code and successes
+                                        else {}
+                                    ),
+                                },
                                 expected_output_type="answer",
                             )
                         ],

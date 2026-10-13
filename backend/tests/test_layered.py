@@ -694,6 +694,24 @@ def test_react_prompt_drafts_new_content_before_asking() -> None:
     assert "NEVER rag.query/code.read/doc.convert" in system
 
 
+def test_react_prompt_teaches_csv_sandbox_scope() -> None:
+    # Trace ce0d4f88: the loop scoped a CSV under file_names (which only
+    # matches code files) instead of data_files, then re-read the same
+    # file until the idle guard fired. The prompt must document the
+    # data_files scope and forbid re-reads.
+    from app.orchestration.react_loop import _build_react_system_prompt
+
+    system = _build_react_system_prompt(
+        ["coding", "reasoning"],
+        ["code.read", "code.sandbox", "doc.convert", "doc.generate",
+         "notebook.inspect", "plot.chart", "rag.query"],
+        "1 file(s): sales.csv [ready:data] id=abc",
+    )
+    assert "data_files" in system
+    assert "never re-read the same file" in system
+    assert "never re-read the file" in system
+
+
 def test_orchestrator_falls_back_to_react_on_builder_miss() -> None:
     provider = FakeLayeredProvider(text="react rescued", queued=[
         {"intent": "unknown", "queries": [], "confidence": 0.0},

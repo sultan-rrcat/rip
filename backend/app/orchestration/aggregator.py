@@ -213,6 +213,7 @@ class Aggregator:
         # r1 table + r2 convert msg + r-final all rendered in chat).
         # L2 builder plans use numeric step_ids ("1","2") and keep the
         # existing multi-SHOW behavior so chart placeholders aren't dropped.
+        react_final_only = False
         if step_meta and all(
             re.fullmatch(r"r\d+(?:_\d+)?|r-final|r0", sid or "") for sid in step_meta
         ):
@@ -227,6 +228,7 @@ class Aggregator:
                     shown_ids = {r.step_id for r in shown}
                     if last.step_id in shown_ids:
                         shown = [last]
+                        react_final_only = True
         # Ungrounded-leak guard: a terminal output still carrying {{id}}
         # means placeholder resolution failed upstream (validator bypass or
         # pre-validation plan). Showing it leaks internals ("paste {{1}}");
@@ -310,7 +312,12 @@ class Aggregator:
 
         # Partial runs must not hide failures behind successes (e.g. an
         # inspect listing masking failed converts) — append them honestly.
-        if failed:
+        # Exception: a ReAct run whose collapsed final synthesis is shown.
+        # The synthesis already incorporates the usable observations, the
+        # failures stay inspectable in the Steps panel + trace, and their
+        # "Step rN (executor) failed" lines leak internal step ids into the
+        # persisted answer (trace ce0d4f88) against the voice rules.
+        if failed and not react_final_only:
             failures = "\n".join(
                 f"Step {r.step_id} ({r.agent_id}) failed: {r.error}" for r in failed
             )
