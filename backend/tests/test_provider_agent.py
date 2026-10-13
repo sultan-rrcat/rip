@@ -13,7 +13,6 @@ from unittest.mock import MagicMock
 
 from app.agents.base import DelegationRequest, StepStatus
 from app.agents.provider_agent import ProviderAgent, _Watchdog
-from app.core import constants
 from app.providers.base import ModelProvider
 
 
@@ -161,7 +160,7 @@ class TestWatchdog:
     def test_no_trip_when_visible_quickly(self) -> None:
         cancel = threading.Event()
         wd = _Watchdog(timeout_s=60.0, cancel_event=cancel)
-        stop = wd.start()
+        wd.start()
         wd.mark_visible()
         time.sleep(0.1)
         assert not wd.check_trip()
@@ -170,7 +169,7 @@ class TestWatchdog:
     def test_trips_on_timeout(self) -> None:
         cancel = threading.Event()
         wd = _Watchdog(timeout_s=0.2, cancel_event=cancel)
-        stop = wd.start()
+        wd.start()
         time.sleep(1.0)
         assert wd.check_trip()
         wd.stop()
@@ -183,3 +182,129 @@ class TestWatchdog:
         time.sleep(0.1)
         wd.stop()
         assert stop.is_set()
+
+    def test_pure_silence_still_trips_fast(self) -> None:
+        # No activity at all: trip at the first window (unchanged behavior).
+        cancel = threading.Event()
+        wd = _Watchdog(timeout_s=0.2, cancel_event=cancel)
+        wd.start()
+        time.sleep(1.0)
+        assert wd.check_trip()
+        wd.stop()
+
+    def test_reasoning_activity_grants_extensions_then_trips(self) -> None:
+        # Trace 7cf93519: granite4.2 streams delta.reasoning for a minute+
+        # before the first visible token. Activity extends the guard, but
+        # the total stays bounded (timeout * (1 + max_extensions)).
+        cancel = threading.Event()
+        wd = _Watchdog(timeout_s=0.2, cancel_event=cancel, max_extensions=1)
+        wd.start()
+        for _ in range(6):
+            time.sleep(0.15)
+            wd.mark_active()
+        assert not wd.check_trip()
+        deadline = time.monotonic() + 8.0
+        while not wd.check_trip() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert wd.check_trip()
+        wd.stop()
+
+    def test_no_extensions_by_default_count(self) -> None:
+        cancel = threading.Event()
+        wd = _Watchdog(timeout_s=0.2, cancel_event=cancel, max_extensions=0)
+        wd.start()
+        wd.mark_active()
+        time.sleep(1.0)
+        assert wd.check_trip()
+        wd.stop()
+
+
+class TestWatchdogReasoningActivity:
+    def test_reasoning_then_visible_succeeds(self) -> None:
+        """Trace 7cf93519: reasoning-only stream activity must hold the
+        guard until visible tokens arrive."""
+
+        class GuardedAgent(ConcreteAgent):
+            agent_id = "guarded"
+
+            def _start_watchdog(self, request):
+                return _Watchdog(
+                    timeout_s=0.3, cancel_event=request.cancel_event,
+                    max_extensions=5,
+                )
+
+        seen: list[str] = []
+
+        class ReasoningProvider(ModelProvider):
+            def generate(self, *a, **k):
+                raise AssertionError
+
+            def generate_stream(self, model, messages, **kwargs):
+                on_activity = kwargs.get("on_activity")
+                for _ in range(5):
+                    time.sleep(0.2)
+                    if on_activity is not None:
+                        on_activity()
+                seen.append("signaled")
+                yield "done"
+
+            def generate_structured(self, *a, **k):
+                raise AssertionError
+
+            def embed(self, *a, **k):
+                raise AssertionError
+
+            def list_available_models(self):
+                return []
+
+            def served_model(self, m):
+                return m
+
+        agent = GuardedAgent(ReasoningProvider())
+        request = _make_request(on_delta=lambda c: None)
+        result = agent.execute(request)
+        assert seen == ["signaled"]
+        assert result.status is StepStatus.SUCCESS
+        assert result.output == "done"
+
+    def test_silent_stream_still_trips(self) -> None:
+        """No activity at all: the guard still fails the step fast."""
+
+        class GuardedAgent(ConcreteAgent):
+            agent_id = "guarded-silent"
+
+            def _start_watchdog(self, request):
+                return _Watchdog(
+                    timeout_s=0.3, cancel_event=request.cancel_event,
+                    max_extensions=5,
+                )
+
+        class SilentProvider(ModelProvider):
+            def generate(self, *a, **k):
+                raise AssertionError
+
+            def generate_stream(self, model, messages, **kwargs):
+                cancel = kwargs.get("cancel_event")
+                for _ in range(30):
+                    if cancel is not None and cancel.is_set():
+                        raise RuntimeError("run cancelled")
+                    time.sleep(0.1)
+                yield "too late"
+
+            def generate_structured(self, *a, **k):
+                raise AssertionError
+
+            def embed(self, *a, **k):
+                raise AssertionError
+
+            def list_available_models(self):
+                return []
+
+            def served_model(self, m):
+                return m
+
+        agent = GuardedAgent(SilentProvider())
+        request = _make_request(on_delta=lambda c: None)
+        result = agent.execute(request)
+        assert result.status is StepStatus.FAILURE
+        assert "no visible output" in (result.error or "")

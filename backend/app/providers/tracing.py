@@ -17,7 +17,7 @@ wrapped.
 """
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 from app.core.config import settings
@@ -121,6 +121,7 @@ class TracingProvider(ModelProvider):
         temperature: float = 0.2,
         max_tokens: int | None = None,
         cancel_event=None,
+        on_activity: Callable[[], None] | None = None,
     ) -> Iterator[str]:
         """Passthrough stream with ONE end-of-stream generation update.
 
@@ -151,7 +152,7 @@ class TracingProvider(ModelProvider):
                 for chunk in self._inner.generate_stream(
                     model=model, messages=messages,
                     temperature=temperature, max_tokens=max_tokens,
-                    cancel_event=cancel_event,
+                    cancel_event=cancel_event, on_activity=on_activity,
                 ):
                     chunks.append(chunk)
                     yield chunk

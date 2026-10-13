@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 
@@ -46,6 +46,7 @@ class ModelProvider(ABC):
         temperature: float = 0.2,
         max_tokens: int | None = None,
         cancel_event: threading.Event | None = None,
+        on_activity: Callable[[], None] | None = None,
     ) -> Iterator[str]:
         """Yield the model's text response as incremental text chunks.
 
@@ -53,6 +54,10 @@ class ModelProvider(ABC):
         answer `generate()` would return. Providers with native token
         streaming override this; the default is honest (one chunk), so every
         existing subclass keeps working unchanged.
+
+        `on_activity` fires on any stream event — including reasoning-only
+        events that yield no visible chunk — so watchdog guards can tell a
+        thinking model apart from true silence. None = no signaling.
 
         Concrete (not abstract) ON PURPOSE: test fakes and future providers
         that only implement generate() must keep instantiating.

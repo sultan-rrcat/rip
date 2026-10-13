@@ -15,7 +15,6 @@ import logging
 import threading
 import time
 from abc import abstractmethod
-from typing import ClassVar
 
 from app.agents.base import Agent, DelegationRequest, DelegationResponse, StepStatus
 from app.core import constants
@@ -33,14 +32,28 @@ class _Watchdog:
     budget inside the step wall-clock instead of orphaning a late
     success. Once the first visible token arrives the guard is met —
     total time stays bounded by the outer wall clock.
+
+    Thinking models (granite4.2, trace 7cf93519) stream `delta.reasoning`
+    for a minute-plus before the first visible token: pure silence still
+    trips at `timeout_s`, but stream activity without visible text
+    (`mark_active`, e.g. reasoning chunks) grants up to `max_extensions`
+    extra windows before tripping. The outer step wall-clock still
+    bounds the total.
     """
 
-    def __init__(self, timeout_s: float, cancel_event: threading.Event | None):
+    def __init__(
+        self,
+        timeout_s: float,
+        cancel_event: threading.Event | None,
+        max_extensions: int = 3,
+    ):
         self._timeout_s = timeout_s
         self._cancel_event = cancel_event
+        self._max_extensions = max_extensions
         self._stop = threading.Event()
-        self._state = {"visible": False, "quiet_timeout": False}
+        self._state = {"visible": False, "quiet_timeout": False, "extensions": 0}
         self._started = time.monotonic()
+        self._last_active = self._started
         self._thread: threading.Thread | None = None
 
     def start(self) -> threading.Event:
@@ -52,6 +65,10 @@ class _Watchdog:
     def mark_visible(self) -> None:
         """Mark that a visible token has arrived."""
         self._state["visible"] = True
+
+    def mark_active(self) -> None:
+        """Mark stream activity without visible text (e.g. reasoning)."""
+        self._last_active = time.monotonic()
 
     def check_trip(self) -> bool:
         """Check if the watchdog tripped (for RuntimeError handling)."""
@@ -68,9 +85,15 @@ class _Watchdog:
             if self._cancel_event is not None and self._cancel_event.is_set():
                 self._stop.set()
                 return
-            if not self._state["visible"] and (
-                time.monotonic() - self._started
-            ) > self._timeout_s:
+            if self._state["visible"]:
+                self._stop.set()
+                return
+            if (time.monotonic() - self._last_active) > self._timeout_s:
+                if (self._last_active > self._started
+                        and self._state["extensions"] < self._max_extensions):
+                    self._state["extensions"] += 1
+                    self._last_active = time.monotonic()
+                    continue
                 self._state["quiet_timeout"] = True
                 self._stop.set()
                 return
@@ -153,12 +176,16 @@ class ProviderAgent(Agent):
             try:
                 if request.on_delta is not None:
                     parts: list[str] = []
+                    on_activity = (
+                        watchdog.mark_active if watchdog is not None else None
+                    )
                     for chunk in self._provider.generate_stream(
                         model=self._model,
                         messages=messages,
                         temperature=self._temperature,
                         max_tokens=budget,
                         cancel_event=cancel_event,
+                        on_activity=on_activity,
                     ):
                         if watchdog is not None:
                             watchdog.mark_visible()

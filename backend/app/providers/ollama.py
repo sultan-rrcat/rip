@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx
@@ -513,6 +513,7 @@ class OllamaProvider(ModelProvider):
         temperature: float | None = None,
         max_tokens: int | None = None,
         cancel_event: threading.Event | None = None,
+        on_activity: Callable[[], None] | None = None,
     ) -> Iterator[str]:
         if temperature is None:
             temperature = settings.default_temperature
@@ -530,6 +531,8 @@ class OllamaProvider(ModelProvider):
             max_tokens=max_tokens if max_tokens is not None else settings.default_max_tokens,
             cancel_event=cancel_event,
         ):
+            if on_activity is not None:
+                on_activity()
             if event.get("usage") is not None:
                 self._record_usage(event)
             reason = self._finish_reason(event)
