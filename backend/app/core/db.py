@@ -55,6 +55,11 @@ def pg_connection():
     except Exception as e:
         if conn:
             conn.rollback()
+        # Route-level HTTP errors (e.g. 404-on-foreign raised inside the
+        # `with` block) are not DB failures — re-raise without the
+        # connection-error log so docker logs stay diagnosable.
+        if getattr(e, "status_code", None) is not None:
+            raise
         params = _db_params()
         logger.error("Error connecting to database: %s", e)
         logger.error(

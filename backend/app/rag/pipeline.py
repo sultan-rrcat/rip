@@ -77,12 +77,21 @@ class RagPipeline:
             else ("Docling", "OpenDataLoader")
         )
         try:
-            return loaders[0](file)
+            docs = loaders[0](file)
+            # A loader may swallow its own error and return no pages
+            # (observed live: OpenDataLoader CLI exit 1 → 0 pages, no raise).
+            # Empty is not a successful load — fall back, never store silence.
+            if not docs:
+                raise ValueError(f"{names[0]} returned no pages for {file}")
+            return docs
         except Exception as e:  # noqa: BLE001 - loader fallback must catch anything
             logger.warning(f"⚠️ {names[0]} failed, fallback to {names[1]}: {e}")
 
             try:
-                return loaders[1](file)
+                docs = loaders[1](file)
+                if not docs:
+                    raise ValueError(f"{names[1]} returned no pages for {file}")
+                return docs
             except Exception as e:
                 logger.info(f"❌ Both loaders failed: {e}")
                 raise
