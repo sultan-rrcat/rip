@@ -16,7 +16,29 @@ const DEFAULT_MESSAGES: Message[] = [
 ]
 
 const activeKey = (notebookId: string) => `rip:activeRun:${notebookId}`
+const startedAtKey = (notebookId: string) => `rip:activeRunStartedAt:${notebookId}`
 const persistedKey = (notebookId: string) => `rip:persistedRun:${notebookId}`
+
+// startedAt is wall-clock only (drives the AgentStatus elapsed timer). It
+// must survive refresh/revisit, so it lives next to the pending runId in
+// localStorage. Back-compat: older clients stored only the runId — a missing
+// or unparsable value falls back to Date.now() (timer restarts once, then
+// pins for later revisits).
+function readStoredStartedAt(notebookId: string): number | null {
+  try {
+    const raw = localStorage.getItem(startedAtKey(notebookId))
+    if (!raw) return null
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function clearPendingKeys(notebookId: string) {
+  localStorage.removeItem(activeKey(notebookId))
+  localStorage.removeItem(startedAtKey(notebookId))
+}
 
 // Backend payload extras outside the locked RunEvent union (see
 // types/runs.ts header): plan carries `attempt`, error carries `message`.
@@ -115,7 +137,7 @@ export function useMessages(notebook_id: string | undefined) {
       // Exactly-once assistant persist: a resumed replay of an already
       // saved run only removes the placeholder (the saved row is loaded).
       if (localStorage.getItem(persistedKey(nb)) === runId) {
-        localStorage.removeItem(activeKey(nb))
+        clearPendingKeys(nb)
         setMessages((prev) => prev.filter((m) => m.id !== messageId))
         return
       }
@@ -142,7 +164,7 @@ export function useMessages(notebook_id: string | undefined) {
           ),
         )
       } finally {
-        localStorage.removeItem(activeKey(nb))
+        clearPendingKeys(nb)
       }
     },
     [detach],
@@ -154,7 +176,7 @@ export function useMessages(notebook_id: string | undefined) {
       const messageId = placeholderRef.current
       detach()
       if (!nb || !messageId) return
-      localStorage.removeItem(activeKey(nb))
+      clearPendingKeys(nb)
       try {
         const errorMessage = await createMessageAPI(nb, 'error', text)
         setMessages((prev) =>
@@ -178,7 +200,7 @@ export function useMessages(notebook_id: string | undefined) {
     const nb = nbRef.current
     const messageId = placeholderRef.current
     detach()
-    if (nb) localStorage.removeItem(activeKey(nb))
+    if (nb) clearPendingKeys(nb)
     // Partial tokens stay on screen unpersisted (no run_completed → the
     // frontend never writes an assistant row for a cancelled run, Q22).
     if (messageId) {
@@ -247,6 +269,7 @@ export function useMessages(notebook_id: string | undefined) {
                   sources: [],
                   artifacts: [],
                   stepResults: initSteps,
+                  attempt,
                 }
               : r,
           )
@@ -402,7 +425,7 @@ export function useMessages(notebook_id: string | undefined) {
   )
 
   const attach = useCallback(
-    (runId: string, messageId: string, initialText: string) => {
+    (runId: string, messageId: string, initialText: string, startedAt?: number) => {
       const nb = nbRef.current
       if (!nb) return
       seenRef.current = new Set()
@@ -412,7 +435,15 @@ export function useMessages(notebook_id: string | undefined) {
       placeholderRef.current = messageId
       stepResultsRef.current = {}
       planStepsRef.current = null
+      // Reuse the original start on refresh/revisit so the elapsed timer
+      // continues instead of restarting. Fresh runs pass no startedAt (or
+      // Date.now()) and pin it here for future resumes.
+      const effectiveStartedAt =
+        startedAt != null && Number.isFinite(startedAt) && startedAt > 0
+          ? startedAt
+          : Date.now()
       localStorage.setItem(activeKey(nb), runId)
+      localStorage.setItem(startedAtKey(nb), String(effectiveStartedAt))
       setActiveRun({
         runId,
         messageId,
@@ -422,7 +453,8 @@ export function useMessages(notebook_id: string | undefined) {
         artifacts: [],
         running: true,
         stepResults: {},
-        startedAt: Date.now(),
+        attempt: 1,
+        startedAt: effectiveStartedAt,
       })
       setIsRunning(true)
       unsubscribeRef.current?.()
@@ -462,6 +494,14 @@ export function useMessages(notebook_id: string | undefined) {
       if (cancelled) return
       const pendingRun = localStorage.getItem(activeKey(id))
       if (!pendingRun || placeholderRef.current) return
+      const resumedStartedAt = readStoredStartedAt(id) ?? Date.now()
+      // Pin the fallback immediately so a second refresh in the same run
+      // keeps the same base even for pre-fix localStorage entries.
+      try {
+        localStorage.setItem(startedAtKey(id), String(resumedStartedAt))
+      } catch {
+        // Storage full/blocked: timer still works for this session.
+      }
       const messageId = uuidv4()
       setMessages((prev) => [
         ...prev,
@@ -473,7 +513,7 @@ export function useMessages(notebook_id: string | undefined) {
           sources: [],
         },
       ])
-      attach(pendingRun, messageId, '')
+      attach(pendingRun, messageId, '', resumedStartedAt)
     }
 
     load()
@@ -644,7 +684,7 @@ export function useMessages(notebook_id: string | undefined) {
     detach()
     setPastRuns({})
     setCancelledIds([])
-    localStorage.removeItem(activeKey(notebook_id))
+    clearPendingKeys(notebook_id)
     localStorage.removeItem(persistedKey(notebook_id))
     setMessages(DEFAULT_MESSAGES)
   }, [notebook_id, detach])

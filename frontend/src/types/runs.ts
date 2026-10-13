@@ -57,6 +57,8 @@ export interface RunView {
   artifacts: Artifact[]
   running: boolean
   stepResults?: Record<string, StepResultView>
-  /** Local wall-clock start (Date.now()) for the elapsed timer. Never persisted. */
+  /** Planner attempt counter (1 = first plan, >1 = recall/retry). Drives the transient "Replanning" label. */
+  attempt?: number
+  /** Local wall-clock start (Date.now()) for the elapsed timer. Pinned to localStorage on attach so refresh/revisit resumes it. */
   startedAt?: number | null
 }
