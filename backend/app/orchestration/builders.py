@@ -131,6 +131,15 @@ _PRESENTATION_SUFFIX_SEED = (
     "numbered steps, or a table when it helps)."
 )
 
+#: Chart-awareness note for the summarize_plot summary step (trace
+#: 2018fba0): the summary runs parallel to plot.chart and is otherwise
+#: chart-blind, so it emits a matplotlib how-to alongside an already-rendered
+#: chart. Static sentence — no placeholder, no extra LLM call, no latency.
+_SUMMARIZE_PLOT_CHART_NOTE = (
+    "A chart of these numbers is generated separately and shown in "
+    "Artifacts — do not emit plotting code (no matplotlib/seaborn snippets, "
+    "no 'how to plot' steps); end with one line referencing the chart. "
+)
 #: Honest-empty-answer guidance spliced into every grounded writer step.
 #: The old "Say 'not in the documents'" line produced bare fragments that
 #: read as broken output (observed live: a bare "not in the documents"
@@ -525,6 +534,7 @@ def build_summarize_plot(
                 "message": (
                     f"Using ONLY these retrieved chunks ({refs}), write the "
                     f"requested summary. "
+                    + _SUMMARIZE_PLOT_CHART_NOTE
                     + _empty_answer_guidance()
                     + f"Never mention chunk ids or placeholders. "
                     f"Request: {request_text}{_presentation_suffix()}"

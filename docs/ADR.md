@@ -379,6 +379,13 @@ Active decisions first; superseded merge-era history is collapsed at the bottom.
 - **Decision:** `plan_graph` gains `_QUIZ_CONTEXT_TYPES = {"quiz_json"}`: agent steps with that output type receive memory `context` regardless of terminality. Context rides a separate system message (`ProviderAgent`: `Conversation context:` system turn, strict-JSON instruction stays the final user turn), so extraction strictness is unaffected. `numbers`/`chunks` stay excluded; tools never get context (unchanged).
 - **Consequences:** Quiz runs ground on recent chat + summary within the existing window budget. Pinned by `test_quiz_json_extractor_gets_context_despite_machine_type` next to the terminal-scoping pin it amends.
 
+## ADR-056: Chart-aware summarize_plot summary (prompt-only, no extra call)
+
+- **Status:** Accepted (2026-10-13, trace `2018fba0`)
+- **Context:** `build_summarize_plot` runs `plot.chart` and the prose `answer` step in parallel over the same shards. The answer prompt never mentioned the chart, so it emitted a matplotlib how-to while the chart already rendered inline — and the deterministic aggregator (ADR-023) concatenates both verbatim. An LLM synthesis pass was considered and rejected (extra call, latency, cost).
+- **Decision:** One static sentence in the summary prompt (`_SUMMARIZE_PLOT_CHART_NOTE`): a chart is generated separately in Artifacts — no plotting code, end with one line referencing it. Parallel shape, dependencies, and aggregator unchanged.
+- **Consequences:** Zero extra calls/latency; the model may still occasionally ignore the instruction (accepted — prompt-only is best-effort, deterministic concat remains the backstop). Pinned by `test_summarize_plot_summary_is_chart_aware`.
+
 ---
 
 ## Historical (superseded, one line each)

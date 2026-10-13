@@ -286,6 +286,23 @@ def test_summarize_plot_builds_json_extraction_pipeline() -> None:
     _validator().validate(plan)
 
 
+def test_summarize_plot_summary_is_chart_aware() -> None:
+    # Trace 2018fba0: the summary step runs parallel to plot.chart and is
+    # otherwise chart-blind, so it emits a matplotlib how-to alongside an
+    # already-rendered chart. Static prompt sentence — no extra LLM call.
+    route = RouterResult(
+        intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
+    )
+    plan = build("summarize and plot the benchmarks", route, "1 file(s): a.pdf [ready] id=x")
+    assert plan is not None
+    answers = [s for s in plan.steps if s.expected_output_type == "answer"]
+    assert len(answers) == 1
+    msg = answers[0].input.get("message", "")
+    assert "Artifacts" in msg
+    assert "do not emit plotting code" in msg.lower()
+    _validator().validate(plan)
+
+
 def test_summarize_plot_empty_corpus_yields_clarification() -> None:
     route = RouterResult(
         intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
