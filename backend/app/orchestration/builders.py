@@ -1333,6 +1333,14 @@ def build(
     if route.intent is Intent.SUMMARIZE_PLOT:
         state = get_corpus_state(notebook_context)
         if state in ("empty", "processing"):
+            # Data-only notebook (CSV, no embeddings): same pandas path
+            # as the qa/compare/summarize siblings (trace 24cbe7ab: a
+            # trend/plot ask over sales_sample.csv got an "upload
+            # documents" clarification while the CSV sat ready).
+            if state == "empty" and _ready_data(notebook_context):
+                return build_csv_analyze(
+                    request_text, route.file_hint, notebook_context, notebook_id
+                )
             return build_no_docs_clarification(
                 request_text, processing=(state == "processing"),
                 intent=route.intent,

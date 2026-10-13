@@ -312,6 +312,33 @@ def test_summarize_plot_empty_corpus_yields_clarification() -> None:
     assert plan.steps[0].expected_output_type == "clarification"
 
 
+def test_summarize_plot_data_only_builds_csv_dag() -> None:
+    # Trace 24cbe7ab: trend/plot ask over a data-only notebook got an
+    # "upload documents" clarification while sales_sample.csv sat ready.
+    # Same pandas path as the qa/compare/summarize siblings.
+    route = RouterResult(
+        intent=Intent.SUMMARIZE_PLOT, confidence=1.0, routed_by="llm",
+    )
+    snapshot = (
+        "1 file(s): sales_sample.csv [ready:data] "
+        "id=11111111-1111-1111-1111-111111111111"
+    )
+    plan = build(
+        "What is the monthly revenue trend? Which months were best?",
+        route, snapshot,
+    )
+    assert plan is not None and len(plan.steps) == 2
+    assert plan.steps[0].tool_id == "code.sandbox"
+    assert plan.steps[0].input["data_files"] == ["sales_sample.csv"]
+    from app.agents.coding import CodingAgent
+    from app.agents.registry import AgentRegistry
+    from app.tools.registry import get_default_tool_registry
+
+    agents = AgentRegistry()
+    agents.register(CodingAgent(_FakeProvider()))
+    PlanValidator(agents, get_default_tool_registry()).validate(plan)
+
+
 def test_summarize_plot_processing_yields_wait() -> None:
     route = RouterResult(
         intent=Intent.SUMMARIZE_PLOT, confidence=0.9, routed_by="llm",
