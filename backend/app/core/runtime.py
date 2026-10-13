@@ -148,6 +148,11 @@ _reg(FieldSpec("bge_reranker_v2_m3", "embeddings", "Reranker path",
 _reg(FieldSpec("upload_dir", "embeddings", "Upload directory",
                "File storage root. Changing it strands existing files.", "str", "restart"))
 # — Sandbox (live: read per execution) —
+_reg(FieldSpec("sandbox_model", "sandbox", "Sandbox model",
+               "Model the sandbox runs (opencode -m). Empty = follow Default model. "
+               "CSV comparison 2026-10-13: granite4.1:8b-q8_0 did the pandas task in 55s, "
+               "granite4.2:8b took 416s and failed it.",
+               "str", "live"))
 _reg(FieldSpec("sandbox_image", "sandbox", "Sandbox image",
                "Docker image with the opencode CLI. Build once: docker build -t rip-sandbox sandbox/.",
                "str", "live"))
@@ -239,6 +244,8 @@ def coerce_value(spec: FieldSpec, raw: Any) -> Any:
     # str
     text = str(raw).strip() if raw is not None else ""
     if not text:
+        if spec.key == "sandbox_model":
+            return ""  # empty = follow ollama_default_model
         raise ValueError(f"{spec.key}: must not be empty")
     if spec.key == "ollama_base_url" and not text.startswith(("http://", "https://")):
         raise ValueError(f"{spec.key}: must start with http:// or https://")

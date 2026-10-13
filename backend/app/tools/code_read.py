@@ -39,6 +39,12 @@ _UUID_RE = re.compile(
 )
 _SAFE_NOTEBOOK_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
+
+def _is_safe_notebook_id(notebook_id: str) -> bool:
+    if not _SAFE_NOTEBOOK_RE.match(notebook_id or ""):
+        return False
+    return (notebook_id or "").strip() not in (".", "..")
+
 #: Map file extensions to Markdown code-fence language identifiers.
 _EXT_TO_LANG: dict[str, str] = {
     ".py": "python",
@@ -83,9 +89,20 @@ _BINARY_EXTS = frozenset({".pdf", ".docx"})
 
 
 def _disk_path(notebook_id: str, file_id: str, ext: str) -> str:
+    from pathlib import Path
+
     from app.core.config import settings as _settings
 
-    return os.path.join(str(_settings.upload_dir), str(notebook_id), f"{file_id}{ext}")
+    if not _is_safe_notebook_id(notebook_id):
+        raise ValueError("invalid notebook_id")
+    ext = (ext or "").lower()
+    root = Path(str(_settings.upload_dir)).resolve()
+    path = (root / str(notebook_id) / f"{file_id}{ext}").resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise ValueError("notebook path escapes upload root") from None
+    return str(path)
 
 
 def _read_disk(notebook_id: str, file_id: str, file_name: str) -> str:
@@ -210,7 +227,7 @@ class CodeReadTool(Tool):
                 output=None,
                 error="'notebook_id' is required in input (injected by the orchestrator, never the LLM)",
             )
-        if not _SAFE_NOTEBOOK_RE.match(notebook_id):
+        if not _is_safe_notebook_id(notebook_id):
             return ToolResponse(
                 tool_id=self.tool_id,
                 ok=False,

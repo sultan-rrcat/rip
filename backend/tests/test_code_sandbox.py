@@ -28,6 +28,8 @@ from app.tools.base import ToolRequest
 
 NB = "nb-sbx-1"
 CID = "a" * 64
+FID_A = "11111111-1111-1111-1111-111111111111"
+FID_B = "22222222-2222-2222-2222-222222222222"
 
 
 def _tool_request(timeout_ms: int = 30000, **kwargs) -> ToolRequest:
@@ -46,7 +48,8 @@ def _stage_disk(tmp_path, files: dict[str, str]) -> str:
 
 
 def _listing(names: list[str]):
-    return [(f"fid-{i}", name) for i, name in enumerate(names)]
+    ids = [FID_A, FID_B] + [f"33333333-3333-3333-3333-3333333333{i:02d}" for i in range(10)]
+    return [(ids[i], name) for i, name in enumerate(names)]
 
 
 class _FakeCompleted:
@@ -110,13 +113,13 @@ def _make_daemon(monkeypatch, *, out_files=None, start=None):
 
 
 def test_success_stages_and_reports_changes(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "print('hi')\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "print('hi')\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
                         lambda nb: _listing(["hello.py"]))
     # Map staged file_id name -> disk name for the copy step.
     monkeypatch.setattr(sbx, "_match_scope",
-                        lambda scope, files: ([("fid-0", "hello.py")], []))
+                        lambda scope, files: ([(FID_A, "hello.py")], []))
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
 
     seen = _make_daemon(monkeypatch, out_files={
@@ -159,10 +162,10 @@ def test_scope_miss_fails_with_file_list(monkeypatch):
 
 
 def test_timeout_is_honest_and_tears_down(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
 
     def fake_run(cmd, timeout_s):
@@ -184,10 +187,10 @@ def test_timeout_is_honest_and_tears_down(monkeypatch, tmp_path):
 
 
 def test_timeout_clamped_to_step_budget(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
     seen = _make_daemon(monkeypatch)
     # Step wall-clock (request.timeout_ms) beats the 240s tool default.
@@ -205,10 +208,10 @@ def test_no_docker_fails_honest(monkeypatch):
 
 
 def test_nonzero_exit_reports_stderr(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
     _make_daemon(monkeypatch, start=_FakeCompleted(1, "", "boom: auth failed"))
     resp = sbx.CodeSandboxTool().execute(_tool_request())
@@ -217,10 +220,10 @@ def test_nonzero_exit_reports_stderr(monkeypatch, tmp_path):
 
 
 def test_create_failure_is_honest(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
 
     def fake_run(cmd, timeout_s):
@@ -237,10 +240,10 @@ def test_create_failure_is_honest(monkeypatch, tmp_path):
 
 
 def test_cp_in_failure_is_honest(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
 
     def fake_run(cmd, timeout_s):
@@ -259,10 +262,10 @@ def test_cp_in_failure_is_honest(monkeypatch, tmp_path):
 
 
 def test_oversize_change_observed_but_not_kept(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
     big = "y\n" * (sbx._SBX_ARTIFACT_MAX_BYTES // 2 + 10)
     _make_daemon(monkeypatch, out_files={"big.py": big})
@@ -274,12 +277,12 @@ def test_oversize_change_observed_but_not_kept(monkeypatch, tmp_path):
 
 
 def test_ephemeral_pytest_debris_ignored(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "cal.py")])
+                        lambda nb: [(FID_A, "cal.py")])
     monkeypatch.setattr(sbx, "_match_scope",
-                        lambda scope, files: ([("fid-0", "cal.py")], []))
+                        lambda scope, files: ([(FID_A, "cal.py")], []))
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
     _make_daemon(monkeypatch, out_files={
         "test_cal.py": "def test_a(): pass\n",
@@ -332,10 +335,10 @@ def test_extract_text_surfaces_provider_error():
 
 
 def test_nonzero_exit_names_stdout_cause(monkeypatch, tmp_path):
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("m", True))
     err = json.dumps({"type": "error",
                       "error": {"type": "x", "message": "boom-cause"}})
@@ -362,11 +365,11 @@ def test_model_probe_uses_host_view_not_gateway(monkeypatch, tmp_path):
     # Host-local backend with a loopback OLLAMA_BASE_URL: the pulled-model
     # probe must hit the host-view URL (reachable from this process), while
     # the staged opencode.json keeps the gateway URL for the box.
-    upload_dir = _stage_disk(tmp_path, {"fid-0.py": "x\n"})
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
     monkeypatch.setattr(settings, "upload_dir", upload_dir)
     monkeypatch.setattr(settings, "ollama_base_url", "http://localhost:11434")
     monkeypatch.setattr(sbx, "_notebook_code_files",
-                        lambda nb: [("fid-0", "a.py")])
+                        lambda nb: [(FID_A, "a.py")])
     probed: list = []
 
     class _Resp:
@@ -394,6 +397,106 @@ def test_sandbox_base_url_rewrites_loopback(monkeypatch):
     assert sbx._sandbox_base_url() == "http://host.docker.internal:11434"
     monkeypatch.setattr(settings, "ollama_base_url", "http://10.10.30.77:21434")
     assert sbx._sandbox_base_url() == "http://10.10.30.77:21434"
+
+
+def test_dotdot_notebook_rejected():
+    tool = sbx.CodeSandboxTool()
+    assert tool.execute(_tool_request(notebook_id="..")).ok is False
+    assert tool.execute(_tool_request(notebook_id=".")).ok is False
+    assert sbx._is_safe_notebook_id("..") is False
+    assert sbx._is_safe_notebook_id("nb-ok_1.2") is True
+
+
+def test_container_id_strict():
+    assert sbx._parse_container_id(CID + "\n") == CID
+    assert sbx._parse_container_id("Error: image not found\n") == ""
+    assert sbx._parse_container_id("") == ""
+
+
+def test_task_flag_injection_neutralized(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [(FID_A, "a.py")])
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+    seen = _make_daemon(monkeypatch)
+    resp = sbx.CodeSandboxTool().execute(_tool_request(task="--help"))
+    assert resp.ok is True
+    create = next(c for c in seen if c["cmd"][1] == "create")
+    assert "--" in create["cmd"]
+    assert create["cmd"].index("--") < len(create["cmd"]) - 1
+
+
+def test_duplicate_basename_second_skipped(monkeypatch, tmp_path):
+    fid_b = "22222222-2222-2222-2222-222222222222"
+    root = tmp_path / "uploads" / NB
+    root.mkdir(parents=True)
+    (root / f"{FID_A}.py").write_text("one\n", encoding="utf-8")
+    (root / f"{fid_b}.py").write_text("two\n", encoding="utf-8")
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [(FID_A, "app.py"), (fid_b, "app.py")])
+    monkeypatch.setattr(sbx, "_match_scope",
+                        lambda scope, files: ([(FID_A, "app.py"),
+                                               (fid_b, "app.py")], []))
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+    _make_daemon(monkeypatch)
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is True
+    assert resp.data["staged_files"] == ["app.py"]
+    assert "collides" in (resp.output or "")
+
+
+def test_untrusted_file_id_skipped(monkeypatch, tmp_path):
+    root = tmp_path / "uploads" / NB
+    root.mkdir(parents=True)
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [("not-a-uuid", "evil.py")])
+    monkeypatch.setattr(sbx, "_pick_model", lambda base, pref: ("granite", True))
+    _make_daemon(monkeypatch)
+    resp = sbx.CodeSandboxTool().execute(_tool_request())
+    assert resp.ok is True
+    assert resp.data["staged_files"] == []
+    assert "untrusted" in (resp.output or "")
+
+
+def test_sandbox_model_pin_wins_over_default(monkeypatch, tmp_path):
+    upload_dir = _stage_disk(tmp_path, {FID_A + ".py": "x\n"})
+    monkeypatch.setattr(settings, "upload_dir", upload_dir)
+    monkeypatch.setattr(sbx, "_notebook_code_files",
+                        lambda nb: [(FID_A, "a.py")])
+    monkeypatch.setattr(settings, "sandbox_model", "granite4.1:8b-q8_0")
+    monkeypatch.setattr(settings, "ollama_default_model", "qwen2.5:14b")
+    seen_prefs: list = []
+
+    def _fake_pick(base, pref):
+        seen_prefs.append(pref)
+        return ("granite", True)
+
+    monkeypatch.setattr(sbx, "_pick_model", _fake_pick)
+    try:
+        _make_daemon(monkeypatch)
+        resp = sbx.CodeSandboxTool().execute(_tool_request())
+        assert resp.ok is True
+        assert seen_prefs == ["granite4.1:8b-q8_0"]
+        # Per-request override still beats the pin.
+        resp2 = sbx.CodeSandboxTool().execute(
+            _tool_request(model="ornith-1.5:9b"))
+        assert resp2.ok is True
+        assert seen_prefs[-1] == "ornith-1.5:9b"
+    finally:
+        monkeypatch.setattr(settings, "sandbox_model", "")
+    assert settings.sandbox_model == ""
+
+
+def test_sandbox_model_empty_follows_default(monkeypatch, tmp_path):
+    from app.core import runtime as rt
+
+    assert "sandbox_model" in rt.FIELDS
+    assert rt.FIELDS["sandbox_model"].group == "sandbox"
+    # Empty string is a legal PUT (means "follow default").
+    assert rt.coerce_value(rt.FIELDS["sandbox_model"], "") == ""
 
 
 def test_registered_manifest_and_validator():

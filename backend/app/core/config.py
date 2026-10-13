@@ -171,6 +171,13 @@ class Settings(BaseSettings):
     sandbox_timeout_ms: int = 240000
     sandbox_cpus: float = 2.0
     sandbox_memory: str = "2g"
+    #: Sandbox-only model override (ADR-049 follow-up, 2026-10-13 model
+    #: comparison: granite4.1:8b-q8_0 did the CSV task in 55s, granite4.2:8b
+    #: took 416s and failed it). Empty (default) = follow
+    #: `ollama_default_model`; a non-empty value pins the model the sandbox
+    #: resolves via `_pick_model` when the step carries no per-request
+    #: override. Live admin key (read per execution, no restart).
+    sandbox_model: str = ""
 
     # Chat memory (context-window-based, Q28 locked — port of athena memory.py)
     # estimator: len(text)//4 (no tiktoken); budget = int(ollama_context_window * summary_threshold_pct)

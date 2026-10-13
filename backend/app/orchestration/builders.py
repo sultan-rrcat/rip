@@ -65,6 +65,32 @@ _UUID_RE = re.compile(
 )
 _SAFE_NOTEBOOK_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
+
+def _is_safe_notebook_id(notebook_id: str) -> bool:
+    if not _SAFE_NOTEBOOK_RE.match(notebook_id or ""):
+        return False
+    return (notebook_id or "").strip() not in (".", "..")
+
+
+def _safe_disk_path(notebook_id: str, file_id: str, ext: str) -> str | None:
+    """Contained upload path or None when untrusted."""
+    from pathlib import Path
+
+    if not _is_safe_notebook_id(notebook_id):
+        return None
+    if not _UUID_RE.match(file_id or ""):
+        return None
+    ext = (ext or "").lower()
+    if not ext or "/" in ext or "\\" in ext or ".." in ext:
+        return None
+    try:
+        root = Path(str(settings.upload_dir)).resolve()
+        path = (root / str(notebook_id) / f"{file_id}{ext}").resolve()
+        path.relative_to(root)
+    except (ValueError, OSError):
+        return None
+    return str(path)
+
 #: DATA (CSV) builder bounds: data files are staged read-only into the
 #: sandbox for pandas compute (never embedded, never inlined whole — only
 #: a header + sample rides the report prompt). Caps keep the prompt inside
@@ -762,7 +788,7 @@ def _read_code_file(notebook_id: str, name: str, file_id: str) -> str | None:
     """Read one code file from disk; None when unreadable/untrusted."""
     if not _UUID_RE.match(file_id or ""):
         return None
-    if not _SAFE_NOTEBOOK_RE.match(notebook_id or ""):
+    if not _is_safe_notebook_id(notebook_id or ""):
         return None
     ext = os.path.splitext(name or "")[1].lower()
     if not ext:
@@ -771,7 +797,9 @@ def _read_code_file(notebook_id: str, name: str, file_id: str) -> str | None:
 
     if ext not in set(settings.code_extensions or []):
         return None
-    path = os.path.join(settings.upload_dir, notebook_id, f"{file_id}{ext}")
+    path = _safe_disk_path(notebook_id, file_id, ext)
+    if path is None:
+        return None
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             return f.read(_CODE_MAX_BYTES_PER_FILE + 1)
@@ -955,7 +983,7 @@ def _read_csv_head(notebook_id: str, name: str, file_id: str) -> str | None:
     """Read a CSV head (header + sample rows); None when unreadable/untrusted."""
     if not _UUID_RE.match(file_id or ""):
         return None
-    if not _SAFE_NOTEBOOK_RE.match(notebook_id or ""):
+    if not _is_safe_notebook_id(notebook_id or ""):
         return None
     ext = os.path.splitext(name or "")[1].lower()
     if ext != ".csv":
@@ -964,7 +992,9 @@ def _read_csv_head(notebook_id: str, name: str, file_id: str) -> str | None:
 
     if ext not in set(_settings.data_extensions or []):
         return None
-    path = os.path.join(_settings.upload_dir, notebook_id, f"{file_id}{ext}")
+    path = _safe_disk_path(notebook_id, file_id, ext)
+    if path is None:
+        return None
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             lines = []

@@ -44,6 +44,47 @@ logger = logging.getLogger("tools.code_sandbox")
 
 _SAFE_NOTEBOOK_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _is_safe_notebook_id(notebook_id: str) -> bool:
+    """Notebook ids are single path segments — never ``.``/``..``.
+
+    The regex above permits dots, so ``..`` would otherwise match and
+    ``os.path.join(upload_dir, "..", ...)`` would escape the upload root.
+    """
+    if not _SAFE_NOTEBOOK_RE.match(notebook_id or ""):
+        return False
+    return (notebook_id or "").strip() not in (".", "..")
+
+
+def _safe_disk_path(notebook_id: str, file_id: str, ext: str) -> str:
+    """Join upload_dir/notebook_id/file_id+ext, verifying containment.
+
+    Raises ValueError on UUID/notebook/ext failure or root escape.
+    """
+    from pathlib import Path
+
+    from app.core.config import settings as _settings
+
+    if not _is_safe_notebook_id(notebook_id):
+        raise ValueError("invalid notebook_id")
+    if not _UUID_RE.match(file_id or ""):
+        raise ValueError(f"refusing untrusted file_id: {file_id!r}")
+    ext = (ext or "").lower()
+    if not ext or "/" in ext or "\\" in ext or ".." in ext:
+        raise ValueError(f"refusing untrusted extension: {ext!r}")
+    root = Path(str(_settings.upload_dir)).resolve()
+    path = (root / str(notebook_id) / f"{file_id}{ext}").resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise ValueError("notebook path escapes upload root") from None
+    return str(path)
+
 #: `docker create` output carries the 64-hex container id.
 _CONTAINER_ID_RE = re.compile(r"[0-9a-f]{64}")
 
@@ -148,15 +189,29 @@ def _pick_model(base_url: str, preferred: str) -> tuple[str, bool]:
     the container gateway — probing the rewritten URL from the host would
     fail wherever the gateway name doesn't route back (Windows host-local
     runs), even with Ollama listening on localhost.
+
+    Tool-capability note (granite4.2:8b, 2026-10-13): `/api/tags`
+    advertises only `completion` for granite4.2:8b, yet opencode still
+    drives write/read tools through the OpenAI-compat endpoint — slowly
+    (115s for a trivial write). Capabilities are advisory only: the
+    preferred model is always honoured when pulled; a missing `tools`
+    cap is logged, never a reason to substitute.
     """
     try:
         with urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=8) as res:
             data = json.loads(res.read().decode("utf-8") or "{}")
-        names = [m.get("name") for m in data.get("models", []) if m.get("name")]
+        models = data.get("models", []) or []
+        names = [m.get("name") for m in models if m.get("name")]
+        caps = {m.get("name"): set(m.get("capabilities") or []) for m in models}
     except Exception as e:  # noqa: BLE001 - unreachable Ollama is honest failure
         logger.warning("sandbox: ollama unreachable at %s (%s)", base_url, e)
         return preferred, False
     if preferred in names:
+        if caps.get(preferred) and "tools" not in caps.get(preferred, set()):
+            logger.warning(
+                "sandbox: preferred model %s advertises caps=%s (no tools); "
+                "honouring it anyway — expect slower tool loops",
+                preferred, sorted(caps.get(preferred) or []))
         return preferred, True
     for name in names:
         lowered = name.lower()
@@ -274,12 +329,14 @@ def _notebook_data_files(notebook_id: str) -> list[tuple[str, str]]:
 
 
 def _parse_container_id(output: str) -> str:
-    """Best-effort container id out of `docker create` stdout."""
+    """Best-effort container id out of `docker create` stdout.
+
+    Strict: only a 64-hex id is accepted. The legacy fallback (last line
+    of output) could mistake an error message for an id, turning
+    `docker rm -f` into a call against attacker-influenced text.
+    """
     match = _CONTAINER_ID_RE.search(output or "")
-    if match:
-        return match.group(0)
-    text = (output or "").strip()
-    return text.splitlines()[-1].strip() if text else ""
+    return match.group(0) if match else ""
 
 
 def _match_scope(scope: list[str], files: list[tuple[str, str]]
@@ -329,7 +386,8 @@ class CodeSandboxTool(Tool):
         "NOT for read/explain/review (code.read + coding agent, no container). "
         "Input: notebook_id (injected, never invented), task (full ask), "
         "optional file_names scope, optional data_files scope (CSV names), "
-        "optional model override. NEVER invent "
+        "optional model override (else the sandbox_model admin key, else the "
+        "global default). NEVER invent "
         "execution results: report only what the box returned."
     )
     input_schema: ClassVar[dict] = {
@@ -363,7 +421,7 @@ class CodeSandboxTool(Tool):
         if not notebook_id or not isinstance(notebook_id, str):
             return self._fail(
                 "'notebook_id' is required in input (injected by the orchestrator, never the LLM)")
-        if not _SAFE_NOTEBOOK_RE.match(notebook_id):
+        if not _is_safe_notebook_id(notebook_id):
             return self._fail("invalid notebook_id")
         task = request.input.get("task")
         if not task or not isinstance(task, str) or not task.strip():
@@ -416,8 +474,13 @@ class CodeSandboxTool(Tool):
         # Same server either way, so the pulled-model listing is identical.
         probe_url = (settings.ollama_base_url or "").strip().rstrip("/")
         model_override = request.input.get("model")
-        preferred = (str(model_override).strip() if isinstance(model_override, str)
-                     and model_override.strip() else settings.ollama_default_model)
+        sandbox_pinned = (settings.sandbox_model or "").strip()
+        if isinstance(model_override, str) and model_override.strip():
+            preferred = model_override.strip()
+        elif sandbox_pinned:
+            preferred = sandbox_pinned
+        else:
+            preferred = settings.ollama_default_model
         model, reachable = _pick_model(probe_url, preferred)
         if not reachable:
             return self._fail(
@@ -439,23 +502,37 @@ class CodeSandboxTool(Tool):
         cid = ""
         try:
             staged_names: list[str] = []
+            used_stage_names: set[str] = set()
             for file_id, name in staged:
                 ext = os.path.splitext(name)[1].lower()
-                src = os.path.join(str(settings.upload_dir), notebook_id, f"{file_id}{ext}")
+                try:
+                    src = _safe_disk_path(notebook_id, str(file_id), ext)
+                except ValueError as e:
+                    notes.append(f"staged-skipped: '{name}' untrusted path ({e}), skipped")
+                    continue
                 try:
                     with open(src, "rb") as f:
                         blob = f.read()
                 except OSError:
                     notes.append(f"staged-missing: '{name}' not on disk, skipped")
                     continue
-                safe_name = os.path.basename(name) or f"file-{file_id[:8]}"
+                safe_name = os.path.basename(name) or f"file-{str(file_id)[:8]}"
+                if safe_name in used_stage_names:
+                    notes.append(f"staged-skipped: '{name}' collides with a staged file")
+                    continue
+                used_stage_names.add(safe_name)
                 with open(os.path.join(stage, safe_name), "wb") as f:
                     f.write(blob)
                 originals[safe_name] = blob
                 staged_names.append(safe_name)
             staged_data_names: list[str] = []
             for file_id, name in staged_data:
-                src = os.path.join(str(settings.upload_dir), notebook_id, f"{file_id}.csv")
+                data_ext = os.path.splitext(name)[1].lower() or ".csv"
+                try:
+                    src = _safe_disk_path(notebook_id, str(file_id), data_ext)
+                except ValueError as e:
+                    notes.append(f"staged-skipped: '{name}' untrusted path ({e}), skipped")
+                    continue
                 try:
                     with open(src, "rb") as f:
                         blob = f.read()
@@ -468,10 +545,11 @@ class CodeSandboxTool(Tool):
                         f"{_SBX_DATA_STAGE_MAX_BYTES // (1024 * 1024)}MB, "
                         "not staged for analysis")
                     continue
-                safe_name = os.path.basename(name) or f"file-{file_id[:8]}"
-                if safe_name in originals:
+                safe_name = os.path.basename(name) or f"file-{str(file_id)[:8]}"
+                if safe_name in used_stage_names:
                     notes.append(f"staged-skipped: '{name}' collides with a staged file")
                     continue
+                used_stage_names.add(safe_name)
                 with open(os.path.join(stage, safe_name), "wb") as f:
                     f.write(blob)
                 # In originals so the unchanged CSV never counts as changed;
@@ -496,7 +574,7 @@ class CodeSandboxTool(Tool):
                      "opencode", "run",
                      "-m", f"ollama-local/{model}",
                      "--format", "json",
-                     task.strip()],
+                     "--", task.strip()],
                     _SANDBOX_STAGE_TIMEOUT_S,
                 )
             except FileNotFoundError:
@@ -527,8 +605,15 @@ class CodeSandboxTool(Tool):
                 proc = _run_container(
                     ["docker", "start", "-a", cid], timeout_ms / 1000.0)
             except subprocess.TimeoutExpired:
+                tail = ""
+                try:
+                    logs = _run_container(["docker", "logs", "--tail", "20", cid], 30.0)
+                    tail = ((logs.stdout or "") + (logs.stderr or ""))[-1000:].strip()
+                except Exception:  # noqa: BLE001 - logs are best-effort
+                    tail = ""
+                detail = f" — box logs: {tail}" if tail else ""
                 return self._fail(
-                    f"sandbox run timed out after {timeout_ms}ms — "
+                    f"sandbox run timed out after {timeout_ms}ms{detail} — "
                     "narrow the task or raise sandbox_timeout_ms")
             except FileNotFoundError:
                 return self._fail("docker CLI not available at execution time")
@@ -562,7 +647,19 @@ class CodeSandboxTool(Tool):
                             if filename == "opencode.json":
                                 continue
                             full = os.path.join(root, filename)
+                            if os.path.islink(full):
+                                skipped_ephemeral += 1
+                                notes.append(
+                                    "artifact cap: symlink observed but not "
+                                    "kept for review")
+                                continue
                             rel = os.path.relpath(full, fetch).replace(os.sep, "/")
+                            if (not rel or rel.startswith(("/", ".."))
+                                    or "/../" in rel):
+                                notes.append(
+                                    "artifact cap: path escapes fetch root, "
+                                    "not kept for review")
+                                continue
                             if _is_ephemeral_rel(rel):
                                 skipped_ephemeral += 1
                                 continue
