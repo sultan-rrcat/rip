@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import HomeIcon from '@mui/icons-material/Home'
 import Dialog from '@mui/material/Dialog'
 import DialogTitle from '@mui/material/DialogTitle'
 import DialogContent from '@mui/material/DialogContent'
@@ -332,9 +333,11 @@ export default function Admin() {
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <Link
               to="/"
-              className="font-ledger text-[11px] font-semibold tracking-[0.18em] text-paper/80 hover:text-paper"
+              title="Back to notebooks"
+              aria-label="Back to notebooks"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-paper/70 transition-colors hover:bg-paper/10 hover:text-paper"
             >
-              ← STACK
+              <HomeIcon sx={{ fontSize: 18 }} />
             </Link>
             <nav aria-label="Admin sections" className="flex items-center gap-2">
               {sectionTabs.map((t) => (
