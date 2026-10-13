@@ -81,13 +81,18 @@ class _Watchdog:
             self._thread.join(timeout=5.0)
 
     def _watch(self) -> None:
+        # NOTE: _stop doubles as the provider's cancel_event (see start).
+        # It must ONLY be set to abort the HTTP stream: on outer cancel or
+        # on trip. In particular a visible token must NEVER set it — the
+        # stream is healthy then; the guard just keeps polling outer cancel
+        # until stop() ends the attempt.
         while not self._stop.is_set():
             if self._cancel_event is not None and self._cancel_event.is_set():
                 self._stop.set()
                 return
             if self._state["visible"]:
-                self._stop.set()
-                return
+                time.sleep(0.5)
+                continue
             if (time.monotonic() - self._last_active) > self._timeout_s:
                 if (self._last_active > self._started
                         and self._state["extensions"] < self._max_extensions):

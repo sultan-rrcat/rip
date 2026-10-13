@@ -308,3 +308,48 @@ class TestWatchdogReasoningActivity:
         result = agent.execute(request)
         assert result.status is StepStatus.FAILURE
         assert "no visible output" in (result.error or "")
+
+    def test_visible_stream_is_not_cancelled(self) -> None:
+        """Regression (trace 9c73044b): _stop doubles as the provider's
+        cancel_event, so setting it on first-visible-token aborts the
+        healthy stream as 'run cancelled'. Visible chunks must flow."""
+
+        class GuardedAgent(ConcreteAgent):
+            agent_id = "guarded-healthy"
+
+            def _start_watchdog(self, request):
+                return _Watchdog(
+                    timeout_s=60.0, cancel_event=request.cancel_event,
+                    max_extensions=5,
+                )
+
+        class SlowVisibleProvider(ModelProvider):
+            def generate(self, *a, **k):
+                raise AssertionError
+
+            def generate_stream(self, model, messages, **kwargs):
+                cancel = kwargs.get("cancel_event")
+                for piece in ("one ", "two ", "three"):
+                    for _ in range(12):
+                        if cancel is not None and cancel.is_set():
+                            raise RuntimeError("run cancelled")
+                        time.sleep(0.1)
+                    yield piece
+
+            def generate_structured(self, *a, **k):
+                raise AssertionError
+
+            def embed(self, *a, **k):
+                raise AssertionError
+
+            def list_available_models(self):
+                return []
+
+            def served_model(self, m):
+                return m
+
+        agent = GuardedAgent(SlowVisibleProvider())
+        request = _make_request(on_delta=lambda c: None)
+        result = agent.execute(request)
+        assert result.status is StepStatus.SUCCESS
+        assert result.output == "one two three"
